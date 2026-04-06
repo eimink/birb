@@ -57,8 +57,6 @@ typedef struct {
     i32 slide;
     u16 lfsr, lfsr_p, lfsr_c;
     u8 ci; /* current instrument */
-    u8 rv; /* row volume */
-    i8 vs; /* volume slide per tick */
 } Ch;
 
 /* --- state --- */
@@ -162,7 +160,6 @@ static void row(void) {
         if (fx == 1) { ch[c].arp1 = (pm >> 4); ch[c].arp2 = pm & 0xF; ch[c].arp_t = 0; }
         else if (fx == 2) { ch[c].slide = (i32)pm << 2; }
         else if (fx == 3) { ch[c].slide = -((i32)pm << 2); }
-        else if (fx == 6) { i32 up=(pm>>4)&0xF,dn=pm&0xF; ch[c].vs=(i8)(up?up:-dn); }
     }
 }
 

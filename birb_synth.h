@@ -78,13 +78,13 @@ typedef enum {
 
 typedef enum {
     FX_NONE = 0,
-    FX_ARPEGGIO,       /* param: high nibble = note1, low nibble = note2 */
-    FX_PITCH_UP,       /* param: speed */
-    FX_PITCH_DOWN,     /* param: speed */
-    FX_VIBRATO,        /* param: high = speed, low = depth */
-    FX_DUTY_SWEEP,     /* param: sweep amount (signed via 0x80 center) */
-    FX_VOL_SLIDE,      /* param: high nibble = up speed, low nibble = down speed per tick */
-    FX_PITCH_SET,      /* param: fine pitch offset */
+    FX_ARPEGGIO,       /* 1xy: cycle base, +x, +y semitones per tick */
+    FX_PITCH_UP,       /* 2xx: slide pitch up, xx = speed */
+    FX_PITCH_DOWN,     /* 3xx: slide pitch down, xx = speed */
+    FX_VIBRATO,        /* 4xy: x = speed, y = depth */
+    FX_TONE_PORTA,     /* 5xx: slide to target note at speed xx */
+    FX_RETRIGGER,      /* 6xx: retrigger note every xx ticks */
+    FX_EXTENDED,       /* 7xy: x=C note cut after y ticks, x=D note delay y ticks */
     FX_COUNT
 } birb_fx;
 
@@ -172,7 +172,13 @@ typedef struct {
     fixed16       duty_sweep;
     uint8_t       volume;      /* instrument volume 0-255 */
     uint8_t       row_vol;     /* per-row volume override 0-255 */
-    int8_t        vol_slide;   /* volume slide per tick (positive=up, negative=down) */
+    fixed16       porta_target; /* tone portamento target freq */
+    fixed16       porta_speed;  /* tone portamento speed */
+    uint8_t       retrig_interval; /* retrigger every N ticks */
+    uint8_t       note_cut_tick;   /* cut note after N ticks, 0=off */
+    uint8_t       note_delay_tick; /* delay note trigger by N ticks */
+    uint8_t       delayed_note;    /* note to trigger after delay */
+    uint8_t       delayed_inst;    /* instrument for delayed note */
 } birb_channel;
 
 /* ---------- song data (in-memory, parsed) ---------- */

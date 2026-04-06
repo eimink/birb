@@ -6,10 +6,13 @@ birbc
 
 # Generated files
 *.wav
-test_song.bin
-test_song.bsb
+*.bsb
+*.bin
+!examples/*.bsb
 test_song.h
 test_song.js
+dnb_demo.h
+dnb_demo.js
 test_from_bin.*
 
 # Web build artifacts

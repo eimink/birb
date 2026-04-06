@@ -5,6 +5,17 @@
  */
 #include "birb_synth.h"
 
+/* ---------- sine approximation for vibrato ---------- */
+fixed16 birb_sin_approx(fixed16 phase) {
+    phase &= FX_MASK;
+    fixed16 x;
+    if (phase < FX_HALF) x = phase - (FX_ONE / 4);
+    else x = (FX_ONE * 3 / 4) - phase;
+    x <<= 2;
+    fixed16 ax = x < 0 ? -x : x;
+    return FX_MUL(x, FX_ONE - ax) * 4 / FX_ONE;
+}
+
 /* ---------- note frequency computation ---------- */
 /* Instead of a 384-byte table, compute on the fly.
  * freq = 440 * 2^((note-57)/12) / SAMPLE_RATE * 65536
@@ -148,6 +159,17 @@ static void tick_effects(birb_channel *ch) {
         if (ch->base_freq < 1) ch->base_freq = 1;
     }
 
+    /* tone portamento */
+    if (ch->porta_target > 0 && ch->porta_speed > 0) {
+        if (ch->base_freq < ch->porta_target) {
+            ch->base_freq += ch->porta_speed;
+            if (ch->base_freq > ch->porta_target) ch->base_freq = ch->porta_target;
+        } else if (ch->base_freq > ch->porta_target) {
+            ch->base_freq -= ch->porta_speed;
+            if (ch->base_freq < ch->porta_target) ch->base_freq = ch->porta_target;
+        }
+    }
+
     /* arpeggio */
     if (ch->arp_note1 | ch->arp_note2) {
         int note = ch->base_note;
@@ -158,6 +180,13 @@ static void tick_effects(birb_channel *ch) {
         ch->arp_tick++;
     } else {
         ch->freq = ch->base_freq;
+    }
+
+    /* vibrato */
+    if (ch->vibrato_depth > 0) {
+        fixed16 vib = birb_sin_approx(ch->vibrato_phase);
+        ch->freq += FX_MUL(vib, ch->vibrato_depth);
+        ch->vibrato_phase += ch->vibrato_speed;
     }
 
     envelope_tick(ch);
@@ -178,10 +207,21 @@ static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param) {
         case FX_PITCH_DOWN:
             ch->pitch_slide = -((fixed16)param << 2);
             break;
-        case FX_VOL_SLIDE: {
-            int up = (param >> 4) & 0x0F;
-            int down = param & 0x0F;
-            ch->vol_slide = (int8_t)(up ? up : -down);
+        case FX_VIBRATO:
+            ch->vibrato_speed = FX_ONE / 64 * ((param >> 4) & 0x0F);
+            ch->vibrato_depth = (fixed16)(param & 0x0F) << 4;
+            break;
+        case FX_TONE_PORTA:
+            ch->porta_speed = (fixed16)param << 2;
+            break;
+        case FX_RETRIGGER:
+            ch->retrig_interval = param;
+            break;
+        case FX_EXTENDED: {
+            int sub = (param >> 4) & 0x0F;
+            int val = param & 0x0F;
+            if (sub == 0xC) ch->note_cut_tick = val;
+            else if (sub == 0xD) ch->note_delay_tick = val;
             break;
         }
         default:
@@ -194,20 +234,39 @@ static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param) {
 static void process_row(birb_state *state) {
     birb_song *song = state->song;
     for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
+        birb_channel *ch = &state->channels[c];
         int pat_idx = song->order[state->order_pos][c];
         if (pat_idx >= song->num_patterns) continue;
         birb_row *r = &song->patterns[pat_idx][state->current_row][c];
-        if (r->note == BIRB_NOTE_OFF) {
-            state->channels[c].env_stage = ENV_RELEASE;
+
+        ch->retrig_interval = 0;
+        ch->note_cut_tick = 0;
+        ch->note_delay_tick = 0;
+
+        int is_tone_porta = (r->effect == FX_TONE_PORTA);
+        int is_note_delay = (r->effect == FX_EXTENDED && ((r->param >> 4) & 0xF) == 0xD);
+
+        if (is_note_delay && r->note >= BIRB_NOTE_C0) {
+            ch->delayed_note = r->note;
+            ch->delayed_inst = (r->instrument != 0xFF) ? r->instrument : ch->cur_instrument;
+            ch->note_delay_tick = r->param & 0x0F;
+        } else if (r->note == BIRB_NOTE_OFF) {
+            ch->env_stage = ENV_RELEASE;
         } else if (r->note >= BIRB_NOTE_C0) {
-            uint8_t inst_idx = r->instrument;
-            if (inst_idx == 0xFF) inst_idx = state->channels[c].cur_instrument;
-            if (inst_idx < song->num_instruments) {
-                state->channels[c].cur_instrument = inst_idx;
-                trigger_note(&state->channels[c], r->note, &song->instruments[inst_idx]);
+            if (is_tone_porta) {
+                ch->porta_target = note_to_freq(r->note - BIRB_NOTE_C0);
+            } else {
+                uint8_t inst_idx = r->instrument;
+                if (inst_idx == 0xFF) inst_idx = ch->cur_instrument;
+                if (inst_idx < song->num_instruments) {
+                    ch->cur_instrument = inst_idx;
+                    trigger_note(ch, r->note, &song->instruments[inst_idx]);
+                }
             }
         }
-        if (r->effect) process_effects(&state->channels[c], r->effect, r->param);
+
+        if (r->volume) ch->row_vol = r->volume;
+        if (r->effect) process_effects(ch, r->effect, r->param);
     }
 }
 
@@ -228,8 +287,25 @@ static void advance_tick(birb_state *state) {
         state->row_out = state->current_row;
         state->pattern_out = state->order_pos;
     }
-    for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-        tick_effects(&state->channels[c]);
+    int tick = state->current_tick;
+    for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
+        birb_channel *ch = &state->channels[c];
+        if (ch->note_delay_tick > 0 && tick == ch->note_delay_tick) {
+            if (ch->delayed_inst < state->song->num_instruments) {
+                ch->cur_instrument = ch->delayed_inst;
+                trigger_note(ch, ch->delayed_note, &state->song->instruments[ch->delayed_inst]);
+            }
+            ch->note_delay_tick = 0;
+        }
+        if (ch->note_cut_tick > 0 && tick == ch->note_cut_tick) {
+            ch->env_level = 0; ch->env_stage = ENV_OFF;
+        }
+        if (ch->retrig_interval > 0 && tick > 0 && (tick % ch->retrig_interval) == 0) {
+            ch->phase = 0; ch->env_stage = ENV_ATTACK; ch->env_level = 0;
+            if (ch->waveform == WAVE_NOISE) { ch->lfsr = 0x7FFF; ch->lfsr_count = 0; }
+        }
+        tick_effects(ch);
+    }
 }
 
 /* ---------- public API ---------- */
