@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>birb 4K test</title>
+<style>body{background:#0a0a0a;color:#e0e0e0;font-family:monospace;padding:40px;text-align:center}
+button{background:#1a1a2e;color:#8bf;border:1px solid #333;padding:8px 20px;font-family:inherit;cursor:pointer;border-radius:3px;margin:8px}
+button:hover{border-color:#8bf}
+.info{color:#666;font-size:12px;margin:20px}</style>
+</head>
+<body>
+<h2>birb 4K JS synth test</h2>
+<div class="info">Engine + song in a single JS function. No WASM, no AudioWorklet.</div>
+<button onclick="start()">&#9654; Play</button>
+<button onclick="location.reload()">&#9632; Stop</button>
+<div id="status" style="margin-top:20px;color:#8bf"></div>
+
+<script src="test_song.js"></script>
+<script>
+function start() {
+    var el = document.getElementById('status');
+    el.textContent = 'Rendering...';
+    // Use setTimeout to let the UI update before blocking render
+    setTimeout(function() {
+        var t0 = performance.now();
+        var m = birb();
+        var ms = (performance.now() - t0).toFixed(0);
+        el.textContent = 'Rendered ' + (m.T/44100).toFixed(1) + 's in ' + ms + 'ms. Playing...';
+
+        var ctx = new AudioContext({sampleRate: 44100});
+        var ab = ctx.createBuffer(1, m.T, 44100);
+        ab.getChannelData(0).set(m.o);
+        var src = ctx.createBufferSource();
+        src.buffer = ab;
+        src.connect(ctx.destination);
+        src.loop = true;
+        src.start();
+    }, 10);
+}
+</script>
+</body>
+</html>

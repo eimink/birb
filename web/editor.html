@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>birb tracker</title>
+<style>
+:root {
+    --bg: #0c0c14; --bg1: #12121e; --bg2: #1a1a2e; --bg3: #222238;
+    --fg: #c8c8d8; --dim: #555568; --acc: #88bbff; --acc2: #66ddaa;
+    --row-hi: #1e1e32; --cursor: #88bbff30; --playing: #66ddaa40;
+    --note-on: #aad4ff; --note-off: #ff8888; --fx-col: #ddaa66;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','Consolas',monospace; font-size: 12px; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+.toolbar { display: flex; align-items: center; gap: 8px 12px; padding: 6px 12px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
+.toolbar .title { color: var(--acc); font-weight: bold; font-size: 14px; }
+.toolbar label { color: var(--dim); font-size: 11px; }
+.toolbar input[type=number] { width: 56px; background: var(--bg); color: var(--fg); border: 1px solid var(--bg3); padding: 2px 6px; font-family: inherit; font-size: 12px; text-align: left; }
+.toolbar button { background: var(--bg2); color: var(--acc); border: 1px solid var(--bg3); padding: 4px 12px; font-family: inherit; font-size: 12px; cursor: pointer; }
+.toolbar button:hover { border-color: var(--acc); }
+.toolbar button.active { background: var(--acc); color: var(--bg); }
+.toolbar .sep { width: 1px; height: 20px; background: var(--bg3); }
+.main { display: flex; flex: 1; overflow: hidden; }
+/* -- Instrument panel -- */
+.inst-panel { width: 240px; background: var(--bg1); border-right: 1px solid var(--bg3); display: flex; flex-direction: column; flex-shrink: 0; }
+.inst-list { flex: 1; overflow-y: auto; padding: 4px; }
+.inst-item { padding: 4px 8px; cursor: pointer; color: var(--dim); white-space: nowrap; }
+.inst-item:hover { background: var(--bg2); }
+.inst-item.sel { background: var(--bg3); color: var(--acc); }
+.inst-edit { padding: 8px; border-top: 1px solid var(--bg3); }
+.inst-edit .row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.inst-edit label { color: var(--dim); font-size: 10px; width: 32px; text-align: right; flex-shrink: 0; }
+.inst-edit select, .inst-edit input { background: var(--bg); color: var(--fg); border: 1px solid var(--bg3); font-family: inherit; font-size: 11px; padding: 1px 4px; }
+.inst-edit select { width: 90px; }
+.inst-edit input[type=range] { width: 80px; accent-color: var(--acc); }
+.inst-edit input[type=number] { width: 44px; text-align: center; }
+.inst-edit .val { color: var(--acc); font-size: 10px; width: 28px; text-align: right; }
+.adsr-canvas { width: 100%; height: 48px; background: var(--bg); border: 1px solid var(--bg3); margin-bottom: 6px; }
+/* -- Pattern editor -- */
+.pattern-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.order-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
+.order-bar .lbl { color: var(--dim); font-size: 10px; margin-right: 4px; }
+.order-btn { padding: 2px 8px; background: var(--bg2); color: var(--dim); border: 1px solid var(--bg3); cursor: pointer; font-family: inherit; font-size: 11px; }
+.order-btn:hover { border-color: var(--acc); }
+.order-btn.cur { background: var(--bg3); color: var(--acc); border-color: var(--acc); }
+.pattern-grid { flex: 1; overflow-y: auto; overflow-x: auto; position: relative; outline: none; }
+.pattern-grid:focus { outline: none; }
+.grid-table { border-collapse: collapse; width: max-content; }
+.grid-table th { position: sticky; top: 0; background: var(--bg1); color: var(--dim); padding: 2px 4px; font-size: 10px; text-align: center; border-bottom: 1px solid var(--bg3); z-index: 1; }
+.grid-table td { padding: 1px 0; white-space: nowrap; height: 20px; }
+.grid-row { }
+.grid-row.beat { background: var(--row-hi); }
+.row-num { color: var(--dim); text-align: right; padding-right: 6px !important; width: 24px; user-select: none; }
+.cell { padding: 0 2px !important; cursor: default; min-width: 20px; text-align: center; }
+.cell.cursor { background: var(--cursor); outline: 1px solid var(--acc); }
+.grid-row.playing-row td { background: var(--playing); }
+.grid-row.playing-row .row-num { color: var(--acc2); }
+.ch-sep { width: 8px; border-left: 1px solid var(--bg3); }
+.cell-note { color: var(--note-on); min-width: 30px; }
+.cell-note.off { color: var(--note-off); }
+.cell-note.empty { color: var(--dim); }
+.cell-inst { color: var(--acc2); min-width: 20px; }
+.cell-inst.empty { color: var(--dim); }
+.cell-vol { color: #bb88ff; min-width: 20px; }
+.cell-vol.empty { color: var(--dim); }
+.cell-fx { color: var(--fx-col); min-width: 20px; }
+.cell-fx.empty { color: var(--dim); }
+.cell-prm { color: var(--fx-col); min-width: 20px; }
+.cell-prm.empty { color: var(--dim); }
+/* -- Status bar -- */
+.statusbar { display: flex; gap: 8px 16px; padding: 4px 12px; background: var(--bg1); border-top: 1px solid var(--bg3); color: var(--dim); font-size: 10px; flex-shrink: 0; flex-wrap: wrap; }
+.statusbar span { color: var(--acc); }
+/* -- Info panel -- */
+.info-panel { width: 400px; background: var(--bg1); border-left: 1px solid var(--bg3); flex-shrink: 0; overflow-y: auto; padding: 10px; display: none; font-size: 11px; line-height: 1.6; }
+.info-panel.show { display: block; }
+.info-panel h3 { color: var(--acc); font-size: 12px; margin: 10px 0 4px 0; font-weight: normal; }
+.info-panel h3:first-child { margin-top: 0; }
+.info-panel table { border-collapse: collapse; width: 100%; margin: 4px 0; }
+.info-panel td { padding: 1px 4px; color: var(--fg); }
+.info-panel td:first-child { color: var(--acc2); font-weight: bold; white-space: nowrap; }
+.info-panel .desc { color: var(--dim); }
+.info-panel .key { color: var(--fx-col); display: inline-block; min-width: 20px; }
+.info-panel .section { border-top: 1px solid var(--bg3); padding-top: 8px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+    <div class="title"><div>birb</div><div style="font-size:10px;font-weight:normal;color:var(--dim)">tracker</div></div>
+    <div class="sep"></div>
+    <label>BPM</label><input type="number" id="bpm" value="140" min="30" max="255">
+    <label>TPR</label><input type="number" id="tpr" value="6" min="1" max="16">
+    <label>Oct</label><input type="number" id="octave" value="4" min="0" max="7">
+    <div class="sep"></div>
+    <button id="btn-play" onclick="togglePlay()">&#9654; Play</button>
+    <button id="btn-play-pat" onclick="togglePlayPat()">&#9654; Pat</button>
+    <button id="btn-stop" onclick="stopPlay()">&#9632; Stop</button>
+    <div class="sep"></div>
+    <button onclick="addPattern()">+ Pat</button>
+    <button onclick="clearPattern()">Clear Pat</button>
+    <label>Rows</label><input type="number" id="pat-rows" value="16" min="1" max="64">
+    <div class="sep"></div>
+    <button onclick="toggleInfo()" id="btn-info">? Info</button>
+</div>
+<div class="toolbar">
+    <button onclick="newSong()">New</button>
+    <input type="text" id="song-name" value="song" placeholder="song name" style="width:100px;background:var(--bg);color:var(--fg);border:1px solid var(--bg3);padding:2px 6px;font-family:inherit;font-size:12px">
+    <div class="sep"></div>
+    <button onclick="exportBin()">Export .bsb</button>
+    <button onclick="exportJS(false)">Export .js</button>
+    <button onclick="exportJS(true)">Export .min.js</button>
+    <button onclick="importFile()">Import</button>
+</div>
+
+<div class="main">
+    <div class="inst-panel">
+        <div class="inst-list" id="inst-list"></div>
+        <div class="inst-edit">
+            <canvas class="adsr-canvas" id="adsr-canvas" height="48"></canvas>
+            <div class="row"><label>Wave</label>
+                <select id="ie-wave"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option></select>
+            </div>
+            <div class="row"><label>Duty</label>
+                <select id="ie-duty"><option value="0">12.5%</option><option value="1">25%</option><option value="2">50%</option><option value="3">75%</option></select>
+            </div>
+            <div class="row"><label>A</label><input type="range" id="ie-a" min="0" max="255" value="0"><span class="val" id="ie-a-v">0</span></div>
+            <div class="row"><label>D</label><input type="range" id="ie-d" min="0" max="255" value="0"><span class="val" id="ie-d-v">0</span></div>
+            <div class="row"><label>S</label><input type="range" id="ie-s" min="0" max="255" value="0"><span class="val" id="ie-s-v">0</span></div>
+            <div class="row"><label>R</label><input type="range" id="ie-r" min="0" max="255" value="0"><span class="val" id="ie-r-v">0</span></div>
+            <div class="row"><label>Vol</label><input type="range" id="ie-vol" min="0" max="255" value="255"><span class="val" id="ie-vol-v">255</span></div>
+            <div class="row"><label>PE</label><input type="number" id="ie-pe" value="0" min="-128" max="127" style="width:44px"><label>Len</label><input type="number" id="ie-pel" value="0" min="0" max="255" style="width:44px"></div>
+            <div class="row"><label>Arp</label><input type="number" id="ie-arp1" value="0" min="0" max="15" style="width:36px"><input type="number" id="ie-arp2" value="0" min="0" max="15" style="width:36px"></div>
+            <div style="margin-top:6px"><button onclick="addInstrument()" style="font-size:11px;padding:2px 8px">+ Inst</button></div>
+        </div>
+    </div>
+
+    <div class="pattern-area">
+        <div class="order-bar" id="order-bar">
+            <span class="lbl">ORDER</span>
+        </div>
+        <div class="pattern-grid" id="grid" tabindex="0"></div>
+    </div>
+
+    <div class="info-panel" id="info-panel">
+        <h3>Effects</h3>
+        <table>
+            <tr><td>1XY</td><td>Arpeggio — cycles base, +X, +Y semitones per tick</td></tr>
+            <tr><td>2XX</td><td>Pitch up — slide pitch up, XX = speed</td></tr>
+            <tr><td>3XX</td><td>Pitch down — slide pitch down, XX = speed</td></tr>
+            <tr><td>6XY</td><td>Vol slide — X = up speed, Y = down speed per tick</td></tr>
+        </table>
+        <p class="desc">Only one effect per row per channel. Use the volume column for absolute volume.</p>
+
+        <h3>Common arps</h3>
+        <table>
+            <tr><td>147</td><td>Major chord</td></tr>
+            <tr><td>137</td><td>Minor chord</td></tr>
+            <tr><td>136</td><td>Diminished</td></tr>
+            <tr><td>16C</td><td>Tritone</td></tr>
+            <tr><td>17C</td><td>Octave fifth</td></tr>
+        </table>
+
+        <h3>Keyboard</h3>
+        <table>
+            <tr><td class="key">Z-M</td><td>Notes C..B (lower octave)</td></tr>
+            <tr><td class="key">Q-P</td><td>Notes C..B (upper octave)</td></tr>
+            <tr><td class="key">`/§</td><td>Note off</td></tr>
+            <tr><td class="key">Del</td><td>Clear cell</td></tr>
+            <tr><td class="key">Tab</td><td>Next channel</td></tr>
+            <tr><td class="key">Space</td><td>Play / stop pattern</td></tr>
+            <tr><td class="key">Enter</td><td>Play / stop song</td></tr>
+        </table>
+
+        <h3>Volume column</h3>
+        <table>
+            <tr><td>--</td><td>No change (hold previous)</td></tr>
+            <tr><td>01</td><td>Nearly silent</td></tr>
+            <tr><td>FF</td><td>Full volume</td></tr>
+        </table>
+        <p class="desc">Auto-fills when entering a note. Use for fades and swells.</p>
+
+        <h3>Waveforms</h3>
+        <table>
+            <tr><td>Pulse</td><td>Classic square, variable duty cycle</td></tr>
+            <tr><td>Triangle</td><td>Smooth, good for bass and kicks</td></tr>
+            <tr><td>Sawtooth</td><td>Bright, aggressive</td></tr>
+            <tr><td>Noise</td><td>LFSR noise — snares, hats</td></tr>
+            <tr><td>Sine</td><td>Pure tone</td></tr>
+        </table>
+
+        <div class="section desc">
+            <strong style="color:var(--acc)">birb tracker</strong> is part of the birb chiptune synth project.<br><br>
+            &copy; 2026 eimink / Wide Load ^ KVG
+        </div>
+    </div>
+</div>
+
+<div class="statusbar">
+    Pat <span id="st-pat">0</span> &nbsp; Row <span id="st-row">0</span> &nbsp;
+    Ch <span id="st-ch">1</span> &nbsp; Col <span id="st-col">note</span> &nbsp;
+    Inst <span id="st-inst">0</span> &nbsp;
+    Oct <span id="st-oct">4</span>
+    <span style="margin-left:auto">&copy; 2026 eimink / Wide Load ^ KVG</span>
+</div>
+
+<script>
+/* ================================================================
+   SONG STATE
+   ================================================================ */
+const WAVE_NAMES = ['pulse','triangle','sawtooth','noise','sine'];
+const NOTE_NAMES = ['C-','C#','D-','D#','E-','F-','F#','G-','G#','A-','A#','B-'];
+const COL_TYPES = ['note','inst','vol','fx','prm']; // column types within a channel
+
+let song = {
+    bpm: 140, tpr: 6,
+    instruments: [
+        {wave:0,duty:2,a:1,d:6,s:160,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'lead'},
+        {wave:1,duty:0,a:0,d:4,s:200,r:4,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'bass'},
+        {wave:2,duty:0,a:8,d:4,s:140,r:12,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'pad'},
+        {wave:1,duty:0,a:0,d:12,s:0,r:0,pe:-16,pel:8,arp1:0,arp2:0,vol:255,name:'kick'},
+        {wave:3,duty:0,a:0,d:6,s:0,r:0,pe:0,pel:0,arp1:0,arp2:0,vol:180,name:'snare'},
+        {wave:3,duty:0,a:0,d:2,s:0,r:0,pe:0,pel:0,arp1:0,arp2:0,vol:80,name:'hat'},
+    ],
+    patterns: [], // patterns[p][r][c] = {note,inst,fx,prm}
+    order: [],    // order[i] = [p0,p1,p2,p3]
+};
+
+const NCH = 4;
+let curPat = 0, curRow = 0, curCh = 0, curCol = 0; // cursor
+let curInst = 0, curOctave = 4, curOrderPos = 0;
+let editInst = 0; // which instrument is selected for editing
+let playingSource = null, playingCtx = null, playingRow = -1;
+
+function makeRow() {
+    let r = [];
+    for (let c = 0; c < NCH; c++) r.push({note:0,inst:255,vol:0,fx:0,prm:0});
+    return r;
+}
+function makePattern(rows) {
+    let p = [];
+    for (let r = 0; r < rows; r++) p.push(makeRow());
+    return p;
+}
+let dirty = false;
+function markDirty() { dirty = true; saveSongToStorage(); }
+
+function initSong() {
+    let rows = +document.getElementById('pat-rows').value || 16;
+    song.patterns = [makePattern(rows)];
+    song.order = [[0,0,0,0]];
+    curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
+    dirty = false;
+}
+
+function saveSongToStorage() {
+    try {
+        localStorage.setItem('birb_song', JSON.stringify({
+            bpm: song.bpm, tpr: song.tpr,
+            instruments: song.instruments,
+            patterns: song.patterns,
+            order: song.order
+        }));
+        let songName = document.getElementById('song-name').value || 'song';
+        localStorage.setItem('birb_editor', JSON.stringify({
+            curPat, curRow, curCh, curCol, curOrderPos, curInst, curOctave, editInst, songName
+        }));
+    } catch(e) {}
+}
+
+function loadSongFromStorage() {
+    try {
+        let s = localStorage.getItem('birb_song');
+        if (!s) return false;
+        let data = JSON.parse(s);
+        song.bpm = data.bpm || 140;
+        song.tpr = data.tpr || 6;
+        song.instruments = data.instruments || [];
+        song.patterns = data.patterns || [];
+        song.order = data.order || [[0,0,0,0]];
+        if (!song.instruments.length) return false;
+        if (!song.patterns.length) return false;
+        // restore editor state
+        let e = localStorage.getItem('birb_editor');
+        if (e) {
+            let ed = JSON.parse(e);
+            curPat = ed.curPat || 0;
+            curRow = ed.curRow || 0;
+            curCh = ed.curCh || 0;
+            curCol = ed.curCol || 0;
+            curOrderPos = ed.curOrderPos || 0;
+            curInst = ed.curInst || 0;
+            curOctave = ed.curOctave || 4;
+            editInst = ed.editInst || 0;
+            if (ed.songName) document.getElementById('song-name').value = ed.songName;
+        }
+        document.getElementById('bpm').value = song.bpm;
+        document.getElementById('tpr').value = song.tpr;
+        document.getElementById('octave').value = curOctave;
+        if (song.patterns[curPat])
+            document.getElementById('pat-rows').value = song.patterns[curPat].length;
+        dirty = false;
+        return true;
+    } catch(e) { return false; }
+}
+
+function newSong() {
+    if (dirty && !confirm('Discard unsaved changes?')) return;
+    song.instruments = [
+        {wave:0,duty:2,a:1,d:6,s:160,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:''},
+        {wave:1,duty:0,a:0,d:4,s:200,r:4,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:''},
+    ];
+    let rows = +document.getElementById('pat-rows').value || 16;
+    song.patterns = [makePattern(rows)];
+    song.order = [[0,0,0,0]];
+    song.bpm = 140; song.tpr = 6;
+    curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
+    editInst = 0; curInst = 0;
+    document.getElementById('bpm').value = 140;
+    document.getElementById('tpr').value = 6;
+    dirty = false;
+    saveSongToStorage();
+    renderAll();
+    document.getElementById('grid').focus();
+}
+
+function clearPattern() {
+    let pat = song.patterns[curPat];
+    if (!pat) return;
+    for (let r = 0; r < pat.length; r++)
+        for (let c = 0; c < NCH; c++)
+            pat[r][c] = {note:0, inst:255, vol:0, fx:0, prm:0};
+    curRow = 0;
+    markDirty();
+    renderGrid();
+    document.getElementById('grid').focus();
+}
+
+// Try to restore from localStorage, otherwise init fresh
+if (!loadSongFromStorage()) {
+    initSong();
+}
+
+/* ================================================================
+   NOTE FORMATTING
+   ================================================================ */
+function noteStr(n) {
+    if (n === 0) return '---';
+    if (n === 1) return 'OFF';
+    let semi = n - 2;
+    return NOTE_NAMES[semi % 12] + (semi / 12 | 0);
+}
+function hexStr(v) {
+    if (v === 255 || v === undefined) return '--';
+    return ('0' + v.toString(16).toUpperCase()).slice(-2);
+}
+
+/* ================================================================
+   RENDER PATTERN GRID
+   ================================================================ */
+function renderGrid() {
+    let pat = song.patterns[curPat];
+    if (!pat) return;
+    let html = '<table class="grid-table"><tr><th></th>';
+    for (let c = 0; c < NCH; c++) {
+        html += `<th colspan="5">Ch ${c+1}</th>`;
+        if (c < NCH - 1) html += '<th></th>';
+    }
+    html += '</tr>';
+    for (let r = 0; r < pat.length; r++) {
+        let rowClass = 'grid-row';
+        if (r % 4 === 0) rowClass += ' beat';
+        if (r === playingRow) rowClass += ' playing-row';
+        html += `<tr class="${rowClass}">`;
+        html += `<td class="row-num">${('0'+r.toString(16).toUpperCase()).slice(-2)}</td>`;
+        for (let c = 0; c < NCH; c++) {
+            let cell = pat[r][c];
+            let n = cell.note, inst = cell.inst, vol = cell.vol, fx = cell.fx, prm = cell.prm;
+            let nClass = n === 0 ? 'empty' : n === 1 ? 'off' : '';
+            let iClass = inst === 255 ? 'empty' : '';
+            let vClass = vol === 0 ? 'empty' : '';
+            let fClass = fx === 0 ? 'empty' : '';
+            let pClass = fx === 0 && prm === 0 ? 'empty' : '';
+
+            for (let col = 0; col < 5; col++) {
+                let isCursor = r === curRow && c === curCh && col === curCol;
+                let cls = 'cell cell-' + COL_TYPES[col];
+                if (col === 0) cls += ' ' + nClass;
+                else if (col === 1) cls += ' ' + iClass;
+                else if (col === 2) cls += ' ' + vClass;
+                else if (col === 3) cls += ' ' + fClass;
+                else cls += ' ' + pClass;
+                if (isCursor) cls += ' cursor';
+                let val;
+                if (col === 0) val = noteStr(n);
+                else if (col === 1) val = hexStr(inst);
+                else if (col === 2) val = vol === 0 ? '--' : ('0' + vol.toString(16).toUpperCase()).slice(-2);
+                else if (col === 3) val = fx === 0 ? '-' : fx.toString(16).toUpperCase();
+                else val = (fx === 0 && prm === 0) ? '--' : hexStr(prm);
+                html += `<td class="${cls}" data-r="${r}" data-c="${c}" data-col="${col}">${val}</td>`;
+            }
+            if (c < NCH - 1) html += '<td class="ch-sep"></td>';
+        }
+        html += '</tr>';
+    }
+    html += '</table>';
+    document.getElementById('grid').innerHTML = html;
+    // scroll cursor into view
+    let cur = document.querySelector('.cursor');
+    if (cur) cur.scrollIntoView({block:'nearest',inline:'nearest'});
+    updateStatus();
+}
+
+/* ================================================================
+   ORDER BAR
+   ================================================================ */
+function renderOrder() {
+    let html = '<span class="lbl">ORDER</span>';
+    for (let i = 0; i < song.order.length; i++) {
+        let cls = 'order-btn' + (i === curOrderPos ? ' cur' : '');
+        html += `<button class="${cls}" onclick="selectOrder(${i})">${i}:${song.order[i][0]}</button>`;
+    }
+    html += `<button class="order-btn" onclick="addOrderPos()">+</button>`;
+    document.getElementById('order-bar').innerHTML = html;
+}
+function selectOrder(i) {
+    curOrderPos = i;
+    curPat = song.order[i][0]; // follow ch1 pattern
+    renderOrder(); renderGrid();
+    document.getElementById('grid').focus();
+}
+function addOrderPos() {
+    let last = song.order.length > 0 ? song.order[song.order.length-1].slice() : [0,0,0,0];
+    song.order.push(last);
+    markDirty();
+    renderOrder();
+    document.getElementById('grid').focus();
+}
+
+/* ================================================================
+   INSTRUMENT PANEL
+   ================================================================ */
+function instDisplayName(ins) {
+    return ins.name || (WAVE_NAMES[ins.wave] + (ins.wave===0 ? ['12','25','50','75'][ins.duty] : ''));
+}
+function renderInstList() {
+    let html = '';
+    for (let i = 0; i < song.instruments.length; i++) {
+        let ins = song.instruments[i];
+        let cls = 'inst-item' + (i === editInst ? ' sel' : '');
+        html += `<div class="${cls}" onclick="selectInst(${i})" ondblclick="renameInst(${i})">${hexStr(i)} ${instDisplayName(ins)}</div>`;
+    }
+    document.getElementById('inst-list').innerHTML = html;
+}
+function renameInst(i) {
+    let ins = song.instruments[i];
+    let name = prompt('Instrument name:', ins.name || '');
+    if (name !== null) {
+        ins.name = name || '';
+        markDirty();
+        renderInstList();
+    }
+    document.getElementById('grid').focus();
+}
+function selectInst(i) {
+    editInst = i;
+    curInst = i;
+    renderInstList();
+    loadInstEditor();
+}
+function addInstrument() {
+    song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:''});
+    editInst = song.instruments.length - 1;
+    curInst = editInst;
+    markDirty();
+    renderInstList(); loadInstEditor();
+    document.getElementById('grid').focus();
+}
+function loadInstEditor() {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    document.getElementById('ie-wave').value = ins.wave;
+    document.getElementById('ie-duty').value = ins.duty;
+    document.getElementById('ie-a').value = ins.a;
+    document.getElementById('ie-d').value = ins.d;
+    document.getElementById('ie-s').value = ins.s;
+    document.getElementById('ie-r').value = ins.r;
+    document.getElementById('ie-pe').value = ins.pe;
+    document.getElementById('ie-pel').value = ins.pel;
+    document.getElementById('ie-arp1').value = ins.arp1;
+    document.getElementById('ie-arp2').value = ins.arp2;
+    document.getElementById('ie-vol').value = ins.vol !== undefined ? ins.vol : 255;
+    updateInstValues();
+    drawADSR();
+}
+function updateInstValues() {
+    for (let k of ['a','d','s','r','vol']) {
+        let el = document.getElementById('ie-'+k);
+        document.getElementById('ie-'+k+'-v').textContent = el.value;
+    }
+}
+function saveInstFromEditor() {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    ins.wave = +document.getElementById('ie-wave').value;
+    ins.duty = +document.getElementById('ie-duty').value;
+    ins.a = +document.getElementById('ie-a').value;
+    ins.d = +document.getElementById('ie-d').value;
+    ins.s = +document.getElementById('ie-s').value;
+    ins.r = +document.getElementById('ie-r').value;
+    ins.pe = +document.getElementById('ie-pe').value;
+    ins.pel = +document.getElementById('ie-pel').value;
+    ins.arp1 = +document.getElementById('ie-arp1').value;
+    ins.arp2 = +document.getElementById('ie-arp2').value;
+    ins.vol = +document.getElementById('ie-vol').value;
+    renderInstList();
+    updateInstValues();
+    drawADSR();
+    markDirty();
+}
+// Bind inst editor inputs
+document.querySelector('.inst-edit').addEventListener('input', saveInstFromEditor);
+
+/* ADSR visualization */
+function drawADSR() {
+    let c = document.getElementById('adsr-canvas');
+    let ctx = c.getContext('2d');
+    let w = c.offsetWidth, h = c.offsetHeight;
+    c.width = w; c.height = h;
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg');
+    ctx.fillRect(0,0,w,h);
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    let a = ins.a, d = ins.d, s = ins.s/255, r = ins.r;
+    let total = (a+1) + (d+1) + 10 + (r+1); // sustain hold = 10 units
+    let px = x => x / total * w;
+    ctx.strokeStyle = '#88bbff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    let x = 0;
+    ctx.moveTo(x, h);
+    x += a + 1; ctx.lineTo(px(x), 4); // attack peak
+    x += d + 1; ctx.lineTo(px(x), h - s*(h-8)); // decay to sustain
+    x += 10;    ctx.lineTo(px(x), h - s*(h-8)); // sustain hold
+    x += r + 1; ctx.lineTo(px(x), h); // release
+    ctx.stroke();
+}
+
+/* ================================================================
+   KEYBOARD INPUT
+   ================================================================ */
+// Tracker piano keyboard layout
+const KEY_NOTE_MAP = {
+    'z':0,'s':1,'x':2,'d':3,'c':4,'v':5,'g':6,'b':7,'h':8,'n':9,'j':10,'m':11,
+    'q':12,'2':13,'w':14,'3':15,'e':16,'r':17,'5':18,'t':19,'6':20,'y':21,'7':22,'u':23,
+    'i':24,'9':25,'o':26,'0':27,'p':28,
+};
+
+function handleKey(e) {
+    let pat = song.patterns[curPat];
+    if (!pat) return;
+    let maxRow = pat.length;
+    let step = 1; // rows to advance after note entry
+    let handled = true;
+
+    if (e.key === 'ArrowDown') { curRow = (curRow + 1) % maxRow; }
+    else if (e.key === 'ArrowUp') { curRow = (curRow - 1 + maxRow) % maxRow; }
+    else if (e.key === 'ArrowRight') {
+        curCol++;
+        if (curCol >= 5) { curCol = 0; curCh = (curCh + 1) % NCH; }
+    }
+    else if (e.key === 'ArrowLeft') {
+        curCol--;
+        if (curCol < 0) { curCol = 4; curCh = (curCh - 1 + NCH) % NCH; }
+    }
+    else if (e.key === 'Tab') {
+        e.preventDefault();
+        if (e.shiftKey) curCh = (curCh - 1 + NCH) % NCH;
+        else curCh = (curCh + 1) % NCH;
+    }
+    else if (e.key === 'Delete' || e.key === 'Backspace') {
+        let cell = pat[curRow][curCh];
+        if (curCol === 0) { cell.note = 0; cell.inst = 255; cell.vol = 0; cell.fx = 0; cell.prm = 0; }
+        else if (curCol === 1) cell.inst = 255;
+        else if (curCol === 2) cell.vol = 0;
+        else if (curCol === 3) { cell.fx = 0; cell.prm = 0; }
+        else cell.prm = 0;
+    }
+    else if (e.key === '`' || e.key === '§') {
+        // note off
+        if (curCol === 0) {
+            pat[curRow][curCh].note = 1;
+            curRow = (curRow + step) % maxRow;
+        }
+    }
+    else if (e.key === ' ') {
+        e.preventDefault();
+        togglePlayPat();
+        return;
+    }
+    else if (e.key === 'Enter') {
+        e.preventDefault();
+        togglePlay();
+        return;
+    }
+    else if (curCol === 0 && KEY_NOTE_MAP[e.key] !== undefined) {
+        // note entry
+        let semi = KEY_NOTE_MAP[e.key] + curOctave * 12;
+        if (semi >= 0 && semi < 96) {
+            let cell = pat[curRow][curCh];
+            cell.note = semi + 2;
+            cell.inst = curInst;
+            let ins = song.instruments[curInst];
+            cell.vol = ins && ins.vol !== undefined ? ins.vol : 255;
+            curRow = (curRow + step) % maxRow;
+            previewNote(semi + 2, curInst);
+        }
+    }
+    else if (curCol === 1) {
+        // instrument entry (hex)
+        let hv = parseInt(e.key, 16);
+        if (!isNaN(hv) && hv < song.instruments.length) {
+            pat[curRow][curCh].inst = hv;
+            curInst = hv;
+            curRow = (curRow + step) % maxRow;
+        } else handled = false;
+    }
+    else if (curCol === 2) {
+        // volume entry (hex, two digits)
+        let hv = parseInt(e.key, 16);
+        if (!isNaN(hv)) {
+            let cur = pat[curRow][curCh].vol;
+            if (cur === 0) cur = 0; // no change → start fresh
+            pat[curRow][curCh].vol = ((cur & 0x0F) << 4) | hv;
+        } else handled = false;
+    }
+    else if (curCol === 3) {
+        // effect type (hex digit)
+        let hv = parseInt(e.key, 16);
+        if (!isNaN(hv) && hv < 8) {
+            pat[curRow][curCh].fx = hv;
+        } else handled = false;
+    }
+    else if (curCol === 4) {
+        // effect param (hex, two digits)
+        let hv = parseInt(e.key, 16);
+        if (!isNaN(hv)) {
+            pat[curRow][curCh].prm = ((pat[curRow][curCh].prm & 0x0F) << 4) | hv;
+        } else handled = false;
+    }
+    else { handled = false; }
+
+    if (handled) {
+        e.preventDefault();
+        markDirty();
+        renderGrid();
+    }
+}
+
+document.getElementById('grid').addEventListener('keydown', handleKey);
+
+// Click to position cursor
+document.getElementById('grid').addEventListener('click', function(e) {
+    let td = e.target.closest('td[data-r]');
+    if (td) {
+        curRow = +td.dataset.r;
+        curCh = +td.dataset.c;
+        curCol = +td.dataset.col;
+        renderGrid();
+    }
+    this.focus();
+});
+
+/* ================================================================
+   INLINE SYNTH (from birb_4k.js pattern, for audio preview)
+   ================================================================ */
+function renderSong(patOnly, singlePat) {
+    let S = 44100, N = 4, F = 65536;
+    let bpm = song.bpm, tpr = song.tpr;
+    let ni = song.instruments.length, np = song.patterns.length;
+    let bf = [24,26,27,29,31,32,34,36,38,41,43,46];
+    let dv = [8192,16384,32768,49152];
+    let nf = n => (n=n<0?0:n>95?95:n, bf[n%12]<<(n/12));
+    let spt = S*5/((bpm||125)*2)|0;
+
+    // Build order and pattern data
+    let ord, ol;
+    if (patOnly) {
+        ord = [[singlePat,singlePat,singlePat,singlePat]];
+        ol = 1;
+    } else {
+        ord = song.order.map(o => {
+            // For each order pos, all channels use same pattern for now
+            return o.slice();
+        });
+        ol = ord.length;
+    }
+
+    let maxR = 0;
+    for (let p of song.patterns) if (p.length > maxR) maxR = p.length;
+    let T = ol * maxR * tpr * spt;
+    let out = new Float32Array(T);
+    let rowMarkers = []; // sample positions of row boundaries
+
+    let ch = [];
+    for (let c = 0; c < N; c++)
+        ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,vs:0};
+
+    let ct = 0, cr = 0, op = 0, tc = 0, firstRow = true;
+
+    function doRow() {
+        for (let c = 0; c < N; c++) {
+            let qi = ord[op][c]; if (qi >= np) continue;
+            let pat = song.patterns[qi]; if (!pat || cr >= pat.length) continue;
+            let cell = pat[cr][c];
+            let n = cell.note, ii = cell.inst, rv = cell.vol, fx = cell.fx, pm = cell.prm, C = ch[c];
+            if (n===1) C.t = 4;
+            else if (n >= 2) {
+                if (ii === 255) ii = C.i;
+                if (ii < ni) {
+                    C.i = ii; let j = song.instruments[ii], semi = n - 2;
+                    C.n = semi; C.b = nf(semi); C.f = C.b; C.p = 0; C.w = j.wave; C.u = dv[j.duty & 3];
+                    C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r; C.t = 1; C.e = 0;
+                    C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2; C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255; C.k = 0; C.l = 0;
+                    if (j.wave >= 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
+                }
+            }
+            if (rv) C.rv = rv;
+            if (fx===1){C.x=pm>>4;C.y=pm&15;C.k=0}
+            else if(fx===2)C.l=pm<<2;else if(fx===3)C.l=-(pm<<2);
+            else if(fx===6){let u=pm>>4,d=pm&15;C.vs=u?u:-d;}
+        }
+    }
+
+    function doTick() {
+        if (firstRow) {
+            firstRow = false;
+            doRow(); // process row 0 on the very first tick
+        }
+        ct++;
+        if (ct >= tpr) {
+            ct = 0; cr++;
+            let pat = song.patterns[ord[op][0]];
+            let plen = pat ? pat.length : 16;
+            if (cr >= plen) { cr = 0; op++; if (op >= ol) op = 0; }
+            doRow();
+        }
+        for (let c = 0; c < N; c++) {
+            let C = ch[c];
+            if(C.g){C.b+=C.q<<2;if(C.b<1)C.b=1;C.g--}
+            if(C.l){C.b+=C.l;if(C.b<1)C.b=1}
+            if(C.x|C.y){let n=C.n,t=C.k%3;C.f=nf(t===1?n+C.x:t===2?n+C.y:n);C.k++}else C.f=C.b;
+            let e=C.t;
+            if(e===1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
+            else if(e===2){let g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
+            else if(e===4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}
+            if(C.vs){C.rv+=C.vs*4;if(C.rv>255)C.rv=255;if(C.rv<1)C.rv=1;}
+        }
+    }
+
+    let lastMarkedRow = -1;
+    for (let i = 0; i < T; i++) {
+        if (tc <= 0) {
+            doTick(); tc = spt;
+            if (cr !== lastMarkedRow) {
+                rowMarkers.push({sample:i, row:cr, op:op});
+                lastMarkedRow = cr;
+            }
+        }
+        tc--;
+        let v = 0;
+        for (let c = 0; c < N; c++) {
+            let C = ch[c]; if (!C.t && !C.e) continue;
+            let h = C.p, s;
+            if (!C.w) s = h < C.u ? .5 : -.5;
+            else if (C.w===1) s = h < F/2 ? (h*4-F)/F : (F*3-h*4)/F;
+            else if (C.w < 3) s = (h*2-F)/F;
+            else { C.m++; if (C.m>=C.j){C.m=0;let z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)} s=(C.h&1)?.5:-.5; }
+            v += s * C.e * (C.v || 255) * C.rv / F / 255 / 255; C.p = (C.p + C.f) % F;
+        }
+        out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
+    }
+    return {out, T, spt, rowMarkers};
+}
+
+/* Note preview: render a short note with enough time for ADSR to be heard */
+let previewCtx = null, previewSrc = null;
+function previewNote(note, instIdx) {
+    if (instIdx >= song.instruments.length) return;
+    // Stop previous preview
+    if (previewSrc) try { previewSrc.stop(); } catch(e) {}
+    if (previewCtx) previewCtx.close();
+
+    // Render a short pattern: note on for 6 rows, note off, 8 rows of release tail
+    let saved = {patterns: song.patterns, order: song.order};
+    let prevPat = makePattern(16);
+    prevPat[0][0] = {note: note, inst: instIdx, fx: 0, prm: 0};
+    prevPat[6][0] = {note: 1, inst: 255, fx: 0, prm: 0}; // note off at row 6
+    song.patterns = [prevPat];
+    song.order = [[0,0,0,0]];
+    let m = renderSong(true, 0);
+    song.patterns = saved.patterns;
+    song.order = saved.order;
+
+    previewCtx = new AudioContext({sampleRate: 44100});
+    let ab = previewCtx.createBuffer(1, m.T, 44100);
+    ab.getChannelData(0).set(m.out);
+    previewSrc = previewCtx.createBufferSource();
+    previewSrc.buffer = ab; previewSrc.connect(previewCtx.destination); previewSrc.start();
+    // Clean up after playback
+    previewSrc.onended = () => { if (previewCtx) { previewCtx.close(); previewCtx = null; } };
+}
+
+/* ================================================================
+   TRANSPORT
+   ================================================================ */
+function togglePlay() {
+    if (playingSource) { stopPlay(); return; }
+    let m = renderSong(false);
+    startPlayback(m);
+}
+function togglePlayPat() {
+    if (playingSource) { stopPlay(); return; }
+    let m = renderSong(true, curPat);
+    startPlayback(m);
+}
+function startPlayback(m) {
+    playingCtx = new AudioContext({sampleRate: 44100});
+    let ab = playingCtx.createBuffer(1, m.T, 44100);
+    ab.getChannelData(0).set(m.out);
+    playingSource = playingCtx.createBufferSource();
+    playingSource.buffer = ab;
+    playingSource.connect(playingCtx.destination);
+    playingSource.loop = true;
+    playingSource.start();
+    document.getElementById('btn-play').classList.add('active');
+    // Row position tracking
+    let t0 = playingCtx.currentTime;
+    let markers = m.rowMarkers;
+    function updatePos() {
+        if (!playingSource) return;
+        let elapsed = ((playingCtx.currentTime - t0) * 44100) % m.T | 0;
+        // Find current row from markers
+        let cur = markers[0];
+        for (let i = markers.length - 1; i >= 0; i--) {
+            if (markers[i].sample <= elapsed) { cur = markers[i]; break; }
+        }
+        if (cur && playingRow !== cur.row) {
+            playingRow = cur.row;
+            renderGrid();
+        }
+        requestAnimationFrame(updatePos);
+    }
+    updatePos();
+}
+function stopPlay() {
+    if (playingSource) { try { playingSource.stop(); } catch(e){} playingSource = null; }
+    if (playingCtx) { playingCtx.close(); playingCtx = null; }
+    playingRow = -1;
+    document.getElementById('btn-play').classList.remove('active');
+    renderGrid();
+}
+
+/* ================================================================
+   PATTERN MANAGEMENT
+   ================================================================ */
+function addPattern() {
+    let rows = +document.getElementById('pat-rows').value || 16;
+    song.patterns.push(makePattern(rows));
+    curPat = song.patterns.length - 1;
+    markDirty();
+    renderOrder(); renderGrid();
+    document.getElementById('grid').focus();
+}
+
+/* ================================================================
+   TOOLBAR BINDINGS
+   ================================================================ */
+document.getElementById('bpm').addEventListener('change', function() { song.bpm = +this.value; markDirty(); });
+document.getElementById('tpr').addEventListener('change', function() { song.tpr = +this.value; markDirty(); });
+document.getElementById('octave').addEventListener('change', function() { curOctave = +this.value; saveSongToStorage(); });
+document.getElementById('song-name').addEventListener('input', function() { saveSongToStorage(); });
+document.getElementById('pat-rows').addEventListener('change', function() {
+    let rows = +this.value || 16;
+    let pat = song.patterns[curPat];
+    if (!pat) return;
+    while (pat.length < rows) pat.push(makeRow());
+    while (pat.length > rows) pat.pop();
+    if (curRow >= rows) curRow = rows - 1;
+    markDirty();
+    renderGrid();
+});
+
+/* ================================================================
+   STATUS BAR
+   ================================================================ */
+function updateStatus() {
+    document.getElementById('st-pat').textContent = curPat;
+    document.getElementById('st-row').textContent = ('0'+curRow.toString(16).toUpperCase()).slice(-2);
+    document.getElementById('st-ch').textContent = curCh + 1;
+    document.getElementById('st-col').textContent = COL_TYPES[curCol];
+    document.getElementById('st-inst').textContent = hexStr(curInst);
+    document.getElementById('st-oct').textContent = curOctave;
+}
+
+/* ================================================================
+   EXPORT .birb
+   ================================================================ */
+function exportBin() {
+    // Build binary in the same planar format as birb_format.h
+    let buf = [];
+    let push = v => buf.push(v & 0xFF);
+
+    // header
+    push(0x42); push(0x52); push(0x42); push(0x31); // BRB1
+    push(song.bpm); push(song.tpr);
+    push(song.instruments.length); push(song.patterns.length);
+
+    // order
+    push(song.order.length);
+    for (let o of song.order) for (let c = 0; c < NCH; c++) push(o[c]);
+
+    // instruments (12 bytes each)
+    for (let ins of song.instruments) {
+        push(ins.wave); push(ins.duty);
+        push(ins.a); push(ins.d); push(ins.s); push(ins.r);
+        push(ins.pe < 0 ? ins.pe + 256 : ins.pe); push(ins.pel);
+        push(ins.arp1); push(ins.arp2);
+        push(ins.vol !== undefined ? ins.vol : 255);
+        push(0); // reserved
+    }
+
+    // patterns (planar)
+    for (let pat of song.patterns) {
+        push(pat.length);
+        // notes plane
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].note);
+        // instrument plane
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].inst);
+        // volume plane
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].vol || 0);
+        // effect plane
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].fx);
+        // param plane
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].prm);
+    }
+
+    // NAME section — instrument names
+    let hasNames = song.instruments.some(i => i.name);
+    if (hasNames) {
+        push(78); push(65); push(77); push(69); // 'NAME'
+        for (let ins of song.instruments) {
+            let name = ins.name || '';
+            let len = Math.min(name.length, 31);
+            push(len);
+            for (let j = 0; j < len; j++) push(name.charCodeAt(j));
+        }
+    }
+
+    let arr = new Uint8Array(buf);
+    let blob = new Blob([arr], {type:'application/octet-stream'});
+    let a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    let songName = document.getElementById('song-name').value || 'song';
+    a.download = songName + '.bsb';
+    a.click();
+    dirty = false;
+    console.log('Exported ' + arr.length + ' bytes');
+}
+
+function buildJS() {
+    let N = NCH, o = '';
+
+    o += 'function birb(X){\nvar S=44100,N=4,F=65536,\n';
+    o += `bpm=${song.bpm},tpr=${song.tpr},ni=${song.instruments.length},np=${song.patterns.length},ol=${song.order.length},\n`;
+
+    o += 'O=[' + song.order.map(r => '[' + r.join(',') + ']').join(',') + '],\n';
+
+    o += 'I=[' + song.instruments.map(i => {
+        return `[${i.wave},${i.duty},${i.a},${i.d},${i.s},${i.r},${i.pe},${i.pel},${i.arp1},${i.arp2},${i.vol !== undefined ? i.vol : 255}]`;
+    }).join(',') + '],\n';
+
+    let W = 0;
+    for (let p of song.patterns) if (p.length > W) W = p.length;
+    o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],W=' + W + ',\n';
+
+    let planes = ['pn','pi','pv','pf','pp'];
+    let keys = ['note','inst','vol','fx','prm'];
+    for (let pl = 0; pl < 5; pl++) {
+        let vals = [];
+        for (let p of song.patterns) {
+            for (let c = 0; c < N; c++) {
+                for (let r = 0; r < p.length; r++) vals.push(p[r][c][keys[pl]]);
+                for (let r = p.length; r < W; r++) vals.push(0);
+            }
+        }
+        o += planes[pl] + '=[' + vals.join(',') + '],\n';
+    }
+
+    o += 'P=(a,p,c,r)=>a[(p*N+c)*W+r],\n';
+    o += `bf=[24,26,27,29,31,32,34,36,38,41,43,46],
+dv=[8192,16384,32768,49152],
+nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
+spt=S*5/((bpm||125)*2)|0,T=ol*W*tpr*spt,
+out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0,c
+for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,vs:0}
+function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue
+var n=P(pn,q,c,cr),ii=P(pi,q,c,cr),rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)
+if(n==1)C.t=4;else if(n>=2){if(ii==255)ii=C.i;if(ii<ni){C.i=ii;var s=n-2,j=I[ii]
+C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
+C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];C.t=1;C.e=0
+C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0
+if(j[0]>=3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}}}
+if(rv)C.rv=rv
+if(fx==1){C.x=pm>>4;C.y=pm&15;C.k=0}
+else if(fx==2)C.l=pm<<2;else if(fx==3)C.l=-(pm<<2);else if(fx==6){var u=pm>>4,d=pm&15;C.vs=u?u:-d}}}
+R();
+function K(){ct++;if(ct>=tpr){ct=0;cr++
+if(cr>=pl[O[op][0]]){cr=0;if(++op>=ol)op=0}R()}
+for(c=0;c<N;c++){var C=ch[c]
+if(C.g){C.b+=C.q<<2;if(C.b<1)C.b=1;C.g--}
+if(C.l){C.b+=C.l;if(C.b<1)C.b=1}
+if(C.x|C.y){var n=C.n,t=C.k%3;C.f=nf(t==1?n+C.x:t==2?n+C.y:n);C.k++}else C.f=C.b
+var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
+else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
+else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}
+if(C.vs){C.rv+=C.vs*4;if(C.rv>255)C.rv=255;if(C.rv<1)C.rv=1}}}
+for(var i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
+var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e)continue
+var h=C.p,s;if(!C.w)s=h<C.u?.5:-.5
+else if(C.w==1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F
+else if(C.w<3)s=(h*2-F)/F
+else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
+v+=s*C.e*C.v*C.rv/F/255/255;C.p=(C.p+C.f)%F}out[i]=v>1?1:v<-1?-1:v}
+return{o:out,spt:spt,T:T}}`;
+    return o;
+}
+
+function minifyJS(src) {
+    // Strip comments and collapse whitespace
+    let o = src.replace(/\/\/[^\n]*/g, '');
+    // Collapse newlines — but preserve them after statements that need ASI
+    // Safe approach: replace newlines with semicolons where needed
+    let lines = o.split('\n').map(l => l.trim()).filter(l => l);
+    o = lines.join('\n');
+    // Replace newlines with nothing where the next line starts with a safe continuation
+    // or use semicolons
+    o = o.replace(/\n(?=[a-zA-Z_\.\(\{])/g, ';');
+    o = o.replace(/\n/g, '');
+    // Clean up double semicolons
+    o = o.replace(/;+/g, ';');
+    o = o.replace(/;}/g, '}');
+    o = o.replace(/;$/g, '');
+    return o;
+}
+
+function packJS(src) {
+    // JSCrush-style packing: find repeated substrings and replace with single chars
+    // Use unused ASCII chars as replacement tokens
+    let s = src;
+    // Available token chars (not used in the source)
+    let tokens = [];
+    for (let i = 1; i < 127; i++) {
+        let c = String.fromCharCode(i);
+        if (s.indexOf(c) === -1 && c !== "'" && c !== '\\') tokens.push(c);
+    }
+
+    let replacements = [];
+    // Find repeated substrings worth replacing (saves > 3 bytes)
+    for (let pass = 0; pass < tokens.length && pass < 40; pass++) {
+        let best = null, bestSave = 0;
+        // Try substring lengths from 2 to 60
+        for (let len = 2; len <= 60; len++) {
+            let counts = {};
+            for (let i = 0; i <= s.length - len; i++) {
+                let sub = s.substring(i, i + len);
+                if (sub.indexOf(tokens[0]) !== -1) continue; // skip if contains a token we might use
+                counts[sub] = (counts[sub] || 0) + 1;
+            }
+            for (let sub in counts) {
+                let cnt = counts[sub];
+                if (cnt < 2) continue;
+                let save = (cnt - 1) * sub.length - (cnt + sub.length + 2); // cost of the replacement entry
+                if (save > bestSave) { bestSave = save; best = sub; }
+            }
+        }
+        if (!best || bestSave <= 0) break;
+        let tok = tokens.shift();
+        s = s.split(best).join(tok);
+        replacements.push([tok, best]);
+    }
+
+    // Build self-extracting code
+    // Format: packed_data + replacement table + unpacker
+    if (replacements.length === 0) return src;
+
+    // Encode replacements as: tok1|str1|tok2|str2|...
+    // Unpacker replaces in reverse order
+    let repStr = replacements.map(r => r[0] + r[1]).join('|');
+
+    // Wrap as self-extracting: assigns birb function
+    let ss = s.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    let rs = repStr.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return "var _='" + ss + "',_r='" + rs +
+           "';_r.split('|').reverse().forEach(function(p){_=_.split(p[0]).join(p.slice(1))});" +
+           "eval(_)";
+}
+
+function exportJS(minified) {
+    let o = buildJS();
+    let filename = 'song.js';
+
+    let songName = document.getElementById('song-name').value || 'song';
+    filename = songName + '.js';
+    if (minified) {
+        o = minifyJS(o);
+        let packed = packJS(o);
+        if (packed.length < o.length) {
+            o = packed;
+            filename = songName + '.packed.js';
+        } else {
+            filename = songName + '.min.js';
+        }
+    }
+
+    let blob = new Blob([o], {type:'text/javascript'});
+    let a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    console.log(`Exported ${filename}: ${o.length} bytes`);
+}
+
+/* ================================================================
+   IMPORT .birb (reuse birbc parser logic in JS)
+   ================================================================ */
+function importFile() {
+    let input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.bsb,.bin,.birb';
+    input.onchange = function() {
+        let file = input.files[0];
+        if (!file) return;
+        // Set song name from filename
+        let fname = file.name.replace(/\.[^.]+$/, '');
+        document.getElementById('song-name').value = fname;
+        if (file.name.endsWith('.bsb') || file.name.endsWith('.bin')) {
+            let reader = new FileReader();
+            reader.onload = function() { parseBin(new Uint8Array(reader.result)); };
+            reader.readAsArrayBuffer(file);
+        } else {
+            let reader = new FileReader();
+            reader.onload = function() { parseBirb(reader.result); };
+            reader.readAsText(file);
+        }
+    };
+    input.click();
+}
+
+function parseBin(d) {
+    if (d.length < 8 || d[0]!==0x42||d[1]!==0x52||d[2]!==0x42||d[3]!==0x31) {
+        alert('Not a valid .bin file'); return;
+    }
+    song.instruments = [];
+    song.patterns = [];
+    song.order = [];
+    song.bpm = d[4]; song.tpr = d[5];
+    let ni = d[6], np = d[7], p = 8;
+    let ol = d[p++];
+    for (let i = 0; i < ol; i++) {
+        let o = [];
+        for (let c = 0; c < NCH; c++) o.push(d[p++]);
+        song.order.push(o);
+    }
+    let dv = [0,1,2,3]; // duty encoding matches index
+    for (let i = 0; i < ni; i++) {
+        let pe = d[p+6]; if (pe > 127) pe -= 256;
+        song.instruments.push({
+            wave:d[p], duty:d[p+1], a:d[p+2], d:d[p+3], s:d[p+4], r:d[p+5],
+            pe:pe, pel:d[p+7], arp1:d[p+8], arp2:d[p+9], vol:d[p+10] || 255
+        });
+        p += 12;
+    }
+    for (let i = 0; i < np; i++) {
+        let nr = d[p++];
+        let pat = makePattern(nr);
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].note = d[p++];
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].inst = d[p++];
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].vol = d[p++];
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].fx = d[p++];
+        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].prm = d[p++];
+        song.patterns.push(pat);
+    }
+    // optional NAME section
+    if (p + 4 <= d.length && d[p]===78 && d[p+1]===65 && d[p+2]===77 && d[p+3]===69) {
+        p += 4;
+        for (let i = 0; i < song.instruments.length; i++) {
+            if (p >= d.length) break;
+            let slen = d[p++];
+            let name = '';
+            for (let j = 0; j < slen && p < d.length; j++) name += String.fromCharCode(d[p++]);
+            song.instruments[i].name = name;
+        }
+    }
+    if (!song.order.length) song.order = [[0,0,0,0]];
+    curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
+    editInst = 0; curInst = 0;
+    document.getElementById('bpm').value = song.bpm;
+    document.getElementById('tpr').value = song.tpr;
+    dirty = false; saveSongToStorage();
+    renderAll();
+    document.getElementById('grid').focus();
+}
+
+function parseBirb(text) {
+    let lines = text.split('\n');
+    song.instruments = [];
+    song.patterns = [];
+    song.order = [];
+    let inOrder = false, inPat = -1, patRow = 0, patMaxRows = 64;
+
+    const noteMap = {};
+    for (let i = 0; i < 12; i++) noteMap[NOTE_NAMES[i]] = i;
+
+    function parseNote(s) {
+        if (s === '---') return 0;
+        if (s === 'OFF') return 1;
+        let nn = s.substring(0,2);
+        let oct = parseInt(s[2]);
+        if (noteMap[nn] !== undefined && !isNaN(oct)) return 2 + oct * 12 + noteMap[nn];
+        return 0;
+    }
+
+    const waveMap = {pulse12:[0,0],pulse25:[0,1],pulse50:[0,2],pulse75:[0,3],pulse:[0,2],
+        tri:[1,0],triangle:[1,0],saw:[2,0],sawtooth:[2,0],noise:[3,0],sine:[4,0]};
+
+    for (let line of lines) {
+        line = line.trim();
+        if (!line || line[0] === '#') { if (inOrder && !line) inOrder = false; continue; }
+        if (line[0] === '@') {
+            inOrder = false; inPat = -1;
+            let parts = line.substring(1).split(/\s+/);
+            if (parts[0] === 'bpm') song.bpm = +parts[1];
+            else if (parts[0] === 'ticks') song.tpr = +parts[1];
+            else if (parts[0] === 'order') inOrder = true;
+            else if (parts[0] === 'inst') {
+                let idx = +parts[1], wn = parts[2];
+                let wv = waveMap[wn] || [0,2];
+                let ins = {wave:wv[0],duty:wv[1],a:0,d:0,s:0,r:0,pe:0,pel:0,arp1:0,arp2:0};
+                let rest = parts.slice(3).join(' ');
+                let m;
+                if (m = rest.match(/A:(\d+)/)) ins.a = +m[1];
+                if (m = rest.match(/D:(\d+)/)) ins.d = +m[1];
+                if (m = rest.match(/S:(\d+)/)) ins.s = +m[1];
+                if (m = rest.match(/R:(\d+)/)) ins.r = +m[1];
+                if (m = rest.match(/PE:(-?\d+),(\d+)/)) { ins.pe = +m[1]; ins.pel = +m[2]; }
+                if (m = rest.match(/ARP:(\d+),(\d+)/)) { ins.arp1 = +m[1]; ins.arp2 = +m[2]; }
+                if (m = rest.match(/V:(\d+)/)) ins.vol = +m[1]; else ins.vol = 255;
+                while (song.instruments.length <= idx) song.instruments.push({wave:0,duty:2,a:0,d:0,s:0,r:0,pe:0,pel:0,arp1:0,arp2:0,vol:255});
+                song.instruments[idx] = ins;
+            }
+            else if (parts[0] === 'pattern') {
+                inPat = +parts[1]; patRow = 0; patMaxRows = +parts[2] || 64;
+                while (song.patterns.length <= inPat) song.patterns.push(makePattern(16));
+                song.patterns[inPat] = makePattern(patMaxRows);
+            }
+            continue;
+        }
+        if (inOrder) {
+            let nums = line.split(/\s+/).map(Number);
+            while (nums.length < NCH) nums.push(nums[0] || 0);
+            song.order.push(nums.slice(0, NCH));
+            continue;
+        }
+        if (inPat >= 0 && patRow < patMaxRows) {
+            let cells = line.split('|').map(s => s.trim());
+            for (let c = 0; c < NCH && c < cells.length; c++) {
+                let parts = cells[c].split(/\s+/);
+                let cell = song.patterns[inPat][patRow][c];
+                if (parts[0]) cell.note = parseNote(parts[0]);
+                if (parts[1] && parts[1] !== '--') cell.inst = parseInt(parts[1], 16);
+                if (parts[2] && parts[2] !== '---') {
+                    cell.fx = parseInt(parts[2][0], 16) || 0;
+                    cell.prm = parseInt(parts[2].substring(1), 16) || 0;
+                }
+            }
+            patRow++;
+        }
+    }
+
+    if (!song.order.length) song.order = [[0,0,0,0]];
+    if (!song.instruments.length) song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255});
+    if (!song.patterns.length) song.patterns.push(makePattern(16));
+
+    curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
+    editInst = 0; curInst = 0;
+    document.getElementById('bpm').value = song.bpm;
+    document.getElementById('tpr').value = song.tpr;
+    dirty = false; saveSongToStorage();
+    renderAll();
+    document.getElementById('grid').focus();
+}
+
+
+/* ================================================================
+   INIT
+   ================================================================ */
+function toggleInfo() {
+    let panel = document.getElementById('info-panel');
+    panel.classList.toggle('show');
+    document.getElementById('btn-info').classList.toggle('active');
+    document.getElementById('grid').focus();
+}
+
+function renderAll() {
+    renderInstList(); loadInstEditor(); renderOrder(); renderGrid();
+}
+renderAll();
+document.getElementById('grid').focus();
+
+window.addEventListener('beforeunload', function(e) {
+    if (dirty) e.preventDefault();
+});
+</script>
+</body>
+</html>

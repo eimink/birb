@@ -1,0 +1,29 @@
+# Build artifacts
+birb_wav
+birb_play
+birb_play_bin
+birbc
+
+# Generated files
+*.wav
+test_song.bin
+test_song.bsb
+test_song.h
+test_song.js
+test_from_bin.*
+
+# Web build artifacts
+web/birb.wasm
+web/birb.wasm.br
+web/birb4k.wasm
+web/birb4k.wasm.br
+web/test_song.bin
+web/test_song.js
+web/editor.min.html
+
+# OS files
+.DS_Store
+
+# Editor backups
+*~
+*.swp

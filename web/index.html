@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>birb — chiptune synth</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        background: #0a0a0a;
+        color: #e0e0e0;
+        font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+        font-size: 14px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 20px;
+    }
+    h1 { color: #8bf; font-size: 20px; margin-bottom: 8px; }
+    .subtitle { color: #666; font-size: 12px; margin-bottom: 30px; }
+    .controls {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+    button {
+        background: #1a1a2e;
+        color: #8bf;
+        border: 1px solid #333;
+        padding: 8px 20px;
+        font-family: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        border-radius: 3px;
+    }
+    button:hover { background: #252540; border-color: #8bf; }
+    button:disabled { opacity: 0.3; cursor: default; }
+    button.active { background: #2a2a4e; border-color: #8bf; }
+    .status {
+        display: flex;
+        gap: 32px;
+        margin-bottom: 24px;
+        padding: 12px 20px;
+        background: #111;
+        border: 1px solid #222;
+        border-radius: 3px;
+    }
+    .status-item { text-align: center; }
+    .status-label { color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .status-value { color: #8bf; font-size: 24px; font-weight: bold; margin-top: 2px; }
+    .log {
+        width: 100%;
+        max-width: 500px;
+        padding: 12px;
+        background: #111;
+        border: 1px solid #222;
+        border-radius: 3px;
+        font-size: 11px;
+        color: #666;
+        max-height: 150px;
+        overflow-y: auto;
+    }
+    .log .ok { color: #6b8; }
+    .log .err { color: #f66; }
+    .scope {
+        width: 500px;
+        height: 100px;
+        background: #111;
+        border: 1px solid #222;
+        border-radius: 3px;
+        margin-bottom: 24px;
+    }
+</style>
+</head>
+<body>
+
+<h1>birb</h1>
+<div class="subtitle">chiptune synth engine — web test</div>
+
+<div class="controls">
+    <button id="btn-play" onclick="play()">&#9654; Play</button>
+    <button id="btn-stop" onclick="stop()" disabled>&#9632; Stop</button>
+</div>
+
+<div class="status">
+    <div class="status-item">
+        <div class="status-label">Pattern</div>
+        <div class="status-value" id="val-pattern">--</div>
+    </div>
+    <div class="status-item">
+        <div class="status-label">Row</div>
+        <div class="status-value" id="val-row">--</div>
+    </div>
+    <div class="status-item">
+        <div class="status-label">State</div>
+        <div class="status-value" id="val-state" style="font-size:14px">idle</div>
+    </div>
+</div>
+
+<canvas class="scope" id="scope" width="500" height="100"></canvas>
+
+<div class="log" id="log"></div>
+
+<script>
+let audioCtx = null;
+let workletNode = null;
+let scopeAnalyser = null;
+let scopeData = null;
+let animFrame = null;
+
+function log(msg, cls) {
+    const el = document.getElementById('log');
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+}
+
+function setState(s) {
+    document.getElementById('val-state').textContent = s;
+}
+
+async function play() {
+    try {
+        document.getElementById('btn-play').disabled = true;
+        setState('loading');
+
+        /* load WASM + song data in parallel */
+        log('Loading birb.wasm and song data...');
+        const [wasmResp, songResp] = await Promise.all([
+            fetch('birb.wasm'),
+            fetch('test_song.bin')
+        ]);
+        if (!wasmResp.ok) throw new Error('Failed to load birb.wasm');
+        if (!songResp.ok) throw new Error('Failed to load test_song.bin');
+
+        const wasmBytes = await wasmResp.arrayBuffer();
+        const songData = await songResp.arrayBuffer();
+        log(`Loaded: wasm=${wasmBytes.byteLength}b, song=${songData.byteLength}b`, 'ok');
+
+        /* create audio context */
+        audioCtx = new AudioContext({ sampleRate: 44100 });
+        log(`AudioContext: ${audioCtx.sampleRate}Hz`);
+
+        /* load worklet processor */
+        await audioCtx.audioWorklet.addModule('birb_processor.js');
+        log('AudioWorklet loaded', 'ok');
+
+        /* create worklet node */
+        workletNode = new AudioWorkletNode(audioCtx, 'birb-processor', {
+            outputChannelCount: [1]
+        });
+
+        /* set up scope analyser */
+        scopeAnalyser = audioCtx.createAnalyser();
+        scopeAnalyser.fftSize = 1024;
+        scopeData = new Uint8Array(scopeAnalyser.frequencyBinCount);
+        workletNode.connect(scopeAnalyser);
+        scopeAnalyser.connect(audioCtx.destination);
+
+        /* listen for sync messages */
+        workletNode.port.onmessage = (e) => {
+            if (e.data.type === 'ready') {
+                log('Synth initialized, playing!', 'ok');
+                setState('playing');
+                document.getElementById('btn-stop').disabled = false;
+                startScope();
+            } else if (e.data.type === 'sync') {
+                document.getElementById('val-row').textContent =
+                    String(e.data.row).padStart(2, '0');
+                document.getElementById('val-pattern').textContent =
+                    String(e.data.pattern).padStart(2, '0');
+            } else if (e.data.type === 'error') {
+                log('Error: ' + e.data.message, 'err');
+                setState('error');
+            }
+        };
+
+        /* send WASM + song to worklet */
+        workletNode.port.postMessage({
+            type: 'init',
+            wasmBytes: wasmBytes,
+            songData: songData
+        });
+
+    } catch (e) {
+        log('Error: ' + e.message, 'err');
+        setState('error');
+        document.getElementById('btn-play').disabled = false;
+    }
+}
+
+function stop() {
+    if (workletNode) {
+        workletNode.disconnect();
+        workletNode = null;
+    }
+    if (audioCtx) {
+        audioCtx.close();
+        audioCtx = null;
+    }
+    if (animFrame) {
+        cancelAnimationFrame(animFrame);
+        animFrame = null;
+    }
+    setState('idle');
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-stop').disabled = true;
+    document.getElementById('val-row').textContent = '--';
+    document.getElementById('val-pattern').textContent = '--';
+    clearScope();
+    log('Stopped.');
+}
+
+/* --- oscilloscope --- */
+const canvas = document.getElementById('scope');
+const ctx = canvas.getContext('2d');
+
+function clearScope() {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+clearScope();
+
+function drawScope() {
+    if (!scopeAnalyser) return;
+    scopeAnalyser.getByteTimeDomainData(scopeData);
+
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#8bf';
+    ctx.beginPath();
+
+    const sliceWidth = canvas.width / scopeData.length;
+    let x = 0;
+    for (let i = 0; i < scopeData.length; i++) {
+        const v = scopeData[i] / 128.0;
+        const y = v * canvas.height / 2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+        x += sliceWidth;
+    }
+    ctx.stroke();
+
+    animFrame = requestAnimationFrame(drawScope);
+}
+
+function startScope() {
+    if (animFrame) cancelAnimationFrame(animFrame);
+    animFrame = requestAnimationFrame(drawScope);
+}
+</script>
+</body>
+</html>
