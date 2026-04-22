@@ -92,6 +92,14 @@ typedef enum {
     FX_TONE_PORTA,     /* 5xx: slide to target note at speed xx */
     FX_RETRIGGER,      /* 6xx: retrigger note every xx ticks */
     FX_EXTENDED,       /* 7xy: x=C note cut after y ticks, x=D note delay y ticks */
+    FX_TREMOLO,        /* 8xy: x = speed, y = depth (volume LFO) */
+    FX_SAMPLE_OFFSET,  /* 9xx: start sample at offset xx*256 samples */
+    FX_UNUSED_A,
+    FX_POS_JUMP,       /* Bxx: jump to order position xx */
+    FX_UNUSED_C,
+    FX_PAT_BREAK,      /* Dxx: advance to next order, start at row xx */
+    FX_UNUSED_E,
+    FX_SET_SPEED,      /* Fxx: xx<0x20 sets TPR, xx>=0x20 sets BPM */
     FX_COUNT
 } birb_fx;
 
@@ -176,6 +184,10 @@ typedef struct {
     fixed16       vibrato_phase;
     fixed16       vibrato_speed;
     fixed16       vibrato_depth;
+    fixed16       tremolo_phase;
+    fixed16       tremolo_speed;
+    fixed16       tremolo_depth;
+    fixed16       tremolo_mod;    /* cached modulation value per tick */
     fixed16       pitch_slide;
     fixed16       duty_sweep;
     uint8_t       volume;      /* instrument volume 0-255 */
@@ -240,6 +252,10 @@ typedef struct {
     /* for external sync */
     int           row_out;
     int           pattern_out;
+
+    /* pending jumps from effects (applied at next row boundary) */
+    int           jump_order;    /* -1 = none, else target order pos */
+    int           jump_row;      /* row to start at in next order pos */
 } birb_state;
 
 /* ---------- public API ---------- */

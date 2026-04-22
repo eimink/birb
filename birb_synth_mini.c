@@ -220,12 +220,19 @@ static void tick_effects(birb_channel *ch) {
         ch->vibrato_phase += ch->vibrato_speed;
     }
 
+    /* tremolo */
+    if (ch->tremolo_depth > 0) {
+        fixed16 tr = birb_sin_approx(ch->tremolo_phase);
+        ch->tremolo_mod = FX_MUL(tr, ch->tremolo_depth);
+        ch->tremolo_phase += ch->tremolo_speed;
+    } else ch->tremolo_mod = 0;
+
     envelope_tick(ch);
 }
 
 /* ---------- effect processing ---------- */
 
-static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param) {
+static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param, birb_state *state) {
     switch (effect) {
         case FX_ARPEGGIO:
             ch->arp_note1 = (param >> 4) & 0x0F;
@@ -255,6 +262,30 @@ static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param) {
             else if (sub == 0xD) ch->note_delay_tick = val;
             break;
         }
+        case FX_TREMOLO:
+            ch->tremolo_speed = FX_ONE / 64 * ((param >> 4) & 0x0F);
+            ch->tremolo_depth = (fixed16)(param & 0x0F) << 4;
+            break;
+        case FX_SAMPLE_OFFSET:
+            if (ch->waveform == WAVE_SAMPLE)
+                ch->sample_pos = ((uint32_t)param << 8) << FX_SHIFT;
+            break;
+        case FX_POS_JUMP:
+            state->jump_order = param;
+            state->jump_row = 0;
+            break;
+        case FX_PAT_BREAK:
+            if (state->jump_order < 0) state->jump_order = state->order_pos + 1;
+            state->jump_row = param;
+            break;
+        case FX_SET_SPEED:
+            if (!param) break;
+            if (param < 0x20) state->song->ticks_per_row = param;
+            else {
+                state->song->bpm = param;
+                state->samples_per_tick = BIRB_SAMPLE_RATE * 5 / (param * 2);
+            }
+            break;
         default:
             break;
     }
@@ -297,7 +328,7 @@ static void process_row(birb_state *state) {
         }
 
         if (r->volume) ch->row_vol = r->volume;
-        if (r->effect) process_effects(ch, r->effect, r->param);
+        if (r->effect) process_effects(ch, r->effect, r->param, state);
     }
 }
 
@@ -306,13 +337,20 @@ static void advance_tick(birb_state *state) {
     state->current_tick++;
     if (state->current_tick >= song->ticks_per_row) {
         state->current_tick = 0;
-        state->current_row++;
-        int pat_len = song->pattern_lengths[song->order[state->order_pos][0]];
-        if (!pat_len) pat_len = BIRB_MAX_ROWS;
-        if (state->current_row >= pat_len) {
-            state->current_row = 0;
-            state->order_pos++;
+        if (state->jump_order >= 0) {
+            state->order_pos = state->jump_order;
             if (state->order_pos >= song->order_length) state->order_pos = 0;
+            state->current_row = state->jump_row;
+            state->jump_order = -1; state->jump_row = 0;
+        } else {
+            state->current_row++;
+            int pat_len = song->pattern_lengths[song->order[state->order_pos][0]];
+            if (!pat_len) pat_len = BIRB_MAX_ROWS;
+            if (state->current_row >= pat_len) {
+                state->current_row = 0;
+                state->order_pos++;
+                if (state->order_pos >= song->order_length) state->order_pos = 0;
+            }
         }
         process_row(state);
         state->row_out = state->current_row;
@@ -348,6 +386,8 @@ void birb_init(birb_state *state, birb_song *song) {
     int bpm = song->bpm ? song->bpm : 125;
     state->samples_per_tick = BIRB_SAMPLE_RATE * 5 / (bpm * 2);
     state->current_tick = 0;
+    state->jump_order = -1;
+    state->jump_row = 0;
     for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
         state->channels[c].lfsr = 0x7FFF;
         state->channels[c].lfsr_period = 16;
@@ -367,7 +407,13 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             birb_channel *ch = &state->channels[c];
             if (ch->env_stage == ENV_OFF && ch->env_level == 0) continue;
             int32_t s = generate_sample(ch, state->song);
-            mix += (s * FX_TO_INT(ch->env_level * 256)) >> 8;
+            fixed16 env = ch->env_level;
+            if (ch->tremolo_mod) {
+                env += FX_MUL(env, ch->tremolo_mod);
+                if (env < 0) env = 0;
+                if (env > FX_ONE) env = FX_ONE;
+            }
+            mix += (s * FX_TO_INT(env * 256)) >> 8;
             ch->phase += ch->freq;
             if (ch->phase >= FX_ONE) ch->phase -= FX_ONE;
         }
