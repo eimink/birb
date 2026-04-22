@@ -431,7 +431,7 @@ static int write_binary(const char *filename, birb_song *song) {
             inst->arp_note1,
             inst->arp_note2,
             inst->volume,
-            0 /* reserved */
+            inst->sample_idx
         };
         fwrite(buf, 1, BIRB_INST_SIZE, f);
     }
@@ -478,6 +478,78 @@ static int write_binary(const char *filename, birb_song *song) {
                 fwrite(&song->patterns[p][r][c].param, 1, 1, f);
                 total_pattern_bytes++;
             }
+    }
+
+    /* SMPL section — re-encode sample pool as IMA-ADPCM */
+    if (song->num_samples > 0) {
+        static const int16_t adpcm_step[89] = {
+            7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,
+            80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,
+            494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,
+            2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,
+            9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,
+            29794,32767
+        };
+        static const int8_t adpcm_indexadj[16] = {
+            -1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8
+        };
+        fwrite("SMPL", 1, 4, f);
+        uint8_t n = song->num_samples;
+        fwrite(&n, 1, 1, f);
+        for (int s = 0; s < song->num_samples; s++) {
+            birb_sample_meta *m = &song->samples[s];
+            uint32_t length = m->length;
+            uint16_t ls = (m->loop_start == 0xFFFFFFFFu) ? 0xFFFF : (uint16_t)m->loop_start;
+            uint16_t le = (uint16_t)m->loop_end;
+            int16_t *src = &song->sample_pool[m->offset];
+            /* encode */
+            int32_t predictor = 0;
+            int step_idx = 0;
+            uint8_t hdr[10] = {
+                (uint8_t)(length & 0xFF), (uint8_t)(length >> 8),
+                (uint8_t)(ls & 0xFF), (uint8_t)(ls >> 8),
+                (uint8_t)(le & 0xFF), (uint8_t)(le >> 8),
+                m->base_note, 0,
+                0, 0 /* initial predictor (filled after encoding) */
+            };
+            long hdr_pos = ftell(f);
+            fwrite(hdr, 1, 10, f);
+
+            uint8_t out_byte = 0;
+            for (uint32_t i = 0; i < length; i++) {
+                int32_t sample = src[i];
+                int32_t diff = sample - predictor;
+                int step = adpcm_step[step_idx];
+                int nibble = 0;
+                int sign = 0;
+                if (diff < 0) { sign = 8; diff = -diff; }
+                if (diff >= step)    { nibble |= 4; diff -= step; }
+                if (diff >= step/2)  { nibble |= 2; diff -= step/2; }
+                if (diff >= step/4)  { nibble |= 1; }
+                nibble |= sign;
+                /* reconstruct predictor */
+                int d = step >> 3;
+                if (nibble & 1) d += step >> 2;
+                if (nibble & 2) d += step >> 1;
+                if (nibble & 4) d += step;
+                if (nibble & 8) d = -d;
+                predictor += d;
+                if (predictor > 32767) predictor = 32767;
+                if (predictor < -32768) predictor = -32768;
+                step_idx += adpcm_indexadj[nibble];
+                if (step_idx < 0) step_idx = 0;
+                if (step_idx > 88) step_idx = 88;
+                if (i & 1) {
+                    out_byte |= (uint8_t)(nibble << 4);
+                    fwrite(&out_byte, 1, 1, f);
+                } else {
+                    out_byte = (uint8_t)(nibble & 0x0F);
+                    if (i == length - 1) fwrite(&out_byte, 1, 1, f);
+                }
+            }
+            /* no initial predictor was stored; decoder starts from 0 with step_idx=0 */
+            (void)hdr_pos;
+        }
     }
 
     /* NAME section — instrument names */

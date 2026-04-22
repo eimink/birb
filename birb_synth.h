@@ -37,6 +37,12 @@ typedef unsigned long long uint64_t;
 #ifndef BIRB_MAX_ORDER
 #define BIRB_MAX_ORDER     128
 #endif
+#ifndef BIRB_MAX_SAMPLES
+#define BIRB_MAX_SAMPLES   16
+#endif
+#ifndef BIRB_SAMPLE_POOL
+#define BIRB_SAMPLE_POOL   (512 * 1024 / 2) /* 512KB / 2 bytes = int16 samples */
+#endif
 
 /* ---------- fixed-point 16.16 ---------- */
 
@@ -62,6 +68,7 @@ typedef enum {
     WAVE_SAWTOOTH,
     WAVE_NOISE,
     WAVE_SINE,
+    WAVE_SAMPLE,    /* ADPCM sample playback */
     WAVE_COUNT
 } birb_wave;
 
@@ -108,6 +115,7 @@ typedef struct {
     uint8_t   arp_note1;     /* arpeggio semitone offset 1 */
     uint8_t   arp_note2;     /* arpeggio semitone offset 2 */
     uint8_t   volume;        /* instrument volume 0-255, scales envelope output */
+    uint8_t   sample_idx;    /* index into song sample bank (when waveform == WAVE_SAMPLE) */
     char      name[32];      /* instrument name (editor only, not in core binary) */
 } birb_instrument;
 
@@ -179,7 +187,22 @@ typedef struct {
     uint8_t       note_delay_tick; /* delay note trigger by N ticks */
     uint8_t       delayed_note;    /* note to trigger after delay */
     uint8_t       delayed_inst;    /* instrument for delayed note */
+    /* sample playback (WAVE_SAMPLE) */
+    uint32_t      sample_pos;      /* 16.16 fixed-point position in sample buffer */
+    uint32_t      sample_speed;    /* 16.16 fixed-point playback rate */
+    uint8_t       sample_idx;      /* which sample is playing */
+    uint8_t       sample_active;   /* 1 if sample currently playing */
 } birb_channel;
+
+/* ---------- sample metadata ---------- */
+
+typedef struct {
+    uint32_t offset;      /* offset into sample_pool */
+    uint32_t length;      /* number of samples */
+    uint32_t loop_start;  /* 0xFFFFFFFF = no loop */
+    uint32_t loop_end;
+    uint8_t  base_note;   /* MIDI-ish note for unity pitch */
+} birb_sample_meta;
 
 /* ---------- song data (in-memory, parsed) ---------- */
 
@@ -189,11 +212,16 @@ typedef struct {
     uint8_t  num_patterns;
     uint8_t  num_instruments;
     uint8_t  order_length;
+    uint8_t  num_samples;
 
     birb_instrument instruments[BIRB_MAX_INSTRUMENTS];
     uint8_t         order[BIRB_MAX_ORDER][BIRB_NUM_CHANNELS]; /* pattern index per channel per position */
     birb_row        patterns[BIRB_MAX_PATTERNS][BIRB_MAX_ROWS][BIRB_NUM_CHANNELS];
     uint8_t         pattern_lengths[BIRB_MAX_PATTERNS]; /* rows per pattern (default 64) */
+
+    birb_sample_meta samples[BIRB_MAX_SAMPLES];
+    int16_t         sample_pool[BIRB_SAMPLE_POOL];
+    uint32_t        sample_pool_used;
 } birb_song;
 
 /* ---------- player state ---------- */

@@ -84,13 +84,43 @@ static int16_t gen_sine(fixed16 phase) {
     return (int16_t)((int32_t)s * 32767 / FX_ONE);
 }
 
-static int16_t generate_sample(birb_channel *ch) {
+static int16_t gen_sample_playback(birb_channel *ch, birb_song *song) {
+    if (!ch->sample_active || ch->sample_idx >= song->num_samples) return 0;
+    birb_sample_meta *m = &song->samples[ch->sample_idx];
+    uint32_t pos = ch->sample_pos >> FX_SHIFT;
+    if (pos >= m->length) {
+        if (m->loop_start != 0xFFFFFFFFu && m->loop_end > m->loop_start) {
+            /* wrap back into loop region */
+            uint32_t loop_len = m->loop_end - m->loop_start;
+            pos = m->loop_start + ((pos - m->loop_start) % loop_len);
+            ch->sample_pos = ((uint32_t)pos << FX_SHIFT) | (ch->sample_pos & FX_MASK);
+        } else {
+            ch->sample_active = 0;
+            return 0;
+        }
+    }
+    /* linear interpolation between pos and pos+1 */
+    int16_t s0 = song->sample_pool[m->offset + pos];
+    uint32_t next = pos + 1;
+    if (next >= m->length) {
+        if (m->loop_start != 0xFFFFFFFFu && m->loop_end > m->loop_start) next = m->loop_start;
+        else next = pos;
+    }
+    int16_t s1 = song->sample_pool[m->offset + next];
+    fixed16 frac = ch->sample_pos & FX_MASK;
+    int32_t out = s0 + ((int32_t)(s1 - s0) * frac >> FX_SHIFT);
+    ch->sample_pos += ch->sample_speed;
+    return (int16_t)out;
+}
+
+static int16_t generate_sample(birb_channel *ch, birb_song *song) {
     switch (ch->waveform) {
         case WAVE_PULSE:    return gen_pulse(ch->phase, ch->duty);
         case WAVE_TRIANGLE: return gen_triangle(ch->phase);
         case WAVE_SAWTOOTH: return gen_sawtooth(ch->phase);
         case WAVE_NOISE:    return gen_noise(ch);
         case WAVE_SINE:     return gen_sine(ch->phase);
+        case WAVE_SAMPLE:   return gen_sample_playback(ch, song);
         default:            return 0;
     }
 }
@@ -158,7 +188,7 @@ static fixed16 note_to_freq(int note) {
     return birb_note_freq[note];
 }
 
-static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst) {
+static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, birb_song *song) {
     int semitone = note - BIRB_NOTE_C0;
     ch->base_note = (uint8_t)semitone;
     ch->base_freq = note_to_freq(semitone);
@@ -189,6 +219,24 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst) 
         /* higher notes = shorter period = higher pitch noise */
         ch->lfsr_period = (uint16_t)(256 >> (semitone / 12));
         if (ch->lfsr_period < 1) ch->lfsr_period = 1;
+    }
+    /* sample init */
+    ch->sample_active = 0;
+    if (inst->waveform == WAVE_SAMPLE && song && inst->sample_idx < song->num_samples) {
+        birb_sample_meta *m = &song->samples[inst->sample_idx];
+        ch->sample_idx = inst->sample_idx;
+        ch->sample_pos = 0;
+        /* Playback speed = note_freq / base_note_freq, in 16.16 */
+        int base = m->base_note;
+        if (base > 95) base = 95;
+        fixed16 note_f = note_to_freq(semitone);
+        fixed16 base_f = note_to_freq(base);
+        if (base_f > 0) {
+            ch->sample_speed = (uint32_t)(((uint64_t)note_f << FX_SHIFT) / base_f);
+        } else {
+            ch->sample_speed = FX_ONE;
+        }
+        ch->sample_active = 1;
     }
 }
 
@@ -328,7 +376,7 @@ static void process_row(birb_state *state) {
                 if (inst_idx == 0xFF) inst_idx = ch->cur_instrument;
                 if (inst_idx < song->num_instruments) {
                     ch->cur_instrument = inst_idx;
-                    trigger_note(ch, r->note, &song->instruments[inst_idx]);
+                    trigger_note(ch, r->note, &song->instruments[inst_idx], song);
                 }
             }
         }
@@ -378,7 +426,7 @@ static void advance_tick(birb_state *state) {
         if (ch->note_delay_tick > 0 && tick == ch->note_delay_tick) {
             if (ch->delayed_inst < state->song->num_instruments) {
                 ch->cur_instrument = ch->delayed_inst;
-                trigger_note(ch, ch->delayed_note, &state->song->instruments[ch->delayed_inst]);
+                trigger_note(ch, ch->delayed_note, &state->song->instruments[ch->delayed_inst], state->song);
             }
             ch->note_delay_tick = 0;
         }
@@ -456,7 +504,7 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             birb_channel *ch = &state->channels[c];
             if (ch->env_stage == ENV_OFF && ch->env_level == 0) continue;
 
-            int16_t sample = generate_sample(ch);
+            int16_t sample = generate_sample(ch, state->song);
             /* apply envelope, instrument volume, and row volume */
             int32_t vol = ch->volume ? ch->volume : 255;
             int32_t rvol = ch->row_vol;

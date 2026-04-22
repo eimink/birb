@@ -27,6 +27,37 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
 .inst-item { padding: 4px 8px; cursor: pointer; color: var(--dim); white-space: nowrap; }
 .inst-item:hover { background: var(--bg2); }
 .inst-item.sel { background: var(--bg3); color: var(--acc); }
+.tab-bar { display: flex; background: var(--bg2); border-bottom: 1px solid var(--bg3); }
+.tab-btn { flex: 1; padding: 6px 8px; background: transparent; color: var(--dim); border: none; border-right: 1px solid var(--bg3); cursor: pointer; font-family: inherit; font-size: 11px; letter-spacing: 1px; }
+.tab-btn:last-child { border-right: none; }
+.tab-btn:hover { color: var(--fg); background: var(--bg3); }
+.tab-btn.active { color: var(--acc); background: var(--bg1); border-bottom: 1px solid var(--acc); margin-bottom: -1px; }
+.tab-content { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.tab-content .action-row { padding: 4px 6px; display: flex; gap: 4px; background: var(--bg2); border-bottom: 1px solid var(--bg3); }
+.tab-content .action-row button { padding: 2px 10px; background: var(--bg); color: var(--acc); border: 1px solid var(--bg3); cursor: pointer; font-family: inherit; font-size: 11px; }
+.tab-content .action-row button:hover { border-color: var(--acc); }
+.samples-list { overflow-y: auto; padding: 2px 4px; flex: 1; min-height: 24px; }
+.sample-item { padding: 4px 6px; font-size: 11px; color: var(--fg); display: grid; grid-template-columns: auto 1fr auto auto auto; grid-template-areas: "play name dur newinst del" "chips chips chips chips chips"; column-gap: 4px; row-gap: 3px; align-items: center; border-bottom: 1px solid var(--bg2); }
+.sample-item .sample-play { grid-area: play; }
+.sample-item .sample-name { grid-area: name; min-width: 0; }
+.sample-item .sample-dur { grid-area: dur; color: var(--dim); font-size: 10px; white-space: nowrap; }
+.sample-item .sample-newinst { grid-area: newinst; }
+.sample-item .del { grid-area: del; }
+.sample-item .sample-users-wrap { grid-area: chips; }
+.sample-item:hover { background: var(--bg2); }
+.sample-item .sample-name { cursor: text; color: var(--fg); }
+.sample-item .sample-play { background: var(--bg); color: var(--acc2); border: 1px solid var(--bg3); padding: 1px 6px; font-size: 10px; cursor: pointer; font-family: inherit; }
+.sample-item .sample-play:hover { border-color: var(--acc2); background: var(--acc2); color: var(--bg); }
+.sample-item .sample-users-wrap { display: flex; gap: 3px; flex-wrap: wrap; padding-left: 4px; }
+.sample-item .user-chip { display: inline-block; padding: 1px 5px; background: var(--bg3); color: var(--acc2); border: 1px solid var(--bg3); border-radius: 2px; font-size: 9px; cursor: pointer; font-family: inherit; }
+.sample-item .user-chip:hover { border-color: var(--acc2); background: var(--acc2); color: var(--bg); }
+.sample-item .user-chip.empty { color: var(--dim); cursor: default; background: transparent; border-color: var(--bg3); }
+.sample-item .user-chip.empty:hover { background: transparent; color: var(--dim); }
+.sample-item .sample-newinst { background: var(--bg); color: var(--acc); border: 1px solid var(--bg3); padding: 0px 6px; font-size: 12px; cursor: pointer; font-family: inherit; line-height: 16px; }
+.sample-item .sample-newinst:hover { border-color: var(--acc); background: var(--acc); color: var(--bg); }
+.sample-item .del { color: var(--note-off); cursor: pointer; font-size: 14px; padding: 0 4px; }
+.sample-item .del:hover { background: var(--note-off); color: var(--bg); }
+.samples-empty { padding: 8px; font-size: 10px; color: var(--dim); text-align: center; font-style: italic; }
 .inst-edit { padding: 8px; border-top: 1px solid var(--bg3); }
 .inst-edit .row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .inst-edit label { color: var(--dim); font-size: 10px; width: 32px; text-align: right; flex-shrink: 0; }
@@ -57,6 +88,10 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
 .pattern-grid:focus { outline: none; }
 .grid-table { border-collapse: collapse; width: max-content; }
 .grid-table th { position: sticky; top: 0; background: var(--bg1); color: var(--dim); padding: 2px 4px; font-size: 10px; text-align: center; border-bottom: 1px solid var(--bg3); z-index: 1; }
+.ch-header.muted .ch-label { color: var(--note-off); text-decoration: line-through; }
+.ch-mute { background: var(--bg2); color: var(--dim); border: 1px solid var(--bg3); font-family: inherit; font-size: 9px; padding: 0 4px; cursor: pointer; margin-left: 2px; }
+.ch-mute:hover { border-color: var(--acc); }
+.ch-header.muted .ch-mute { background: var(--note-off); color: var(--bg); border-color: var(--note-off); }
 .grid-table td { padding: 1px 0; white-space: nowrap; height: 20px; }
 .grid-row { }
 .grid-row.beat { background: var(--row-hi); }
@@ -122,11 +157,28 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
 
 <div class="main">
     <div class="inst-panel">
-        <div class="inst-list" id="inst-list"></div>
+        <div class="tab-bar">
+            <button class="tab-btn active" id="tab-inst-btn" onclick="selectTab('inst')">INSTRUMENTS</button>
+            <button class="tab-btn" id="tab-smpl-btn" onclick="selectTab('smpl')">SAMPLES</button>
+        </div>
+        <div class="tab-content" id="tab-inst">
+            <div class="action-row">
+                <button onclick="addInstrument()">+ Add</button>
+                <button onclick="deleteInstrument()">Delete</button>
+            </div>
+            <div class="inst-list" id="inst-list"></div>
+        </div>
+        <div class="tab-content" id="tab-smpl" style="display:none">
+            <div class="action-row">
+                <button onclick="document.getElementById('global-sample-upload').click()">+ Upload WAV</button>
+                <input type="file" id="global-sample-upload" accept=".wav,audio/wav" style="display:none" onchange="uploadGlobalSample(this)">
+            </div>
+            <div class="samples-list" id="samples-list"></div>
+        </div>
         <div class="inst-edit">
             <canvas class="adsr-canvas" id="adsr-canvas" height="48"></canvas>
             <div class="row"><label>Wave</label>
-                <select id="ie-wave"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option></select>
+                <select id="ie-wave" onchange="onWaveChange()"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option><option value="5">sample</option></select>
             </div>
             <div class="row"><label>Duty</label>
                 <select id="ie-duty"><option value="0">12.5%</option><option value="1">25%</option><option value="2">50%</option><option value="3">75%</option></select>
@@ -139,7 +191,24 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
             <div class="row"><label>PE</label><input type="number" id="ie-pe" value="0" min="-128" max="127" style="width:44px"><label>Len</label><input type="number" id="ie-pel" value="0" min="0" max="255" style="width:44px"></div>
             <div class="row"><label>Arp</label><input type="number" id="ie-arp1" value="0" min="0" max="15" style="width:36px"><input type="number" id="ie-arp2" value="0" min="0" max="15" style="width:36px"></div>
             <div class="row"><label>Name</label><input type="text" id="ie-name" value="" placeholder="unnamed" style="width:120px" oninput="saveInstName()"></div>
-            <div style="margin-top:6px"><button onclick="addInstrument()" style="font-size:11px;padding:2px 8px">+ Inst</button></div>
+            <div id="ie-sample-panel" style="display:none;border-top:1px solid var(--bg3);margin-top:6px;padding-top:6px">
+                <div class="row"><label>Sample</label>
+                    <select id="ie-sample-idx" onchange="setSampleIdx(+this.value)" style="width:110px"></select>
+                </div>
+                <div class="row"><label>Base</label>
+                    <select id="ie-sample-base" onchange="setSampleBase(+this.value)" style="width:70px"></select>
+                </div>
+                <canvas id="ie-sample-wave" width="200" height="40" style="width:100%;background:var(--bg);border:1px solid var(--bg3);margin:4px 0"></canvas>
+                <div class="row"><label>Loop</label>
+                    <input type="number" id="ie-sample-ls" min="-1" value="-1" style="width:50px" title="loop start (-1 = no loop)" onchange="setSampleLoop()">
+                    <input type="number" id="ie-sample-le" min="0" value="0" style="width:50px" title="loop end" onchange="setSampleLoop()">
+                </div>
+                <div class="row" style="gap:4px">
+                    <button class="order-btn" onclick="document.getElementById('ie-sample-upload').click()">Replace WAV</button>
+                    <button class="order-btn" onclick="deleteCurSample()">Delete</button>
+                    <input type="file" id="ie-sample-upload" accept=".wav,audio/wav" style="display:none" onchange="uploadSampleFile(this)">
+                </div>
+            </div>
         </div>
     </div>
 
@@ -280,15 +349,17 @@ let song = {
     instruments: defaultInstruments(),
     patterns: [], // patterns[p][r][c] = {note,inst,fx,prm}
     order: [],    // order[i] = [p0,p1,p2,p3]
+    samples: [],  // [{name, data:Int16Array, baseNote, loopStart, loopEnd}]
 };
 
 const NCH = 4;
 let curPat = 0, curRow = 0, curCh = 0, curCol = 0; // cursor
 let curInst = 0, curOctave = 4, curOrderPos = 0;
+let channelMuted = [false, false, false, false]; // NCH entries
 let selStart = -1, selEnd = -1; // row selection range (-1 = no selection)
 let clipboard = null; // [{note,inst,vol,fx,prm}, ...] per row for one channel
 let editInst = 0; // which instrument is selected for editing
-let playingSource = null, playingCtx = null, playingRow = -1;
+let playingRow = -1;
 
 function makeRow() {
     let r = [];
@@ -301,7 +372,7 @@ function makePattern(rows) {
     return p;
 }
 let dirty = false;
-function markDirty() { dirty = true; saveSongToStorage(); }
+function markDirty() { dirty = true; saveSongToStorage(); pushLiveUpdate(); }
 
 function initSong() {
     let el = document.getElementById('pat-rows');
@@ -314,15 +385,30 @@ function initSong() {
 
 function saveSongToStorage() {
     try {
+        // Serialize samples with ADPCM-encoded base64 payloads
+        let samples = song.samples.map(s => {
+            let adpcm = encodeAdpcm(s.data);
+            let b64 = '';
+            // Btoa wants a string, build from bytes
+            let str = '';
+            for (let b of adpcm) str += String.fromCharCode(b);
+            b64 = btoa(str);
+            return {
+                name: s.name || '', baseNote: s.baseNote, loopStart: s.loopStart, loopEnd: s.loopEnd,
+                length: s.data.length, adpcm: b64
+            };
+        });
         localStorage.setItem('birb_song', JSON.stringify({
             bpm: song.bpm, tpr: song.tpr,
             instruments: song.instruments,
             patterns: song.patterns,
-            order: song.order
+            order: song.order,
+            samples: samples
         }));
         let songName = document.getElementById('song-name').value || 'song';
         localStorage.setItem('birb_editor', JSON.stringify({
-            curPat, curRow, curCh, curCol, curOrderPos, curInst, curOctave, editInst, songName
+            curPat, curRow, curCh, curCol, curOrderPos, curInst, curOctave, editInst, songName,
+            channelMuted
         }));
     } catch(e) {}
 }
@@ -337,6 +423,21 @@ function loadSongFromStorage() {
         song.instruments = data.instruments || [];
         song.patterns = data.patterns || [];
         song.order = data.order || [[0,0,0,0]];
+        song.samples = [];
+        if (Array.isArray(data.samples)) {
+            for (let s of data.samples) {
+                try {
+                    let str = atob(s.adpcm);
+                    let adpcm = new Uint8Array(str.length);
+                    for (let i = 0; i < str.length; i++) adpcm[i] = str.charCodeAt(i);
+                    song.samples.push({
+                        name: s.name || '',
+                        data: decodeAdpcm(adpcm, s.length),
+                        baseNote: s.baseNote, loopStart: s.loopStart, loopEnd: s.loopEnd
+                    });
+                } catch (e) {}
+            }
+        }
         if (!song.instruments.length) return false;
         if (!song.patterns.length) return false;
         // restore editor state
@@ -352,6 +453,8 @@ function loadSongFromStorage() {
             curOctave = ed.curOctave || 4;
             editInst = ed.editInst || 0;
             if (ed.songName) document.getElementById('song-name').value = ed.songName;
+            if (Array.isArray(ed.channelMuted)) channelMuted = ed.channelMuted.slice(0, NCH);
+            while (channelMuted.length < NCH) channelMuted.push(false);
         }
         document.getElementById('bpm').value = song.bpm;
         document.getElementById('tpr').value = song.tpr;
@@ -370,6 +473,7 @@ function newSong() {
     let rows = el ? +el.value || 16 : 16;
     song.patterns = [makePattern(rows)];
     song.order = [[0,0,0,0]];
+    song.samples = [];
     song.bpm = 140; song.tpr = 6;
     curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
     editInst = 0; curInst = 0;
@@ -421,7 +525,8 @@ function renderGrid() {
     if (!pat) return;
     let html = '<table class="grid-table"><tr><th></th>';
     for (let c = 0; c < NCH; c++) {
-        html += `<th colspan="5">Ch ${c+1}</th>`;
+        let muteCls = channelMuted[c] ? ' muted' : '';
+        html += `<th colspan="5" class="ch-header${muteCls}"><span class="ch-label">Ch ${c+1}</span> <button class="ch-mute" onclick="toggleMute(${c})" title="Mute channel ${c+1}">${channelMuted[c] ? 'M' : 'M'}</button></th>`;
         if (c < NCH - 1) html += '<th></th>';
     }
     html += '</tr>';
@@ -503,6 +608,14 @@ function renderOrder() {
     phtml += '</span>';
     document.getElementById('pat-bar').innerHTML = phtml;
     bindPatDrag();
+}
+
+function toggleMute(c) {
+    channelMuted[c] = !channelMuted[c];
+    saveSongToStorage();
+    pushLiveUpdate();
+    renderGrid();
+    document.getElementById('grid').focus();
 }
 
 function selectPattern(p) {
@@ -660,12 +773,427 @@ function selectInst(i) {
     loadInstEditor();
 }
 function addInstrument() {
-    song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:''});
+    song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'',sampleIdx:0});
     editInst = song.instruments.length - 1;
     curInst = editInst;
     markDirty();
     renderInstList(); loadInstEditor();
     document.getElementById('grid').focus();
+}
+
+function selectTab(name) {
+    let insBtn = document.getElementById('tab-inst-btn');
+    let smpBtn = document.getElementById('tab-smpl-btn');
+    let insPanel = document.getElementById('tab-inst');
+    let smpPanel = document.getElementById('tab-smpl');
+    let instEdit = document.querySelector('.inst-edit');
+    if (name === 'smpl') {
+        smpBtn.classList.add('active'); insBtn.classList.remove('active');
+        smpPanel.style.display = ''; insPanel.style.display = 'none';
+        if (instEdit) instEdit.style.display = 'none';
+        renderSamplesList();
+    } else {
+        insBtn.classList.add('active'); smpBtn.classList.remove('active');
+        insPanel.style.display = ''; smpPanel.style.display = 'none';
+        if (instEdit) instEdit.style.display = '';
+    }
+}
+
+function deleteInstrument() {
+    if (song.instruments.length <= 1) { alert('Need at least one instrument.'); return; }
+    let idx = editInst;
+    let ins = song.instruments[idx];
+    if (!confirm('Delete instrument ' + idx + (ins.name ? ' (' + ins.name + ')' : '') + '?')) return;
+    song.instruments.splice(idx, 1);
+    // Fix up pattern cells referring to this or later instruments
+    for (let pat of song.patterns) {
+        for (let row of pat) {
+            for (let cell of row) {
+                if (cell.inst === 255) continue;
+                if (cell.inst === idx) cell.inst = 255; // no change → keeps previous
+                else if (cell.inst > idx) cell.inst--;
+            }
+        }
+    }
+    if (editInst >= song.instruments.length) editInst = song.instruments.length - 1;
+    if (curInst >= song.instruments.length) curInst = song.instruments.length - 1;
+    markDirty();
+    renderInstList(); loadInstEditor(); renderGrid();
+    document.getElementById('grid').focus();
+}
+
+/* --- sample helpers --- */
+
+function onWaveChange() {
+    saveInstFromEditor();
+    updateSamplePanelVisibility();
+}
+
+function updateSamplePanelVisibility() {
+    let ins = song.instruments[editInst];
+    let panel = document.getElementById('ie-sample-panel');
+    if (!panel) return;
+    panel.style.display = (ins && ins.wave === 5) ? '' : 'none';
+    if (ins && ins.wave === 5) renderSamplePanel();
+}
+
+function renderSamplePanel() {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    // sample dropdown
+    let sel = document.getElementById('ie-sample-idx');
+    sel.innerHTML = '';
+    if (song.samples.length === 0) {
+        sel.innerHTML = '<option value="-1">(none — upload WAV)</option>';
+    } else {
+        for (let i = 0; i < song.samples.length; i++) {
+            let s = song.samples[i];
+            sel.innerHTML += `<option value="${i}">${i}: ${s.name || '(unnamed)'}</option>`;
+        }
+    }
+    let si = ins.sampleIdx !== undefined ? ins.sampleIdx : 0;
+    if (si >= song.samples.length) si = 0;
+    sel.value = si;
+
+    // base note dropdown (C0..B7)
+    let baseSel = document.getElementById('ie-sample-base');
+    if (baseSel.options.length === 0) {
+        let noteNames = ['C-','C#','D-','D#','E-','F-','F#','G-','G#','A-','A#','B-'];
+        for (let semi = 0; semi < 96; semi++) {
+            let oct = semi / 12 | 0;
+            baseSel.innerHTML += `<option value="${semi}">${noteNames[semi%12]}${oct}</option>`;
+        }
+    }
+    let s = song.samples[si];
+    if (s) {
+        baseSel.value = s.baseNote !== undefined ? s.baseNote : 48; // C4
+        document.getElementById('ie-sample-ls').value = s.loopStart !== undefined ? s.loopStart : -1;
+        document.getElementById('ie-sample-le').value = s.loopEnd !== undefined ? s.loopEnd : 0;
+        drawSampleWaveform(s);
+    } else {
+        let ctx = document.getElementById('ie-sample-wave').getContext('2d');
+        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg');
+        ctx.fillRect(0,0,1000,40);
+    }
+}
+
+function drawSampleWaveform(s) {
+    let c = document.getElementById('ie-sample-wave');
+    let w = c.offsetWidth || 200, h = c.offsetHeight || 40;
+    c.width = w; c.height = h;
+    let ctx = c.getContext('2d');
+    ctx.fillStyle = '#0c0c14';
+    ctx.fillRect(0,0,w,h);
+    if (!s || !s.data || !s.data.length) return;
+    ctx.strokeStyle = '#66ddaa';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let step = s.data.length / w;
+    for (let x = 0; x < w; x++) {
+        let i = (x * step) | 0;
+        let v = s.data[i] / 32768;
+        let y = (1 - v) * h / 2;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // loop markers
+    if (s.loopStart !== undefined && s.loopStart >= 0 && s.loopEnd > s.loopStart) {
+        let x1 = s.loopStart / s.data.length * w;
+        let x2 = s.loopEnd / s.data.length * w;
+        ctx.strokeStyle = '#ddaa66';
+        ctx.beginPath();
+        ctx.moveTo(x1, 0); ctx.lineTo(x1, h);
+        ctx.moveTo(x2, 0); ctx.lineTo(x2, h);
+        ctx.stroke();
+    }
+}
+
+function setSampleIdx(idx) {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    ins.sampleIdx = idx < 0 ? 0 : idx;
+    markDirty();
+    renderSamplePanel();
+}
+
+function setSampleBase(note) {
+    let ins = song.instruments[editInst];
+    let s = ins ? song.samples[ins.sampleIdx || 0] : null;
+    if (!s) return;
+    s.baseNote = note;
+    markDirty();
+}
+
+function setSampleLoop() {
+    let ins = song.instruments[editInst];
+    let s = ins ? song.samples[ins.sampleIdx || 0] : null;
+    if (!s) return;
+    s.loopStart = +document.getElementById('ie-sample-ls').value;
+    s.loopEnd = +document.getElementById('ie-sample-le').value;
+    markDirty();
+    drawSampleWaveform(s);
+}
+
+function deleteCurSample() {
+    let ins = song.instruments[editInst];
+    if (!ins || song.samples.length === 0) return;
+    let idx = ins.sampleIdx || 0;
+    if (!confirm('Delete sample ' + idx + '?')) return;
+    song.samples.splice(idx, 1);
+    // Fix up other instruments referring to this or later samples
+    for (let i of song.instruments) {
+        if (i.sampleIdx === undefined) continue;
+        if (i.sampleIdx === idx) i.sampleIdx = 0;
+        else if (i.sampleIdx > idx) i.sampleIdx--;
+    }
+    markDirty();
+    renderSamplePanel();
+}
+
+function uploadSampleFile(input) {
+    let file = input.files[0];
+    if (!file) return;
+    let reader = new FileReader();
+    reader.onload = function() {
+        let data = decodeWav(reader.result);
+        if (!data) { alert('Failed to decode WAV'); return; }
+        let ins = song.instruments[editInst];
+        let sample = {
+            name: file.name.replace(/\.[^.]+$/, ''),
+            data: data,
+            baseNote: 48, // C4
+            loopStart: -1,
+            loopEnd: 0
+        };
+        song.samples.push(sample);
+        if (ins) ins.sampleIdx = song.samples.length - 1;
+        markDirty();
+        renderSamplePanel();
+        renderSamplesList();
+    };
+    reader.readAsArrayBuffer(file);
+    input.value = '';
+}
+
+function uploadGlobalSample(input) {
+    let file = input.files[0];
+    if (!file) return;
+    let reader = new FileReader();
+    reader.onload = function() {
+        let data = decodeWav(reader.result);
+        if (!data) { alert('Failed to decode WAV'); return; }
+        song.samples.push({
+            name: file.name.replace(/\.[^.]+$/, ''),
+            data: data,
+            baseNote: 48,
+            loopStart: -1,
+            loopEnd: 0
+        });
+        markDirty();
+        renderSamplesList();
+        renderSamplePanel();
+    };
+    reader.readAsArrayBuffer(file);
+    input.value = '';
+}
+
+function renderSamplesList() {
+    let el = document.getElementById('samples-list');
+    if (!el) return;
+    if (!song.samples.length) {
+        el.innerHTML = '<div class="samples-empty">No samples. Upload a WAV above.</div>';
+        return;
+    }
+    let html = '';
+    for (let i = 0; i < song.samples.length; i++) {
+        let s = song.samples[i];
+        let sec = (s.data.length / 44100).toFixed(2);
+        // Which instruments use this sample?
+        let users = song.instruments
+            .map((ins, idx) => (ins.wave === 5 && (ins.sampleIdx || 0) === i) ? idx : -1)
+            .filter(idx => idx >= 0);
+        let chips = users.length
+            ? users.map(u => `<span class="user-chip" onclick="jumpToInstrument(${u})" title="Edit instrument ${hexStr(u)}">${hexStr(u)}</span>`).join('')
+            : '<span class="user-chip empty">—</span>';
+        html += `<div class="sample-item" data-idx="${i}">
+            <button class="sample-play" onclick="previewSample(${i})" title="Play">▶</button>
+            <span class="sample-name" ondblclick="renameSample(${i})" title="Double-click to rename" style="overflow:hidden;text-overflow:ellipsis;cursor:text">${i}: ${s.name || '(unnamed)'}</span>
+            <span class="sample-dur">${sec}s</span>
+            <button class="sample-newinst" onclick="newInstFromSample(${i})" title="Create new instrument using this sample (for different ADSR)">+</button>
+            <span class="del" onclick="deleteSampleByIdx(${i})" title="Delete">×</span>
+            <span class="sample-users-wrap" title="Instruments using this sample — click to edit">${chips}</span>
+        </div>`;
+    }
+    el.innerHTML = html;
+}
+
+function jumpToInstrument(instIdx) {
+    if (instIdx < 0 || instIdx >= song.instruments.length) return;
+    editInst = instIdx;
+    curInst = instIdx;
+    selectTab('inst');
+    renderInstList();
+    loadInstEditor();
+}
+
+function newInstFromSample(sampleIdx) {
+    // Create a new instrument with sensible drum-ish defaults pointing at this sample.
+    let ins = {wave:5, duty:2, a:0, d:8, s:255, r:8, pe:0, pel:0, arp1:0, arp2:0, vol:200, name:song.samples[sampleIdx] && song.samples[sampleIdx].name ? song.samples[sampleIdx].name : '', sampleIdx};
+    song.instruments.push(ins);
+    editInst = song.instruments.length - 1;
+    curInst = editInst;
+    markDirty();
+    renderInstList();
+    loadInstEditor();
+    renderSamplesList();
+}
+
+/* Play a sample preview at its base note */
+let samplePreviewCtx = null, samplePreviewSrc = null;
+function previewSample(idx) {
+    let s = song.samples[idx];
+    if (!s || !s.data) return;
+    if (samplePreviewSrc) try { samplePreviewSrc.stop(); } catch(e) {}
+    if (samplePreviewCtx) samplePreviewCtx.close();
+    samplePreviewCtx = new AudioContext({sampleRate: 44100});
+    let buf = samplePreviewCtx.createBuffer(1, s.data.length, 44100);
+    let f = buf.getChannelData(0);
+    for (let i = 0; i < s.data.length; i++) f[i] = s.data[i] / 32768;
+    samplePreviewSrc = samplePreviewCtx.createBufferSource();
+    samplePreviewSrc.buffer = buf;
+    samplePreviewSrc.connect(samplePreviewCtx.destination);
+    samplePreviewSrc.start();
+    samplePreviewSrc.onended = () => { if (samplePreviewCtx) { samplePreviewCtx.close(); samplePreviewCtx = null; } };
+}
+
+function renameSample(idx) {
+    let s = song.samples[idx];
+    if (!s) return;
+    let name = prompt('Sample name:', s.name || '');
+    if (name !== null) {
+        s.name = name;
+        markDirty();
+        renderSamplesList();
+    }
+}
+
+function deleteSampleByIdx(idx) {
+    if (!confirm('Delete sample ' + idx + '?')) return;
+    song.samples.splice(idx, 1);
+    for (let i of song.instruments) {
+        if (i.sampleIdx === undefined) continue;
+        if (i.sampleIdx === idx) i.sampleIdx = 0;
+        else if (i.sampleIdx > idx) i.sampleIdx--;
+    }
+    markDirty();
+    renderSamplesList();
+    renderSamplePanel();
+}
+
+/* IMA-ADPCM tables */
+const ADPCM_STEP = [7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767];
+const ADPCM_INDEXADJ = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8];
+
+function encodeAdpcm(samples) {
+    let out = new Uint8Array((samples.length + 1) >> 1);
+    let predictor = 0, stepIdx = 0, outByte = 0;
+    for (let i = 0; i < samples.length; i++) {
+        let diff = samples[i] - predictor;
+        let step = ADPCM_STEP[stepIdx];
+        let nibble = 0, sign = 0;
+        if (diff < 0) { sign = 8; diff = -diff; }
+        if (diff >= step)      { nibble |= 4; diff -= step; }
+        if (diff >= step >> 1) { nibble |= 2; diff -= step >> 1; }
+        if (diff >= step >> 2) { nibble |= 1; }
+        nibble |= sign;
+        let d = step >> 3;
+        if (nibble & 1) d += step >> 2;
+        if (nibble & 2) d += step >> 1;
+        if (nibble & 4) d += step;
+        if (nibble & 8) d = -d;
+        predictor += d;
+        if (predictor > 32767) predictor = 32767;
+        if (predictor < -32768) predictor = -32768;
+        stepIdx += ADPCM_INDEXADJ[nibble];
+        if (stepIdx < 0) stepIdx = 0;
+        if (stepIdx > 88) stepIdx = 88;
+        if (i & 1) {
+            outByte |= (nibble << 4);
+            out[i >> 1] = outByte;
+        } else {
+            outByte = nibble & 0x0F;
+            if (i === samples.length - 1) out[i >> 1] = outByte;
+        }
+    }
+    return out;
+}
+
+function decodeAdpcm(bytes, length) {
+    let out = new Int16Array(length);
+    let predictor = 0, stepIdx = 0;
+    for (let i = 0; i < length; i++) {
+        let byte = bytes[i >> 1];
+        let nibble = (i & 1) ? (byte >> 4) : (byte & 0x0F);
+        let step = ADPCM_STEP[stepIdx];
+        let diff = step >> 3;
+        if (nibble & 1) diff += step >> 2;
+        if (nibble & 2) diff += step >> 1;
+        if (nibble & 4) diff += step;
+        if (nibble & 8) diff = -diff;
+        predictor += diff;
+        if (predictor > 32767) predictor = 32767;
+        if (predictor < -32768) predictor = -32768;
+        stepIdx += ADPCM_INDEXADJ[nibble];
+        if (stepIdx < 0) stepIdx = 0;
+        if (stepIdx > 88) stepIdx = 88;
+        out[i] = predictor;
+    }
+    return out;
+}
+
+/* Decode a WAV file into a mono 44100Hz Int16Array. Supports PCM 16-bit mono/stereo. */
+function decodeWav(buffer) {
+    let d = new DataView(buffer);
+    if (d.getUint32(0, false) !== 0x52494646) return null; // 'RIFF'
+    if (d.getUint32(8, false) !== 0x57415645) return null; // 'WAVE'
+    let pos = 12;
+    let channels = 1, sampleRate = 44100, bits = 16, dataOffset = 0, dataLen = 0;
+    while (pos < d.byteLength - 8) {
+        let id = d.getUint32(pos, false);
+        let size = d.getUint32(pos + 4, true);
+        if (id === 0x666d7420) { // 'fmt '
+            channels = d.getUint16(pos + 10, true);
+            sampleRate = d.getUint32(pos + 12, true);
+            bits = d.getUint16(pos + 22, true);
+        } else if (id === 0x64617461) { // 'data'
+            dataOffset = pos + 8;
+            dataLen = size;
+            break;
+        }
+        pos += 8 + size;
+    }
+    if (!dataOffset || bits !== 16) return null;
+    let srcSamples = dataLen / (bits / 8) / channels;
+    // Downmix to mono if needed
+    let mono = new Int16Array(srcSamples);
+    for (let i = 0; i < srcSamples; i++) {
+        let sum = 0;
+        for (let c = 0; c < channels; c++)
+            sum += d.getInt16(dataOffset + (i * channels + c) * 2, true);
+        mono[i] = sum / channels;
+    }
+    // Resample to 44100 if needed (linear)
+    if (sampleRate === 44100) return mono;
+    let ratio = sampleRate / 44100;
+    let outLen = (srcSamples / ratio) | 0;
+    let out = new Int16Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+        let srcPos = i * ratio;
+        let i0 = srcPos | 0, i1 = Math.min(i0 + 1, srcSamples - 1);
+        let frac = srcPos - i0;
+        out[i] = mono[i0] * (1 - frac) + mono[i1] * frac;
+    }
+    return out;
 }
 function loadInstEditor() {
     let ins = song.instruments[editInst];
@@ -684,6 +1212,7 @@ function loadInstEditor() {
     document.getElementById('ie-name').value = ins.name || '';
     updateInstValues();
     drawADSR();
+    updateSamplePanelVisibility();
 }
 function updateInstValues() {
     for (let k of ['a','d','s','r','vol']) {
@@ -717,6 +1246,7 @@ function saveInstFromEditor() {
     drawADSR();
     markDirty();
 }
+
 // Bind inst editor inputs
 document.querySelector('.inst-edit').addEventListener('input', saveInstFromEditor);
 
@@ -958,7 +1488,7 @@ function renderSong(patOnly, singlePat) {
 
     let ch = [];
     for (let c = 0; c < N; c++)
-        ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0};
+        ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0};
 
     let ct = 0, cr = 0, op = 0, tc = 0, firstRow = true;
 
@@ -968,7 +1498,18 @@ function renderSong(patOnly, singlePat) {
         C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r; C.t = 1; C.e = 0;
         C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2;
         C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255; C.k = 0; C.l = 0; C.ps = 0;
-        if (j.wave >= 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
+        if (j.wave === 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
+        C.sa = 0;
+        if (j.wave === 5) {
+            let si = j.sampleIdx !== undefined ? j.sampleIdx : 0;
+            let sm = song.samples[si];
+            if (sm && sm.data) {
+                C.si = si; C.sp = 0; C.sa = 1;
+                // playback speed = note_freq / base_note_freq in 16.16
+                let baseF = nf(sm.baseNote !== undefined ? sm.baseNote : 48);
+                C.ss = baseF > 0 ? Math.round(C.b * 65536 / baseF) : 65536;
+            }
+        }
     }
 
     function doRow() {
@@ -1052,13 +1593,46 @@ function renderSong(patOnly, singlePat) {
         tc--;
         let v = 0;
         for (let c = 0; c < N; c++) {
-            let C = ch[c]; if (!C.t && !C.e) continue;
+            let C = ch[c]; if (!C.t && !C.e && !C.sa) continue;
+            if (channelMuted[c]) { C.p = (C.p + C.f) % F; continue; }
             let h = C.p, s;
-            if (!C.w) s = h < C.u ? .5 : -.5;
+            if (C.w === 5) {
+                // sample playback
+                if (!C.sa) { s = 0; }
+                else {
+                    let sm = song.samples[C.si];
+                    if (!sm || !sm.data) { s = 0; C.sa = 0; }
+                    else {
+                        let pos = C.sp >>> 16;
+                        if (pos >= sm.data.length) {
+                            if (sm.loopStart !== undefined && sm.loopStart >= 0 && sm.loopEnd > sm.loopStart) {
+                                let loopLen = sm.loopEnd - sm.loopStart;
+                                pos = sm.loopStart + ((pos - sm.loopStart) % loopLen);
+                                C.sp = (pos << 16) | (C.sp & 0xFFFF);
+                            } else { C.sa = 0; s = 0; }
+                        }
+                        if (C.sa) {
+                            s = sm.data[pos] / 32768;
+                            C.sp = (C.sp + C.ss) >>> 0;
+                        }
+                    }
+                }
+            }
+            else if (!C.w) s = h < C.u ? .5 : -.5;
             else if (C.w===1) s = h < F/2 ? (h*4-F)/F : (F*3-h*4)/F;
-            else if (C.w < 3) s = (h*2-F)/F;
+            else if (C.w===2) s = (h*2-F)/F;
+            else if (C.w===4) {
+                // sine approximation
+                let ph = h & 0xFFFF;
+                let x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
+                x <<= 2;
+                let ax = x < 0 ? -x : x;
+                let sv = x * (F - ax) / F * 4 / F;
+                s = sv;
+            }
             else { C.m++; if (C.m>=C.j){C.m=0;let z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)} s=(C.h&1)?.5:-.5; }
-            v += s * C.e * (C.v || 255) * C.rv / F / 255 / 255; C.p = (C.p + C.f) % F;
+            v += s * C.e * (C.v || 255) * C.rv / F / 255 / 255;
+            if (C.w !== 5) C.p = (C.p + C.f) % F;
         }
         out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
     }
@@ -1097,57 +1671,314 @@ function previewNote(note, instIdx) {
 /* ================================================================
    TRANSPORT
    ================================================================ */
+/* ---- Streaming live player ---- */
+/* Synthesizes in small chunks, re-reading song state each tick so instrument
+ * tweaks take effect immediately during playback. */
+
+let liveCtx = null, liveNode = null, liveState = null, liveRowUpdatePending = false;
+
 function togglePlay() {
-    if (playingSource) { stopPlay(); return; }
-    let m = renderSong(false);
-    startPlayback(m);
+    if (liveCtx) { stopPlay(); return; }
+    startLive(false);
 }
 function togglePlayPat() {
-    if (playingSource) { stopPlay(); return; }
-    let m = renderSong(true, curPat);
-    startPlayback(m);
+    if (liveCtx) { stopPlay(); return; }
+    startLive(true);
 }
-function startPlayback(m) {
-    playingCtx = new AudioContext({sampleRate: 44100});
-    let ab = playingCtx.createBuffer(1, m.T, 44100);
-    ab.getChannelData(0).set(m.out);
-    playingSource = playingCtx.createBufferSource();
-    playingSource.buffer = ab;
-    playingSource.connect(playingCtx.destination);
-    playingSource.loop = true;
-    playingSource.start();
-    document.getElementById('btn-play').classList.add('active');
-    // Row position tracking
-    let t0 = playingCtx.currentTime;
-    let markers = m.rowMarkers;
-    function updatePos() {
-        if (!playingSource) return;
-        let elapsed = ((playingCtx.currentTime - t0) * 44100) % m.T | 0;
-        // Find current row from markers
-        let cur = markers[0];
-        for (let i = markers.length - 1; i >= 0; i--) {
-            if (markers[i].sample <= elapsed) { cur = markers[i]; break; }
-        }
-        if (cur && (playingRow !== cur.row || curOrderPos !== cur.op)) {
-            playingRow = cur.row;
-            if (curOrderPos !== cur.op) {
-                curOrderPos = cur.op;
-                curPat = song.order[curOrderPos] ? song.order[curOrderPos][0] : 0;
-                document.getElementById('pat-rows').value = song.patterns[curPat] ? song.patterns[curPat].length : 16;
-                renderOrder();
-            }
-            renderGrid();
-        }
-        requestAnimationFrame(updatePos);
+
+/* Snapshot the current song into a plain-data message for the worklet.
+ * Samples use transferable buffers to avoid copying. */
+function snapshotSongForWorklet() {
+    // Serialize samples as {baseNote, loopStart, loopEnd, buf:ArrayBuffer}
+    let samples = song.samples.map(s => {
+        // Copy into a fresh ArrayBuffer so we can transfer it without breaking the source
+        let src = s.data;
+        let buf = new ArrayBuffer(src.length * 2);
+        new Int16Array(buf).set(src);
+        return {
+            baseNote: s.baseNote !== undefined ? s.baseNote : 48,
+            loopStart: s.loopStart !== undefined ? s.loopStart : -1,
+            loopEnd: s.loopEnd || 0,
+            buf
+        };
+    });
+    // Patterns as plain arrays of row cells
+    let patterns = song.patterns.map(pat =>
+        pat.map(row => row.map(cell => ({
+            note: cell.note, inst: cell.inst, vol: cell.vol, fx: cell.fx, prm: cell.prm
+        })))
+    );
+    return {
+        bpm: song.bpm, tpr: song.tpr,
+        instruments: song.instruments.map(i => Object.assign({}, i)),
+        patterns,
+        order: song.order.map(o => o.slice()),
+        samples,
+        channelMuted: channelMuted.slice()
+    };
+}
+
+function getWorkletCode() {
+    // This code runs inside the AudioWorkletGlobalScope. It maintains its own
+    // song state, updated via MessagePort. Each `process()` call renders
+    // one quantum (128 samples) using the latest state.
+    return `
+class BirbProcessor extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this.song = null;
+        this.st = null;
+        this.N = 4;
+        this.F = 65536;
+        this.S = 44100;
+        this.bf = [24,26,27,29,31,32,34,36,38,41,43,46];
+        this.dv = [8192,16384,32768,49152];
+        this.port.onmessage = (e) => this.onMsg(e.data);
     }
-    updatePos();
+    onMsg(m) {
+        if (m.type === 'init') {
+            this.song = this.rehydrate(m.song);
+            this.st = this.newState(m.patOnly, m.curPat);
+        } else if (m.type === 'song') {
+            this.song = this.rehydrate(m.song);
+        } else if (m.type === 'stop') {
+            this.st = null;
+        }
+    }
+    rehydrate(s) {
+        // Rebuild Int16Arrays for samples from transferred buffers
+        let samples = (s.samples || []).map(sm => ({
+            data: new Int16Array(sm.buf),
+            baseNote: sm.baseNote,
+            loopStart: sm.loopStart,
+            loopEnd: sm.loopEnd
+        }));
+        return {
+            bpm: s.bpm, tpr: s.tpr || 6,
+            instruments: s.instruments,
+            patterns: s.patterns,
+            order: s.order,
+            samples,
+            channelMuted: s.channelMuted || [false,false,false,false]
+        };
+    }
+    newState(patOnly, curPat) {
+        let ord = patOnly ? [[curPat, curPat, curPat, curPat]] : this.song.order.map(o => o.slice());
+        let ch = [];
+        for (let c = 0; c < this.N; c++)
+            ch.push({p:0,f:0,b:0,w:0,n:0,u:this.F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0});
+        let spt = this.S*5/((this.song.bpm||125)*2)|0;
+        return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1 };
+    }
+    nf(n) { if (n<0)n=0; if (n>95)n=95; return this.bf[n%12] << (n/12|0); }
+    trigNote(C, n, ii) {
+        let j = this.song.instruments[ii]; if (!j) return;
+        let semi = n - 2;
+        C.i = ii; C.n = semi; C.b = this.nf(semi); C.f = C.b; C.p = 0;
+        C.w = j.wave; C.u = this.dv[j.duty & 3];
+        C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r; C.t = 1; C.e = 0;
+        C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2;
+        C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255;
+        C.k = 0; C.l = 0; C.ps = 0;
+        if (j.wave === 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
+        C.sa = 0;
+        if (j.wave === 5) {
+            let si = j.sampleIdx !== undefined ? j.sampleIdx : 0;
+            let sm = this.song.samples[si];
+            if (sm && sm.data && sm.data.length) {
+                C.si = si; C.sp = 0; C.sa = 1;
+                let bf2 = this.nf(sm.baseNote !== undefined ? sm.baseNote : 48);
+                C.ss = bf2 > 0 ? Math.round(C.b * 65536 / bf2) : 65536;
+            }
+        }
+    }
+    doRow(st) {
+        let np = this.song.patterns.length, ni = this.song.instruments.length;
+        for (let c = 0; c < this.N; c++) {
+            let qi = st.ord[st.op] ? st.ord[st.op][c] : 0;
+            if (qi >= np) continue;
+            let pat = this.song.patterns[qi]; if (!pat || st.cr >= pat.length) continue;
+            let cell = pat[st.cr][c];
+            let n = cell.note, ii = cell.inst, rv = cell.vol, fx = cell.fx, pm = cell.prm;
+            let C = st.ch[c];
+            C.ri = 0; C.nc = 0; C.nd = 0;
+            let itp = fx === 5, ind = fx === 7 && ((pm >> 4) & 0xF) === 0xD;
+            if (ind && n >= 2) {
+                C.dn = n; C.di = ii === 255 ? C.i : ii; C.nd = pm & 15;
+            } else if (n === 1) { C.t = 4; }
+            else if (n >= 2) {
+                if (itp) { C.pt = this.nf(n - 2); }
+                else { if (ii === 255) ii = C.i; if (ii < ni) this.trigNote(C, n, ii); }
+            }
+            if (C.i < ni) {
+                let j = this.song.instruments[C.i];
+                C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
+                C.v = j.vol !== undefined ? j.vol : 255;
+            }
+            if (rv) C.rv = rv;
+            if (fx===1){C.x=pm>>4;C.y=pm&15;C.k=0}
+            else if(fx===2)C.l=pm<<2;else if(fx===3)C.l=-(pm<<2);
+            else if(fx===4){C.vs=this.F/64*(pm>>4);C.vd=(pm&15)<<4}
+            else if(fx===5)C.ps=pm<<2;
+            else if(fx===6)C.ri=pm;
+            else if(fx===7&&((pm>>4)&0xF)===0xC)C.nc=pm&15;
+        }
+    }
+    doTick(st) {
+        if (st.firstRow) { st.firstRow = false; this.doRow(st); }
+        st.ct++;
+        let ni = this.song.instruments.length;
+        let tpr = this.song.tpr || 6;
+        if (st.ct >= tpr) {
+            st.ct = 0; st.cr++;
+            let pat = this.song.patterns[st.ord[st.op] ? st.ord[st.op][0] : 0];
+            let plen = pat ? pat.length : 16;
+            if (st.cr >= plen) {
+                st.cr = 0; st.op++;
+                if (st.op >= st.ol) st.op = 0;
+            }
+            this.doRow(st);
+        }
+        for (let c = 0; c < this.N; c++) {
+            let C = st.ch[c];
+            if (C.i < ni) {
+                let j = this.song.instruments[C.i];
+                C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
+                C.v = j.vol !== undefined ? j.vol : 255;
+            }
+            if (C.nd && st.ct === C.nd) { if (C.di < ni) this.trigNote(C, C.dn, C.di); C.nd = 0; }
+            if (C.nc && st.ct === C.nc) { C.e = 0; C.t = 0; }
+            if (C.ri && st.ct > 0 && st.ct % C.ri === 0) { C.p = 0; C.t = 1; C.e = 0; if (C.w >= 3) { C.h = 0x7FFF; C.m = 0; } }
+            if (C.g) { C.b += C.q << 2; if (C.b < 1) C.b = 1; C.g--; }
+            if (C.l) { C.b += C.l; if (C.b < 1) C.b = 1; }
+            if (C.pt && C.ps) {
+                if (C.b < C.pt) { C.b += C.ps; if (C.b > C.pt) C.b = C.pt; }
+                else if (C.b > C.pt) { C.b -= C.ps; if (C.b < C.pt) C.b = C.pt; }
+            }
+            if (C.x | C.y) { let n = C.n, t = C.k % 3; C.f = this.nf(t === 1 ? n + C.x : t === 2 ? n + C.y : n); C.k++; }
+            else C.f = C.b;
+            if (C.vd) { C.f += ((C.vp & 65535) * 4 - this.F * 2 >> 8) * C.vd / this.F; C.vp += C.vs; }
+            let e = C.t;
+            if (e === 1) { C.e += this.F / (C.a + 1); if (C.e >= this.F) { C.e = this.F; C.t = 2; } }
+            else if (e === 2) { let g = this.F * C.s / 255; C.e -= (this.F - g) / (C.d + 1); if (C.e <= g) { C.e = g; C.t = 3; } }
+            else if (e === 4) { C.e -= C.e / (C.r + 1); if (C.e < 64) { C.e = 0; C.t = 0; } }
+        }
+    }
+    process(inputs, outputs) {
+        if (!this.st || !this.song) return true;
+        let st = this.st, out = outputs[0][0];
+        let F = this.F, N = this.N;
+        let muted = this.song.channelMuted;
+        for (let i = 0; i < out.length; i++) {
+            if (st.tc <= 0) { this.doTick(st); st.tc = st.spt; }
+            st.tc--;
+            let v = 0;
+            for (let c = 0; c < N; c++) {
+                let C = st.ch[c];
+                if (!C.t && !C.e && !C.sa) continue;
+                if (muted[c]) { C.p = (C.p + C.f) % F; continue; }
+                let h = C.p, s = 0;
+                if (C.w === 5) {
+                    if (C.sa) {
+                        let sm = this.song.samples[C.si];
+                        if (!sm || !sm.data) { C.sa = 0; s = 0; }
+                        else {
+                            let pos = C.sp >>> 16;
+                            if (pos >= sm.data.length) {
+                                if (sm.loopStart !== undefined && sm.loopStart >= 0 && sm.loopEnd > sm.loopStart) {
+                                    let loopLen = sm.loopEnd - sm.loopStart;
+                                    pos = sm.loopStart + ((pos - sm.loopStart) % loopLen);
+                                    C.sp = (pos << 16) | (C.sp & 0xFFFF);
+                                } else { C.sa = 0; s = 0; }
+                            }
+                            if (C.sa) { s = sm.data[pos] / 32768; C.sp = (C.sp + C.ss) >>> 0; }
+                        }
+                    }
+                }
+                else if (!C.w) s = h < C.u ? .5 : -.5;
+                else if (C.w === 1) s = h < F/2 ? (h*4-F)/F : (F*3-h*4)/F;
+                else if (C.w === 2) s = (h*2-F)/F;
+                else if (C.w === 4) {
+                    let ph = h & 0xFFFF;
+                    let x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
+                    x <<= 2;
+                    let ax = x < 0 ? -x : x;
+                    s = x * (F - ax) / F * 4 / F;
+                }
+                else {
+                    C.m++;
+                    if (C.m >= C.j) { C.m = 0; let z = (C.h ^ (C.h>>1)) & 1; C.h = (C.h>>1) | (z<<14); }
+                    s = (C.h & 1) ? .5 : -.5;
+                }
+                v += s * C.e * C.v * C.rv / F / 255 / 255;
+                if (C.w !== 5) C.p = (C.p + C.f) % F;
+            }
+            out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
+        }
+        // Emit sync info when row/op changes
+        if (st.cr !== st.lastRow || st.op !== st.lastOp) {
+            st.lastRow = st.cr; st.lastOp = st.op;
+            this.port.postMessage({type: 'pos', row: st.cr, op: st.op});
+        }
+        return true;
+    }
 }
+registerProcessor('birb-processor', BirbProcessor);
+`;
+}
+
+async function startLive(patOnly) {
+    if (liveCtx) return;
+    liveCtx = new AudioContext({sampleRate: 44100});
+    // addModule must be called on each new AudioContext
+    let code = getWorkletCode();
+    let url = URL.createObjectURL(new Blob([code], {type: 'application/javascript'}));
+    try {
+        await liveCtx.audioWorklet.addModule(url);
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+    liveNode = new AudioWorkletNode(liveCtx, 'birb-processor', {outputChannelCount: [1]});
+    liveNode.port.onmessage = (e) => {
+        if (e.data.type !== 'pos') return;
+        let row = e.data.row, op = e.data.op;
+        if (playingRow === row && (patOnly || curOrderPos === op)) return;
+        playingRow = row;
+        if (!patOnly && curOrderPos !== op) {
+            curOrderPos = op;
+            let newPat = song.order[curOrderPos] ? song.order[curOrderPos][0] : 0;
+            if (curPat !== newPat) { curPat = newPat; renderOrder(); }
+        }
+        renderGrid();
+    };
+    // Send initial state
+    let snap = snapshotSongForWorklet();
+    let transfer = snap.samples.map(s => s.buf);
+    liveNode.port.postMessage({type: 'init', song: snap, patOnly, curPat}, transfer);
+    liveNode.connect(liveCtx.destination);
+    document.getElementById('btn-play').classList.add('active');
+}
+
 function stopPlay() {
-    if (playingSource) { try { playingSource.stop(); } catch(e){} playingSource = null; }
-    if (playingCtx) { playingCtx.close(); playingCtx = null; }
+    if (liveNode) { try { liveNode.port.postMessage({type:'stop'}); } catch(e){} liveNode.disconnect(); liveNode = null; }
+    if (liveCtx) { liveCtx.close(); liveCtx = null; }
     playingRow = -1;
     document.getElementById('btn-play').classList.remove('active');
     renderGrid();
+}
+
+/* Post an updated song snapshot to the running worklet when params change. Debounced. */
+let liveUpdateTimer = null;
+function pushLiveUpdate() {
+    if (!liveNode) return;
+    if (liveUpdateTimer) clearTimeout(liveUpdateTimer);
+    liveUpdateTimer = setTimeout(() => {
+        liveUpdateTimer = null;
+        if (!liveNode) return;
+        let snap = snapshotSongForWorklet();
+        let transfer = snap.samples.map(s => s.buf);
+        liveNode.port.postMessage({type: 'song', song: snap}, transfer);
+    }, 50);
 }
 
 /* ================================================================
@@ -1244,7 +2075,7 @@ function exportBin() {
         push(ins.pe < 0 ? ins.pe + 256 : ins.pe); push(ins.pel);
         push(ins.arp1); push(ins.arp2);
         push(ins.vol !== undefined ? ins.vol : 255);
-        push(0); // reserved
+        push(ins.sampleIdx !== undefined ? ins.sampleIdx : 0);
     }
 
     // patterns (planar)
@@ -1260,6 +2091,27 @@ function exportBin() {
         for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].fx);
         // param plane
         for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].prm);
+    }
+
+    // SMPL section — ADPCM-encoded sample bank
+    if (song.samples.length > 0) {
+        push(83); push(77); push(80); push(76); // 'SMPL'
+        push(song.samples.length);
+        for (let s of song.samples) {
+            let data = s.data;
+            let length = data.length;
+            let ls = (s.loopStart !== undefined && s.loopStart >= 0) ? s.loopStart : 0xFFFF;
+            let le = s.loopEnd || 0;
+            push(length & 0xFF); push((length >> 8) & 0xFF);
+            push(ls & 0xFF); push((ls >> 8) & 0xFF);
+            push(le & 0xFF); push((le >> 8) & 0xFF);
+            push(s.baseNote !== undefined ? s.baseNote : 48);
+            push(0); // reserved
+            push(0); push(0); // initial predictor (not used, encoder starts from 0)
+            // IMA-ADPCM encode
+            let adpcm = encodeAdpcm(data);
+            for (let b of adpcm) push(b);
+        }
     }
 
     // NAME section — instrument names
@@ -1294,7 +2146,7 @@ function buildJS() {
     o += 'O=[' + song.order.map(r => '[' + r.join(',') + ']').join(',') + '],\n';
 
     o += 'I=[' + song.instruments.map(i => {
-        return `[${i.wave},${i.duty},${i.a},${i.d},${i.s},${i.r},${i.pe},${i.pel},${i.arp1},${i.arp2},${i.vol !== undefined ? i.vol : 255}]`;
+        return `[${i.wave},${i.duty},${i.a},${i.d},${i.s},${i.r},${i.pe},${i.pel},${i.arp1},${i.arp2},${i.vol !== undefined ? i.vol : 255},${i.sampleIdx !== undefined ? i.sampleIdx : 0}]`;
     }).join(',') + '],\n';
 
     o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
@@ -1317,22 +2169,54 @@ function buildJS() {
         else o += planes[pl] + '=[' + vals.join(',') + '],\n';
     }
 
+    // sample bank — only emit if used
+    let usesSamples = song.instruments.some(i => i.wave === 5) && song.samples.length > 0;
+    if (usesSamples) {
+        // Emit samples as [{b:baseNote,l:length,ls:loopStart,le:loopEnd,d:"base64adpcm"}, ...]
+        let sArr = song.samples.map(s => {
+            let adpcm = encodeAdpcm(s.data);
+            let str = '';
+            for (let b of adpcm) str += String.fromCharCode(b);
+            let b64 = btoa(str);
+            let ls = (s.loopStart !== undefined && s.loopStart >= 0) ? s.loopStart : -1;
+            let le = s.loopEnd || 0;
+            let bn = s.baseNote !== undefined ? s.baseNote : 48;
+            return `{b:${bn},l:${s.data.length},ls:${ls},le:${le},d:"${b64}"}`;
+        });
+        o += 'SA=[' + sArr.join(',') + '],\n';
+    } else {
+        o += 'SA=[],\n';
+    }
+
     // offset table + accessor for variable-length patterns
     o += `po=[0],i,c,r
 for(i=1;i<np;i++)po[i]=po[i-1]+pl[i-1]*N
 function P(a,p,c,r){return a.length?a[po[p]+c*pl[p]+r]||0:0}
 `;
+
+    if (usesSamples) {
+        o += `var AST=[7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767],
+AIA=[-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8],
+SB=SA.map(q=>{var bs=atob(q.d),a=new Uint8Array(bs.length);for(var k=0;k<bs.length;k++)a[k]=bs.charCodeAt(k);
+var out=new Int16Array(q.l),pr=0,si=0;
+for(var k=0;k<q.l;k++){var by=a[k>>1],nb=(k&1)?(by>>4):(by&15),st=AST[si],df=st>>3;
+if(nb&1)df+=st>>2;if(nb&2)df+=st>>1;if(nb&4)df+=st;if(nb&8)df=-df;pr+=df;
+if(pr>32767)pr=32767;if(pr<-32768)pr=-32768;si+=AIA[nb];if(si<0)si=0;if(si>88)si=88;out[k]=pr}
+return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}}),
+`;
+    }
     o += `var bf=[24,26,27,29,31,32,34,36,38,41,43,46],
 dv=[8192,16384,32768,49152],
 nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
 spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,
 out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
-for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0}
+for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0}
 function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];C.t=1;C.e=0
 C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0
-if(j[0]>=3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}}
+if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}
+C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}}
 function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue
 var n=P(pn,q,c,cr),ii=P(pi,q,c,cr)||255,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)
 C.ri=0;C.nc=0;C.nd=0
@@ -1363,12 +2247,17 @@ var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
 else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
 else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}}}
 for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
-var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e)continue
-var h=C.p,s;if(!C.w)s=h<C.u?.5:-.5
-else if(C.w==1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F
-else if(C.w<3)s=(h*2-F)/F
+var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa)continue
+var h=C.p,s=0
+if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
+if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
+if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}
+else if(!C.w)s=h<C.u?.5:-.5
+else if(C.w===1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F
+else if(C.w===2)s=(h*2-F)/F
+else if(C.w===4){var ph=h&0xFFFF,x=ph<F/2?ph-F/4:(F*3/4)-ph;x<<=2;var ax=x<0?-x:x;s=x*(F-ax)/F*4/F}
 else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
-v+=s*C.e*C.v*C.rv/F/255/255;C.p=(C.p+C.f)%F}out[i]=v>1?1:v<-1?-1:v}
+v+=s*C.e*C.v*C.rv/F/255/255;if(C.w!==5)C.p=(C.p+C.f)%F}out[i]=v>1?1:v<-1?-1:v}
 return{o:out,spt:spt,T:T}}`;
     return o;
 }
@@ -1521,6 +2410,7 @@ function parseBin(d) {
     song.instruments = [];
     song.patterns = [];
     song.order = [];
+    song.samples = [];
     song.bpm = d[4]; song.tpr = d[5];
     let ni = d[6], np = d[7], p = 8;
     let ol = d[p++];
@@ -1534,7 +2424,8 @@ function parseBin(d) {
         let pe = d[p+6]; if (pe > 127) pe -= 256;
         song.instruments.push({
             wave:d[p], duty:d[p+1], a:d[p+2], d:d[p+3], s:d[p+4], r:d[p+5],
-            pe:pe, pel:d[p+7], arp1:d[p+8], arp2:d[p+9], vol:d[p+10] || 255
+            pe:pe, pel:d[p+7], arp1:d[p+8], arp2:d[p+9], vol:d[p+10] || 255,
+            sampleIdx: d[p+11]
         });
         p += 12;
     }
@@ -1548,6 +2439,32 @@ function parseBin(d) {
         for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].prm = d[p++];
         song.patterns.push(pat);
     }
+    // optional SMPL section
+    if (p + 4 <= d.length && d[p]===83 && d[p+1]===77 && d[p+2]===80 && d[p+3]===76) {
+        p += 4;
+        let ns = d[p++];
+        for (let i = 0; i < ns; i++) {
+            if (p + 10 > d.length) break;
+            let length = d[p] | (d[p+1] << 8);
+            let ls = d[p+2] | (d[p+3] << 8);
+            let le = d[p+4] | (d[p+5] << 8);
+            let baseNote = d[p+6];
+            // d[p+7] reserved, d[p+8..9] initial predictor (unused by encoder)
+            p += 10;
+            let nbytes = (length + 1) >> 1;
+            if (p + nbytes > d.length) break;
+            let adpcm = d.slice(p, p + nbytes);
+            p += nbytes;
+            song.samples.push({
+                name: 'sample' + i,
+                data: decodeAdpcm(adpcm, length),
+                baseNote: baseNote,
+                loopStart: ls === 0xFFFF ? -1 : ls,
+                loopEnd: le
+            });
+        }
+    }
+
     // optional NAME section
     if (p + 4 <= d.length && d[p]===78 && d[p+1]===65 && d[p+2]===77 && d[p+3]===69) {
         p += 4;
@@ -1670,7 +2587,7 @@ function toggleInfo() {
 }
 
 function renderAll() {
-    renderInstList(); loadInstEditor(); renderOrder(); renderGrid();
+    renderInstList(); loadInstEditor(); renderOrder(); renderGrid(); renderSamplesList();
 }
 renderAll();
 document.getElementById('grid').focus();
