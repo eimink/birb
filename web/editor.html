@@ -2104,19 +2104,41 @@ function exportBin() {
         push(ins.sampleIdx !== undefined ? ins.sampleIdx : 0);
     }
 
-    // patterns (planar)
-    for (let pat of song.patterns) {
-        push(pat.length);
-        // notes plane
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].note);
-        // instrument plane
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].inst);
-        // volume plane
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].vol || 0);
-        // effect plane
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].fx);
-        // param plane
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < pat.length; r++) push(pat[r][c].prm);
+    // Pattern lengths
+    for (let pat of song.patterns) push(pat.length);
+
+    // Empty-plane detection
+    const planeKeys = ['note', 'inst', 'vol', 'fx', 'prm'];
+    const planeDef  = [0, 255, 0, 0, 0];
+    let planeFlags = 0;
+    for (let pl = 0; pl < 5; pl++) {
+        let empty = true;
+        for (let pat of song.patterns) {
+            for (let r = 0; r < pat.length && empty; r++) {
+                for (let c = 0; c < NCH; c++) {
+                    let v = pat[r][c][planeKeys[pl]];
+                    if (v === undefined) v = planeDef[pl];
+                    if (v !== planeDef[pl]) { empty = false; break; }
+                }
+            }
+            if (!empty) break;
+        }
+        if (empty) planeFlags |= (1 << pl);
+    }
+    push(planeFlags);
+
+    // Plane data: channel-major, pattern-major
+    for (let pl = 0; pl < 5; pl++) {
+        if (planeFlags & (1 << pl)) continue;
+        for (let c = 0; c < NCH; c++) {
+            for (let pat of song.patterns) {
+                for (let r = 0; r < pat.length; r++) {
+                    let v = pat[r][c][planeKeys[pl]];
+                    if (v === undefined) v = planeDef[pl];
+                    push(v);
+                }
+            }
+        }
     }
 
     // SMPL section — ADPCM-encoded sample bank
@@ -2464,15 +2486,27 @@ function parseBin(d) {
         });
         p += 12;
     }
-    for (let i = 0; i < np; i++) {
-        let nr = d[p++];
-        let pat = makePattern(nr);
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].note = d[p++];
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].inst = d[p++];
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].vol = d[p++];
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].fx = d[p++];
-        for (let c = 0; c < NCH; c++) for (let r = 0; r < nr; r++) pat[r][c].prm = d[p++];
-        song.patterns.push(pat);
+    // Pattern lengths
+    let patLens = [];
+    for (let i = 0; i < np; i++) patLens.push(d[p++]);
+    // Init patterns with defaults
+    for (let i = 0; i < np; i++) song.patterns.push(makePattern(patLens[i]));
+
+    // Plane-empty flags
+    let planeFlags = d[p++];
+    const planeKeys = ['note','inst','vol','fx','prm'];
+    // Defaults already set by makePattern, but ensure inst=255 etc (they are)
+    // Read non-empty planes: channel-major, pattern-major
+    for (let pl = 0; pl < 5; pl++) {
+        if (planeFlags & (1 << pl)) continue;
+        for (let c = 0; c < NCH; c++) {
+            for (let i = 0; i < np; i++) {
+                let nr = patLens[i];
+                for (let r = 0; r < nr; r++) {
+                    song.patterns[i][r][c][planeKeys[pl]] = d[p++];
+                }
+            }
+        }
     }
     // optional SMPL section
     if (p + 4 <= d.length && d[p]===83 && d[p+1]===77 && d[p+2]===80 && d[p+3]===76) {

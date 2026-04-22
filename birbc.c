@@ -436,48 +436,61 @@ static int write_binary(const char *filename, birb_song *song) {
         fwrite(buf, 1, BIRB_INST_SIZE, f);
     }
 
-    /* patterns (planar) */
+    /* Pattern lengths */
     int total_pattern_bytes = 0;
     for (int p = 0; p < song->num_patterns; p++) {
-        int nrows = song->pattern_lengths[p];
+        uint8_t nrows = song->pattern_lengths[p];
         if (nrows == 0) nrows = BIRB_MAX_ROWS;
         fwrite(&nrows, 1, 1, f);
         total_pattern_bytes++;
+    }
 
-        /* notes plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++) {
-                fwrite(&song->patterns[p][r][c].note, 1, 1, f);
-                total_pattern_bytes++;
+    /* Determine which planes are all-default (can be skipped) */
+    static const uint8_t plane_defaults[5] = { 0, 0xFF, 0, 0, 0 };
+    uint8_t plane_flags = 0;
+    for (int pl = 0; pl < 5; pl++) {
+        int empty = 1;
+        for (int p = 0; p < song->num_patterns && empty; p++) {
+            int nrows = song->pattern_lengths[p]; if (!nrows) nrows = BIRB_MAX_ROWS;
+            for (int r = 0; r < nrows && empty; r++) {
+                for (int c = 0; c < BIRB_NUM_CHANNELS && empty; c++) {
+                    uint8_t v = 0;
+                    switch (pl) {
+                        case 0: v = song->patterns[p][r][c].note; break;
+                        case 1: v = song->patterns[p][r][c].instrument; break;
+                        case 2: v = song->patterns[p][r][c].volume; break;
+                        case 3: v = song->patterns[p][r][c].effect; break;
+                        case 4: v = song->patterns[p][r][c].param; break;
+                    }
+                    if (v != plane_defaults[pl]) empty = 0;
+                }
             }
+        }
+        if (empty) plane_flags |= (1 << pl);
+    }
+    fwrite(&plane_flags, 1, 1, f);
+    total_pattern_bytes++;
 
-        /* instrument plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++) {
-                fwrite(&song->patterns[p][r][c].instrument, 1, 1, f);
-                total_pattern_bytes++;
+    /* Plane data (channel-major, pattern-major) */
+    for (int pl = 0; pl < 5; pl++) {
+        if (plane_flags & (1 << pl)) continue;
+        for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
+            for (int p = 0; p < song->num_patterns; p++) {
+                int nrows = song->pattern_lengths[p]; if (!nrows) nrows = BIRB_MAX_ROWS;
+                for (int r = 0; r < nrows; r++) {
+                    uint8_t v = 0;
+                    switch (pl) {
+                        case 0: v = song->patterns[p][r][c].note; break;
+                        case 1: v = song->patterns[p][r][c].instrument; break;
+                        case 2: v = song->patterns[p][r][c].volume; break;
+                        case 3: v = song->patterns[p][r][c].effect; break;
+                        case 4: v = song->patterns[p][r][c].param; break;
+                    }
+                    fwrite(&v, 1, 1, f);
+                    total_pattern_bytes++;
+                }
             }
-
-        /* volume plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++) {
-                fwrite(&song->patterns[p][r][c].volume, 1, 1, f);
-                total_pattern_bytes++;
-            }
-
-        /* effect plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++) {
-                fwrite(&song->patterns[p][r][c].effect, 1, 1, f);
-                total_pattern_bytes++;
-            }
-
-        /* param plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++) {
-                fwrite(&song->patterns[p][r][c].param, 1, 1, f);
-                total_pattern_bytes++;
-            }
+        }
     }
 
     /* SMPL section — re-encode sample pool as IMA-ADPCM */

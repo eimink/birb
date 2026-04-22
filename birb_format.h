@@ -27,11 +27,23 @@
  *     arp_note2: u8
  *     reserved: u8, u8
  *
- *   Patterns:
- *     For each pattern:
- *       num_rows: u8
- *       Planar data (5 planes × 4 channels × num_rows):
- *         notes, insts, volumes, fx, params (each: ch0..ch3 × rows)
+ *   Pattern lengths:
+ *     num_rows: u8 × num_patterns
+ *
+ *   Plane-empty flags: u8
+ *     bit 0: notes plane is all-0 (i.e., no notes at all — unusual)
+ *     bit 1: insts plane is all-0xFF (no instrument changes)
+ *     bit 2: volumes plane is all-0 (no volume column used)
+ *     bit 3: effects plane is all-0 (no effects)
+ *     bit 4: params plane is all-0 (no effect params)
+ *     Empty planes are omitted from the stream.
+ *
+ *   Plane data (present for each non-empty plane, in order 0..4):
+ *     Organized as channel-major, pattern-major:
+ *       For each channel 0..3:
+ *         For each pattern 0..num_patterns-1:
+ *           pattern_lengths[p] bytes of plane data
+ *     This layout maximises LZ77 locality across pattern boundaries.
  *
  *   Optional SMPL section (IMA-ADPCM sample bank):
  *     'S' 'M' 'P' 'L'
@@ -133,38 +145,54 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
         pos += BIRB_INST_SIZE;
     }
 
-    /* patterns */
-    for (int p = 0; p < song->num_patterns && p < BIRB_MAX_PATTERNS; p++) {
-        if (pos >= len) return -1;
-        int nrows = data[pos++];
-        song->pattern_lengths[p] = (uint8_t)nrows;
-        int plane_size = nrows * BIRB_NUM_CHANNELS;
-        if (pos + plane_size * 5 > len) return -1;
+    /* Pattern lengths */
+    int np = song->num_patterns;
+    if (np > BIRB_MAX_PATTERNS) np = BIRB_MAX_PATTERNS;
+    if (pos + np > len) return -1;
+    for (int p = 0; p < np; p++)
+        song->pattern_lengths[p] = data[pos++];
 
-        /* notes plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++)
-                song->patterns[p][r][c].note = data[pos++];
+    /* Plane-empty flags */
+    if (pos >= len) return -1;
+    uint8_t plane_flags = data[pos++];
 
-        /* instrument plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++)
-                song->patterns[p][r][c].instrument = data[pos++];
+    /* Default values per plane: notes=0, insts=0xFF, vol=0, fx=0, prm=0 */
+    static const uint8_t plane_defaults[5] = { 0, 0xFF, 0, 0, 0 };
 
-        /* volume plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++)
-                song->patterns[p][r][c].volume = data[pos++];
+    /* Initialize all pattern cells to defaults */
+    for (int p = 0; p < np; p++) {
+        int nrows = song->pattern_lengths[p];
+        for (int r = 0; r < nrows; r++) {
+            for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
+                song->patterns[p][r][c].note = 0;
+                song->patterns[p][r][c].instrument = 0xFF;
+                song->patterns[p][r][c].volume = 0;
+                song->patterns[p][r][c].effect = 0;
+                song->patterns[p][r][c].param = 0;
+            }
+        }
+    }
 
-        /* effect plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++)
-                song->patterns[p][r][c].effect = data[pos++];
-
-        /* param plane */
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
-            for (int r = 0; r < nrows; r++)
-                song->patterns[p][r][c].param = data[pos++];
+    /* For each plane, if not flagged empty, read channel-major pattern-major */
+    for (int pl = 0; pl < 5; pl++) {
+        if (plane_flags & (1 << pl)) continue; /* empty plane, use defaults */
+        (void)plane_defaults;
+        for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
+            for (int p = 0; p < np; p++) {
+                int nrows = song->pattern_lengths[p];
+                if (pos + nrows > len) return -1;
+                for (int r = 0; r < nrows; r++) {
+                    uint8_t v = data[pos++];
+                    switch (pl) {
+                        case 0: song->patterns[p][r][c].note = v; break;
+                        case 1: song->patterns[p][r][c].instrument = v; break;
+                        case 2: song->patterns[p][r][c].volume = v; break;
+                        case 3: song->patterns[p][r][c].effect = v; break;
+                        case 4: song->patterns[p][r][c].param = v; break;
+                    }
+                }
+            }
+        }
     }
 
     /* optional SMPL section — IMA-ADPCM sample bank */
