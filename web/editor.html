@@ -524,7 +524,7 @@ const VOWEL_NAMES = ['A','E','I','O','U'];
  * drumDecay still controls pitch-env rate + audible TTL. */
 const DRUM_PRESETS = {
     '808kick':   { drumType:0, tune:-12, decay:220, tone:60,  snap:40,  vol:255, a:0, d:40, s:0, r:8 },
-    '909kick':   { drumType:0, tune:-8,  decay:170, tone:120, snap:180, vol:255, a:0, d:12, s:0, r:8 },
+    '909kick':   { drumType:0, tune:-26, decay:170, tone:227, snap:36,  vol:255, a:0, d:10, s:0, r:0, pe:-16, pel:8 },
     'snare':     { drumType:1, tune:-12, decay:140, tone:160, snap:180, vol:220, a:0, d:18, s:0, r:8 },
     'rim':       { drumType:1, tune:0,   decay:40,  tone:210, snap:40,  vol:200, a:0, d:4,  s:0, r:8 },
     'closedhat': { drumType:2, tune:36,  decay:30,  tone:100, snap:200, vol:160, a:0, d:6,  s:0, r:8 },
@@ -1216,11 +1216,15 @@ function applyDrumPreset(name) {
     ins.drumSnap = p.snap;
     ins.vol = p.vol;
     /* Presets also set amplitude ADSR — drums use the instrument envelope
-     * for their amp shape, so e.g. 909 Kick needs d≈12,s=0 to sound punchy. */
+     * for their amp shape, so e.g. 909 Kick needs d≈12,s=0 to sound punchy.
+     * pe/pel stack an extra pitch slide on top of the drum's internal
+     * pitch_env, handy for that long 909-kick sub tail. */
     if (p.a !== undefined) ins.a = p.a;
     if (p.d !== undefined) ins.d = p.d;
     if (p.s !== undefined) ins.s = p.s;
     if (p.r !== undefined) ins.r = p.r;
+    if (p.pe !== undefined) ins.pe = p.pe;
+    if (p.pel !== undefined) ins.pel = p.pel;
     document.getElementById('ie-wave').value = 8;
     markDirty();
     updateDrumPanelVisibility();
