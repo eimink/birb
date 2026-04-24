@@ -7,13 +7,14 @@
 
 /* ---------- sine approximation for vibrato ---------- */
 fixed16 birb_sin_approx(fixed16 phase) {
+    /* Parabolic sine ≈ FX_ONE amplitude, peak at FX_ONE/4. */
     phase &= FX_MASK;
-    fixed16 x;
-    if (phase < FX_HALF) x = phase - (FX_ONE / 4);
-    else x = (FX_ONE * 3 / 4) - phase;
-    x <<= 2;
-    fixed16 ax = x < 0 ? -x : x;
-    return FX_MUL(x, FX_ONE - ax) * 4 / FX_ONE;
+    int negate = (phase >= FX_HALF);
+    fixed16 t = negate ? (phase - FX_HALF) : phase;
+    t <<= 1;
+    if (t > FX_ONE) t = FX_ONE;
+    fixed16 y = FX_MUL(t, FX_ONE - t) << 2;
+    return negate ? -y : y;
 }
 
 /* ---------- note frequency computation ---------- */
@@ -130,11 +131,12 @@ static int16_t generate_drum(birb_channel *ch) {
         ch->u.drum.pitch_env = p;
         ch->phase = (ch->phase + p) & FX_MASK;
         fixed16 s = birb_sin_approx(ch->phase);
-        out = ((int32_t)s * 24000) >> FX_SHIFT;
+        out = ((int32_t)s * 18000) >> FX_SHIFT;
         if (ch->u.drum.stage_tick) {
             uint16_t n = drum_noise_m(ch);
-            int32_t bit = (n & 1) ? 20000 : -20000;
-            out += (bit * ch->u.drum.stage * ch->u.drum.stage_tick) >> 16;
+            int32_t peak = (int32_t)ch->u.drum.stage * 128;
+            int32_t amp = peak * ch->u.drum.stage_tick / 384;
+            out += (n & 1) ? amp : -amp;
             ch->u.drum.stage_tick--;
         }
     } else if (dt == 1 || dt == 3) {
@@ -170,6 +172,7 @@ static int16_t generate_drum(birb_channel *ch) {
         ch->u.drum.bq_z1[0] += (int32_t)(((int64_t)y * hp) >> FX_SHIFT);
         out = y;
     }
+    if (out > 32767) out = 32767; else if (out < -32767) out = -32767;
     if (out > 32767) out = 32767; else if (out < -32767) out = -32767;
     return (int16_t)out;
 }
@@ -423,11 +426,11 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         uint32_t ttl;
         if (algo == 0) {
             ch->u.drum.pitch_env = dfreq << 1;
-            ch->u.drum.pitch_env_target = dfreq >> 3;
+            ch->u.drum.pitch_env_target = dfreq >> 1;
             ch->base_duty = (fixed16)((uint32_t)inst->drum_tone * 256);
             if (ch->base_duty < 16) ch->base_duty = 16;
             ch->u.drum.stage = inst->drum_snap;
-            ch->u.drum.stage_tick = 64;
+            ch->u.drum.stage_tick = 384;
             ttl = (uint32_t)inst->drum_decay * 200 + 1024;
             if (dt == 4) ttl *= 2;
         } else if (algo == 1) {

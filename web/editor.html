@@ -2154,14 +2154,15 @@ function renderSong(patOnly, singlePat) {
 
     let ct = 0, cr = 0, op = 0, tc = 0, firstRow = true;
 
-    /* Fixed-point sine approximation matching birb_sin_approx. Input phase
-     * is 0..F, output is -1..1 (for JS float use). */
+    /* Parabolic sine approximation: peak at phase=F/4 (true sine max).
+     * Input phase 0..F, returns -1..1. */
     function sinApprox(phase) {
         let p = ((phase % F) + F) % F;
-        let x = p < F/2 ? p - F/4 : (F*3/4) - p;
-        x *= 4;
-        let ax = x < 0 ? -x : x;
-        return x * (F - ax) / F * 4 / F;
+        let negate = p >= F/2;
+        let t = negate ? (p - F/2) * 2 : p * 2;
+        if (t > F) t = F;
+        let y = t * (F - t) / F * 4 / F;
+        return negate ? -y : y;
     }
     /* Vowel formant coefficient table (mirrors birb_synth.c). */
     const FMT_COEF = [
@@ -2241,9 +2242,9 @@ function renderSong(patOnly, singlePat) {
             let dec = j.drumDecay|0, tone = j.drumTone|0, snap = j.drumSnap|0;
             let ttl;
             if (algo === 0) {
-                C.drPe = dfreq << 1; C.drPet = dfreq >> 3;
+                C.drPe = dfreq << 1; C.drPet = dfreq >> 1;
                 C.drRate = Math.max(16, tone * 256);
-                C.drSnap = snap; C.drClick = 64;
+                C.drSnap = snap; C.drClick = 384;
                 ttl = dec * 200 + 1024;
                 if (dt === 4) ttl *= 2;
             } else if (algo === 1) {
@@ -2441,38 +2442,29 @@ function renderSong(patOnly, singlePat) {
                         let gap = C.drPe - C.drPet;
                         C.drPe -= ((gap * C.drRate) >> 20);
                         C.p = (C.p + C.drPe) % F;
-                        let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
-                        x <<= 2; let ax = x < 0 ? -x : x;
-                        o = (x * (F - ax) / F * 4 / F) * 24000;
+                        o = sinApprox(C.p) * 18000;
                         if (C.drClick > 0) {
                             let n = lfshift();
-                            let bit = (n & 1) ? 20000 : -20000;
-                            o += (bit * C.drSnap * C.drClick) >> 16;
+                            let peak = C.drSnap * 128;
+                            let amp = (peak * C.drClick / 384) | 0;
+                            o += (n & 1) ? amp : -amp;
                             C.drClick--;
                         }
                     } else if (C.drAl === 1) {
                         let n = lfshift();
                         let noise = (n & 1) ? 14000 : -14000;
                         C.p = (C.p + C.f) % F;
-                        let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
-                        x <<= 2; let ax = x < 0 ? -x : x;
-                        let body = (x * (F - ax) / F * 4 / F) * 18000;
+                        let body = sinApprox(C.p) * 18000;
                         let mix = ((noise * (255 - C.drMix) + body * C.drMix) / 255)|0;
                         let acc = ((mix * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
                         if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
                         C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
                     } else if (C.drAl === 2) {
                         C.p = (C.p + C.f) % F;
-                        let f2 = C.f * 17;
-                        C.drPhase2 = (C.drPhase2 + f2) % F;
-                        let ph2 = C.drPhase2, x2 = ph2 < F/2 ? ph2 - F/4 : (F*3/4) - ph2;
-                        x2 <<= 2; let ax2 = x2 < 0 ? -x2 : x2;
-                        let modRaw = x2 * (F - ax2) / F * 4 / F;
+                        C.drPhase2 = (C.drPhase2 + C.f * 17) % F;
+                        let modRaw = sinApprox(C.drPhase2);
                         let modOut = (modRaw * C.drPe) | 0;
-                        let cph = (C.p + modOut) % F;
-                        let xc = cph < F/2 ? cph - F/4 : (F*3/4) - cph;
-                        xc <<= 2; let axc = xc < 0 ? -xc : xc;
-                        let car = xc * (F - axc) / F * 4 / F;
+                        let car = sinApprox(C.p + modOut);
                         let sv = (car * 18000) | 0;
                         let y = sv - C.drZ1;
                         C.drZ1 += (y * C.drPet) >> 16;
@@ -2525,15 +2517,7 @@ function renderSong(patOnly, singlePat) {
             else if (!C.w) s = h < C.u ? .5 : -.5;
             else if (C.w===1) s = h < F/2 ? (h*4-F)/F : (F*3-h*4)/F;
             else if (C.w===2) s = (h*2-F)/F;
-            else if (C.w===4) {
-                // sine approximation
-                let ph = h & 0xFFFF;
-                let x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
-                x <<= 2;
-                let ax = x < 0 ? -x : x;
-                let sv = x * (F - ax) / F * 4 / F;
-                s = sv;
-            }
+            else if (C.w===4) s = sinApprox(h);
             else { C.m++; if (C.m>=C.j){C.m=0;let z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)} s=(C.h&1)?.5:-.5; }
             let en = C.e + (C.tm ? C.e * C.tm / F : 0);
             if (en < 0) en = 0; if (en > F) en = F;
@@ -2687,10 +2671,11 @@ class BirbProcessor extends AudioWorkletProcessor {
     }
     sinApprox(ph) {
         let F=this.F, p=((ph%F)+F)%F;
-        let x = p<F/2 ? p-F/4 : (F*3/4)-p;
-        x*=4;
-        let ax=x<0?-x:x;
-        return x*(F-ax)/F*4/F;
+        let negate = p >= F/2;
+        let t = negate ? (p - F/2) * 2 : p * 2;
+        if (t > F) t = F;
+        let y = t * (F - t) / F * 4 / F;
+        return negate ? -y : y;
     }
     nf(n) { if (n<0)n=0; if (n>95)n=95; return this.bf[n%12] << (n/12|0); }
     fmtInterp(C) {
@@ -2770,9 +2755,9 @@ class BirbProcessor extends AudioWorkletProcessor {
             let dec = j.drumDecay|0, tone = j.drumTone|0, snap = j.drumSnap|0;
             let ttl;
             if (algo === 0) {
-                C.drPe = dfreq << 1; C.drPet = dfreq >> 3;
+                C.drPe = dfreq << 1; C.drPet = dfreq >> 1;
                 C.drRate = Math.max(16, tone * 256);
-                C.drSnap = snap; C.drClick = 64;
+                C.drSnap = snap; C.drClick = 384;
                 ttl = dec * 200 + 1024;
                 if (dt === 4) ttl *= 2;
             } else if (algo === 1) {
@@ -2971,38 +2956,29 @@ class BirbProcessor extends AudioWorkletProcessor {
                             let gap = C.drPe - C.drPet;
                             C.drPe -= ((gap * C.drRate) >> 20);
                             C.p = (C.p + C.drPe) % F;
-                            let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
-                            x <<= 2; let ax = x < 0 ? -x : x;
-                            o = (x * (F - ax) / F * 4 / F) * 24000;
+                            o = this.sinApprox(C.p) * 18000;
                             if (C.drClick > 0) {
                                 let n = lfnext();
-                                let bit = (n & 1) ? 20000 : -20000;
-                                o += (bit * C.drSnap * C.drClick) >> 16;
+                                let peak = C.drSnap * 128;
+                                let amp = (peak * C.drClick / 384) | 0;
+                                o += (n & 1) ? amp : -amp;
                                 C.drClick--;
                             }
                         } else if (C.drAl === 1) {
                             let n = lfnext();
                             let noise = (n & 1) ? 14000 : -14000;
                             C.p = (C.p + C.f) % F;
-                            let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
-                            x <<= 2; let ax = x < 0 ? -x : x;
-                            let body = (x * (F - ax) / F * 4 / F) * 18000;
+                            let body = this.sinApprox(C.p) * 18000;
                             let mix = ((noise * (255 - C.drMix) + body * C.drMix) / 255)|0;
                             let acc = ((mix * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
                             if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
                             C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
                         } else if (C.drAl === 2) {
                             C.p = (C.p + C.f) % F;
-                            let f2 = C.f * 17;
-                            C.drPhase2 = (C.drPhase2 + f2) % F;
-                            let ph2 = C.drPhase2, x2 = ph2 < F/2 ? ph2 - F/4 : (F*3/4) - ph2;
-                            x2 <<= 2; let ax2 = x2 < 0 ? -x2 : x2;
-                            let modRaw = x2 * (F - ax2) / F * 4 / F;
+                            C.drPhase2 = (C.drPhase2 + C.f * 17) % F;
+                            let modRaw = this.sinApprox(C.drPhase2);
                             let modOut = (modRaw * C.drPe) | 0;
-                            let cph = (C.p + modOut) % F;
-                            let xc = cph < F/2 ? cph - F/4 : (F*3/4) - cph;
-                            xc <<= 2; let axc = xc < 0 ? -xc : xc;
-                            let car = xc * (F - axc) / F * 4 / F;
+                            let car = this.sinApprox(C.p + modOut);
                             let sv = (car * 18000) | 0;
                             let y = sv - C.drZ1;
                             C.drZ1 += (y * C.drPet) >> 16;
@@ -3054,13 +3030,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                 else if (!C.w) s = h < C.u ? .5 : -.5;
                 else if (C.w === 1) s = h < F/2 ? (h*4-F)/F : (F*3-h*4)/F;
                 else if (C.w === 2) s = (h*2-F)/F;
-                else if (C.w === 4) {
-                    let ph = h & 0xFFFF;
-                    let x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
-                    x <<= 2;
-                    let ax = x < 0 ? -x : x;
-                    s = x * (F - ax) / F * 4 / F;
-                }
+                else if (C.w === 4) s = this.sinApprox(h);
                 else {
                     C.m++;
                     if (C.m >= C.j) { C.m = 0; let z = (C.h ^ (C.h>>1)) & 1; C.h = (C.h>>1) | (z<<14); }
@@ -3501,7 +3471,7 @@ nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
 spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,
 out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
 for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0':''}${usesDrum?',drAl:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]':''}}
-${(usesFM || usesDrum) ? `function SA_(ph){var p=((ph%F)+F)%F;var x=p<F/2?p-F/4:(F*3/4)-p;x*=4;var ax=x<0?-x:x;return x*(F-ax)/F*4/F}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
+${(usesFM || usesDrum) ? `function SA_(ph){var p=((ph%F)+F)%F;var ng=p>=F/2,t=ng?(p-F/2)*2:p*2;if(t>F)t=F;var y=t*(F-t)/F*4/F;return ng?-y:y}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];C.t=1;C.e=0
 C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0
@@ -3510,7 +3480,7 @@ C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var
 if(j[0]===6){var fm=j[15];C.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255)}}` : ''}${usesKS ? `
 if(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?16383:-16383}}` : ''}${usesDrum ? `
 if(j[0]===8){var dt=j[${drumBase}]&7,al=dt===4?0:dt===5?2:dt,tn=j[${drumBase+1}];if(tn>127)tn-=256;var dec=j[${drumBase+2}],tone=j[${drumBase+3}],snp=j[${drumBase+4}],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;
-if(al===0){C.drPe=df<<1;C.drPet=df>>3;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=64;tt=dec*200+1024;if(dt===4)tt*=2}
+if(al===0){C.drPe=df<<1;C.drPet=df>>1;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}
 else if(al===1){C.f=df>0?df:bf[2]<<2;C.drMix=snp;C.drPe=F>>2;var tF=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*120+1024}
 else if(al===2){C.f=df>0?df:bf[2]<<5;C.drPe=tone*4*F/255|0;var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}
 else{C.drPe=F>>2;var tF2=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF2>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*160+2048}
@@ -3565,7 +3535,7 @@ if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}${usesFM ? `
 else if(C.w===6){var mr=SA_(C.fmp[1]),sc=C.fmMi*C.fmL[1]/255,mo=mr*sc;if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*C.fmL[0]/F}` : ''}${usesKS ? `
 else if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*(255-C.kd))>>8;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
 else if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
-${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;C.drPe-=(gp*C.drRate)>>20;C.p=(C.p+C.drPe)%F;o_=SA_(C.p)*24000;if(C.drClk>0){var nn=lfn();var bit=(nn&1)?20000:-20000;o_+=(bit*C.drSnap*C.drClk)>>16;C.drClk--}}` : ''}
+${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;C.drPe-=(gp*C.drRate)>>20;C.p=(C.p+C.drPe)%F;o_=SA_(C.p)*18000;if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}` : ''}
 ${drumAlgos.has(1) ? `${drumAlgos.has(0) ? 'else ' : ''}if(C.drAl===1){var nn=lfn();var noi=(nn&1)?14000:-14000;C.p=(C.p+C.f)%F;var bd=SA_(C.p)*18000;var mx=(noi*(255-C.drMix)+bd*C.drMix)/255|0;var ac=((mx*C.drPe)>>16)+((C.drZ1*C.drPet)>>16)-((C.drZ2*(F-(F>>3)))>>16);if(ac>32767)ac=32767;else if(ac<-32767)ac=-32767;C.drZ2=C.drZ1;C.drZ1=ac;o_=ac}` : ''}
 ${drumAlgos.has(2) ? `${(drumAlgos.has(0)||drumAlgos.has(1)) ? 'else ' : ''}if(C.drAl===2){C.p=(C.p+C.f)%F;C.drP2=(C.drP2+C.f*17)%F;var mr=SA_(C.drP2);var mo=(mr*C.drPe)|0;var cr2=SA_(C.p+mo);var sv=(cr2*18000)|0;var y=sv-C.drZ1;C.drZ1+=(y*C.drPet)>>16;o_=y}` : ''}
 ${drumAlgos.has(3) ? `${(drumAlgos.has(0)||drumAlgos.has(1)||drumAlgos.has(2)) ? 'else ' : ''}if(C.drAl===3){var nn=lfn();var noi=(nn&1)?16000:-16000;var ac=((noi*C.drPe)>>16)+((C.drZ1*C.drPet)>>16)-((C.drZ2*(F-(F>>3)))>>16);if(ac>32767)ac=32767;else if(ac<-32767)ac=-32767;C.drZ2=C.drZ1;C.drZ1=ac;o_=ac}` : ''}
@@ -3574,7 +3544,7 @@ else if(C.w===9){var src;if(C.ftSw===3){var fv=C.ftLf,fb=(fv^(fv>>1))&1;fv=((fv>
 else if(!C.w)s=h<C.u?.5:-.5
 else if(C.w===1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F
 else if(C.w===2)s=(h*2-F)/F
-else if(C.w===4){var ph=h&0xFFFF,x=ph<F/2?ph-F/4:(F*3/4)-ph;x<<=2;var ax=x<0?-x:x;s=x*(F-ax)/F*4/F}
+else if(C.w===4){var p4=((h%F)+F)%F,n4=p4>=F/2,t4=n4?(p4-F/2)*2:p4*2;if(t4>F)t4=F;var y4=t4*(F-t4)/F*4/F;s=n4?-y4:y4}
 else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
 var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F
 v+=s*en*C.v*C.rv/F/255/255;if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}out[i]=v>1?1:v<-1?-1:v}

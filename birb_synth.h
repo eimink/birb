@@ -326,8 +326,9 @@ typedef struct {
         struct {
             uint8_t  drum_type;        /* 0..5 */
             uint8_t  stage;            /* multi-phase envelope stage (CLAP) */
-            uint8_t  stage_tick;       /* tick counter within stage */
+            uint16_t stage_tick;       /* sample counter within stage (>255 for long bursts) */
             uint8_t  ttl_hi;           /* high byte of samples-until-end */
+            uint8_t  _pad_drum;        /* keep 32-bit alignment for phase2 */
             fixed16  phase2;           /* second oscillator phase (body / mod) */
             fixed16  pitch_env;        /* current pitch envelope value */
             fixed16  pitch_env_target; /* target pitch for exp decay */

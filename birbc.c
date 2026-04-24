@@ -1090,7 +1090,7 @@ static int write_js(const char *filename, birb_song *song) {
         uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "");
     if (uses_fm || uses_drum) {
         fprintf(f,
-            "function SA_(ph){var p=((ph%%F)+F)%%F;var x=p<F/2?p-F/4:(F*3/4)-p;x*=4;var ax=x<0?-x:x;return x*(F-ax)/F*4/F}\n");
+            "function SA_(ph){var p=((ph%%F)+F)%%F;var ng=p>=F/2,t=ng?(p-F/2)*2:p*2;if(t>F)t=F;var y=t*(F-t)/F*4/F;return ng?-y:y}\n");
     }
     if (uses_formant) {
         fprintf(f,
@@ -1122,7 +1122,7 @@ static int write_js(const char *filename, birb_song *song) {
             : "",
         uses_drum
             ? "\nif(j[0]===8){var dt=j[17]&7,al=dt===4?0:dt===5?2:dt,tn=j[18];if(tn>127)tn-=256;var dec=j[19],tone=j[20],snp=j[21],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;"
-              "if(al===0){C.drPe=df<<1;C.drPet=df>>3;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=64;tt=dec*200+1024;if(dt===4)tt*=2}"
+              "if(al===0){C.drPe=df<<1;C.drPet=df>>1;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}"
               "else if(al===1){C.f=df>0?df:24<<2;C.drMix=snp;C.drPe=F>>2;var tF=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*120+1024}"
               "else if(al===2){C.f=df>0?df:24<<5;C.drPe=tone*4*F/255|0;var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}"
               "else{C.drPe=F>>2;var tF2=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF2>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*160+2048}"
@@ -1190,7 +1190,7 @@ static int write_js(const char *filename, birb_song *song) {
         fprintf(f,
             "if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};");
         if (drum_algos & 1)
-            fprintf(f, "if(C.drAl===0){var gp=C.drPe-C.drPet;C.drPe-=(gp*C.drRate)>>20;C.p=(C.p+C.drPe)%%F;o_=SA_(C.p)*24000;if(C.drClk>0){var nn=lfn();var bit=(nn&1)?20000:-20000;o_+=(bit*C.drSnap*C.drClk)>>16;C.drClk--}}");
+            fprintf(f, "if(C.drAl===0){var gp=C.drPe-C.drPet;C.drPe-=(gp*C.drRate)>>20;C.p=(C.p+C.drPe)%%F;o_=SA_(C.p)*18000;if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}");
         if (drum_algos & 2)
             fprintf(f, "%sif(C.drAl===1){var nn=lfn();var noi=(nn&1)?14000:-14000;C.p=(C.p+C.f)%%F;var bd=SA_(C.p)*18000;var mx=(noi*(255-C.drMix)+bd*C.drMix)/255|0;var ac=((mx*C.drPe)>>16)+((C.drZ1*C.drPet)>>16)-((C.drZ2*(F-(F>>3)))>>16);if(ac>32767)ac=32767;else if(ac<-32767)ac=-32767;C.drZ2=C.drZ1;C.drZ1=ac;o_=ac}",
                 (drum_algos & 1) ? "else " : "");
@@ -1212,7 +1212,7 @@ static int write_js(const char *filename, birb_song *song) {
         "if(!C.w)s=h<C.u?.5:-.5\n"
         "else if(C.w==1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F\n"
         "else if(C.w<3)s=(h*2-F)/F\n"
-        "else if(C.w==4){var ph2=h&0xFFFF,xx=ph2<F/2?ph2-F/4:(F*3/4)-ph2;xx<<=2;var ax2=xx<0?-xx:xx;s=xx*(F-ax2)/F*4/F}\n"
+        "else if(C.w==4){var p4=((h%%F)+F)%%F,n4=p4>=F/2,t4=n4?(p4-F/2)*2:p4*2;if(t4>F)t4=F;var y4=t4*(F-t4)/F*4/F;s=n4?-y4:y4}\n"
         "else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}\n"
         "var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F\n"
         "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=v>1?1:v<-1?-1:v}\n"

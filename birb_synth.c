@@ -26,23 +26,20 @@ const fixed16 birb_note_freq[96] = {
  * Input: phase in fixed16, 0..FX_ONE = 0..2*pi
  * Output: fixed16 in range -FX_ONE..FX_ONE */
 fixed16 birb_sin_approx(fixed16 phase) {
-    /* normalize to 0..FX_ONE */
+    /* Parabolic sine approximation: y = 4t(1-t) with sign flip on second half.
+     * Returns fixed16 in ±FX_ONE. Peaks at phase=FX_ONE/4 (sine max),
+     * zero at phase=FX_ONE/2, trough at phase=3*FX_ONE/4.
+     * Previous version was broken in two ways: wrong phase→x mapping (gave
+     * double-frequency shape) and a spurious /FX_ONE at the end that
+     * attenuated the output by 65536×, making sine bodies silent and
+     * vibrato a no-op. */
     phase &= FX_MASK;
-    /* map to -FX_HALF..FX_HALF centered at quarter points */
-    fixed16 x;
-    if (phase < FX_HALF) {
-        /* first half: 0..0.5 maps to 0..1..0 */
-        x = phase - (FX_ONE / 4);
-    } else {
-        /* second half: 0.5..1.0 maps to 0..-1..0 */
-        x = (FX_ONE * 3 / 4) - phase;
-    }
-    /* x is now -0.25..0.25 in fixed point, scale to -1..1 */
-    x <<= 2;
-    /* parabolic approx: sin(x) ~ x * (3 - x*x) * 0.5  (rough, but good enough for vibrato) */
-    /* simplified: 4*x*(FX_ONE - abs(x)) / FX_ONE */
-    fixed16 ax = x < 0 ? -x : x;
-    return FX_MUL(x, FX_ONE - ax) * 4 / FX_ONE;
+    int negate = (phase >= FX_HALF);
+    fixed16 t = negate ? (phase - FX_HALF) : phase;  /* t in [0, FX_HALF] */
+    t <<= 1;                                          /* t in [0, FX_ONE] */
+    if (t > FX_ONE) t = FX_ONE;
+    fixed16 y = FX_MUL(t, FX_ONE - t) << 2;           /* peaks at FX_ONE */
+    return negate ? -y : y;
 }
 
 /* ---------- waveform generation ---------- */
@@ -220,7 +217,10 @@ static int16_t generate_drum(birb_channel *ch) {
 
     if (dt == 0 || dt == 4) {
         /* KICK / TOM — sine with exponential pitch decay from pitch_env to
-         * pitch_env_target. base_duty carries the per-sample decay rate. */
+         * pitch_env_target. base_duty carries the per-sample decay rate.
+         * The tight transient comes from a loud linear-decay noise burst
+         * (stage_tick samples long, snap-controlled amplitude) stacked on
+         * top of the pitched body. */
         fixed16 p = ch->u.drum.pitch_env;
         fixed16 t = ch->u.drum.pitch_env_target;
         int32_t gap = p - t;
@@ -231,12 +231,15 @@ static int16_t generate_drum(birb_channel *ch) {
         ch->phase += p;
         ch->phase &= FX_MASK;
         fixed16 s = birb_sin_approx(ch->phase);
-        out = ((int32_t)s * 24000) >> FX_SHIFT;
-        /* attack click — decays over stage_tick samples */
+        out = ((int32_t)s * 18000) >> FX_SHIFT;
+        /* Transient click: linear-decay noise burst. Peak amp scales with
+         * snap (0..255) × 128 → up to ~32k at snap=255. Burst length is
+         * stored in stage_tick (init ~384 samples ≈ 8.7 ms at 44.1 kHz). */
         if (ch->u.drum.stage_tick > 0) {
             uint16_t n = drum_noise(ch);
-            int32_t bit = (n & 1) ? 20000 : -20000;
-            int32_t click = (bit * ch->u.drum.stage * ch->u.drum.stage_tick) >> 16;
+            int32_t peak = (int32_t)ch->u.drum.stage * 128;
+            int32_t click_amp = peak * ch->u.drum.stage_tick / 384;
+            int32_t click = (n & 1) ? click_amp : -click_amp;
             out += click;
             ch->u.drum.stage_tick--;
         }
@@ -661,17 +664,17 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         /* Default lifetime in samples. Scaled by decay param. */
         uint32_t ttl;
         if (algo == 0) {
-            /* KICK / TOM */
-            /* Start freq derived from drum_tune note; end freq ~1/8 of that. */
-            fixed16 start_f = (dt == 4) ? dfreq : dfreq;   /* TOM defaults identical */
-            ch->u.drum.pitch_env = start_f << 1;            /* bump start up a bit */
-            ch->u.drum.pitch_env_target = start_f >> 3;     /* settle low */
+            /* KICK / TOM. Start freq is 2× dfreq for the initial thwack,
+             * body settles at dfreq/2 (≈ 65 Hz at C3, audible). Transient
+             * burst lives in stage_tick (384 samples ≈ 8.7 ms). */
+            fixed16 start_f = dfreq;
+            ch->u.drum.pitch_env = start_f << 1;
+            ch->u.drum.pitch_env_target = start_f >> 1;
             /* Decay rate: higher `tone` = faster pitch decay. */
             ch->base_duty = (fixed16)((uint32_t)inst->drum_tone * 256);
             if (ch->base_duty < 16) ch->base_duty = 16;
-            /* click mix */
             ch->u.drum.stage = inst->drum_snap;
-            ch->u.drum.stage_tick = 64;
+            ch->u.drum.stage_tick = 384;
             /* lifetime: decay param maps ~8..200ms at 44.1kHz */
             ttl = (uint32_t)inst->drum_decay * 200 + 1024;
             if (dt == 4) ttl = ttl * 2; /* TOM holds longer */
