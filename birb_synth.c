@@ -216,11 +216,11 @@ static int16_t generate_drum(birb_channel *ch) {
     int32_t out = 0;
 
     if (dt == 0 || dt == 4) {
-        /* KICK / TOM — sine with exponential pitch decay from pitch_env to
-         * pitch_env_target. base_duty carries the per-sample decay rate.
-         * The tight transient comes from a loud linear-decay noise burst
-         * (stage_tick samples long, snap-controlled amplitude) stacked on
-         * top of the pitched body. */
+        /* KICK / TOM — pitch-swept TRIANGLE body + noise click.
+         * Triangle packs harmonics (odd harmonics rolling off at 1/n²) so the
+         * body sounds meaty by itself, not thin like a sine. The pitch sweep
+         * from pitch_env → pitch_env_target gives the "thump" character;
+         * base_duty carries the decay rate. */
         fixed16 p = ch->u.drum.pitch_env;
         fixed16 t = ch->u.drum.pitch_env_target;
         int32_t gap = p - t;
@@ -230,11 +230,15 @@ static int16_t generate_drum(birb_channel *ch) {
         ch->u.drum.pitch_env = p;
         ch->phase += p;
         ch->phase &= FX_MASK;
-        fixed16 s = birb_sin_approx(ch->phase);
-        out = ((int32_t)s * 18000) >> FX_SHIFT;
-        /* Transient click: linear-decay noise burst. Peak amp scales with
-         * snap (0..255) × 128 → up to ~32k at snap=255. Burst length is
-         * stored in stage_tick (init ~384 samples ≈ 8.7 ms at 44.1 kHz). */
+        /* Triangle wave at ±28000, tracking ch->phase through its full cycle. */
+        int32_t tri;
+        if (ch->phase < FX_HALF) {
+            tri = ((int32_t)ch->phase * 4) - FX_ONE;      /* -FX_ONE → +FX_ONE */
+        } else {
+            tri = FX_ONE * 3 - ((int32_t)ch->phase * 4);  /* +FX_ONE → -FX_ONE */
+        }
+        out = ((int32_t)tri * 28000) >> FX_SHIFT;
+        /* Click: decaying noise burst, snap-controlled amplitude. */
         if (ch->u.drum.stage_tick > 0) {
             uint16_t n = drum_noise(ch);
             int32_t peak = (int32_t)ch->u.drum.stage * 128;
@@ -244,77 +248,78 @@ static int16_t generate_drum(birb_channel *ch) {
             ch->u.drum.stage_tick--;
         }
     } else if (dt == 1) {
-        /* SNARE — mixed noise + body sine through 2-pole resonator. */
+        /* SNARE — LOUD noise + short tonal body pulse. No biquad — the old
+         * resonator rang like a bell. stage holds the noise/body mix balance
+         * (0..255, high = body-heavy). stage_tick counts down a short body
+         * envelope for the drumhead "crack". */
         uint16_t n = drum_noise(ch);
-        int32_t noise = (n & 1) ? 14000 : -14000;
+        int32_t noise = (n & 1) ? 26000 : -26000;
         ch->phase += ch->freq;
         ch->phase &= FX_MASK;
-        fixed16 body = birb_sin_approx(ch->phase);
-        int32_t body_s = ((int32_t)body * 18000) >> FX_SHIFT;
-        int32_t mix = (noise * (255 - ch->u.drum.stage) + body_s * ch->u.drum.stage) / 255;
-        /* 2-pole resonant bandpass: y[n] = g*x[n] + p*y[n-1] - r*y[n-2]
-         * where g = pitch_env (gain), p = pitch_env_target (resonance pole),
-         * r is fixed near FX_ONE - small leak. */
-        fixed16 g = ch->u.drum.pitch_env;
-        fixed16 p = ch->u.drum.pitch_env_target;
-        int64_t acc = ((int64_t)mix * g) >> FX_SHIFT;
-        acc += ((int64_t)ch->u.drum.bq_z1[0] * p) >> FX_SHIFT;
-        /* r ~= 0.88, keeps the resonator peaked but decaying. */
-        acc -= ((int64_t)ch->u.drum.bq_z2[0] * (FX_ONE - (FX_ONE >> 3))) >> FX_SHIFT;
-        if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
-        ch->u.drum.bq_z2[0] = ch->u.drum.bq_z1[0];
-        ch->u.drum.bq_z1[0] = (int32_t)acc;
-        out = (int32_t)acc;
+        /* Square-ish body: phase < FX_HALF → +, else −. Harder edge than sine. */
+        int32_t body = (ch->phase < FX_HALF) ? 22000 : -22000;
+        /* Body fades fast via stage_tick envelope (~5 ms). */
+        if (ch->u.drum.stage_tick > 0) {
+            body = (body * ch->u.drum.stage_tick) / 256;
+            if (ch->u.drum.stage_tick > 1) ch->u.drum.stage_tick--;
+            else ch->u.drum.stage_tick = 0;
+        } else {
+            body = 0;
+        }
+        /* stage = body/noise mix: 0 = all noise, 255 = all body. */
+        int32_t mix_b = ch->u.drum.stage;
+        int32_t mix_n = 255 - mix_b;
+        out = (noise * mix_n + body * mix_b) / 255;
     } else if (dt == 2 || dt == 5) {
-        /* HAT / CRASH — 2-op FM at 1:17 ratio through one-pole highpass. */
-        ch->phase += ch->freq;
-        ch->phase &= FX_MASK;
-        fixed16 f2 = ch->freq * 17;
-        ch->u.drum.phase2 += f2;
-        ch->u.drum.phase2 &= FX_MASK;
-        fixed16 mod_raw = birb_sin_approx(ch->u.drum.phase2);
-        int32_t mi = ch->u.drum.pitch_env;
-        fixed16 mod_out = (fixed16)(((int64_t)mod_raw * mi) >> FX_SHIFT);
-        fixed16 car = birb_sin_approx(ch->phase + mod_out);
-        int32_t s = ((int32_t)car * 18000) >> FX_SHIFT;
-        /* one-pole HP: y = x - z, z += coeff*y */
+        /* HAT / CRASH — pure noise with a one-pole highpass. The old FM at
+         * 1:17 ratio made metallic tones; real hats are nearly all noise
+         * energy at high frequency. snap controls the HP cutoff (pitch_env_target
+         * from trigger), tone scales initial brightness (pitch_env). */
+        uint16_t n = drum_noise(ch);
+        int32_t src = (n & 1) ? 24000 : -24000;
+        /* One-pole HP: y = x - state, state += coeff*y */
         fixed16 hp = ch->u.drum.pitch_env_target;
-        int32_t y = s - ch->u.drum.bq_z1[0];
+        int32_t y = src - ch->u.drum.bq_z1[0];
         ch->u.drum.bq_z1[0] += (int32_t)(((int64_t)y * hp) >> FX_SHIFT);
+        out = y;
         if (dt == 5) {
-            /* CRASH ~8Hz amp LFO shimmer. phase2 doubles as LFO counter. */
+            /* CRASH amp shimmer via slow LFO. Uses ttl as phase. */
             fixed16 lfo = birb_sin_approx((fixed16)((uint32_t)ttl << 3));
             int32_t mul = FX_ONE + (lfo >> 1);
-            y = (int32_t)(((int64_t)y * mul) >> FX_SHIFT);
+            out = (int32_t)(((int64_t)out * mul) >> FX_SHIFT);
         }
-        out = y;
     } else {
-        /* CLAP — 3 quick noise bursts + a tail, each through a bandpass.
-         * stage_tick counts samples remaining in current stage (stored with
-         * burst length in bq_z2[1]; tail uses a longer run). */
-        uint16_t n = drum_noise(ch);
-        int32_t noise = (n & 1) ? 16000 : -16000;
-        fixed16 g = ch->u.drum.pitch_env;
-        fixed16 p = ch->u.drum.pitch_env_target;
-        int64_t acc = ((int64_t)noise * g) >> FX_SHIFT;
-        acc += ((int64_t)ch->u.drum.bq_z1[0] * p) >> FX_SHIFT;
-        /* r ~= 0.88, keeps the resonator peaked but decaying. */
-        acc -= ((int64_t)ch->u.drum.bq_z2[0] * (FX_ONE - (FX_ONE >> 3))) >> FX_SHIFT;
-        if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
-        ch->u.drum.bq_z2[0] = ch->u.drum.bq_z1[0];
-        ch->u.drum.bq_z1[0] = (int32_t)acc;
-        /* envelope: bursts during stage 0/1/2, tail during stage 3. */
-        if (ch->u.drum.stage_tick == 0 && ch->u.drum.stage < 3) {
-            ch->u.drum.stage++;
-            /* bq_z2[1] holds the burst length in samples */
-            ch->u.drum.stage_tick = (uint8_t)(ch->u.drum.bq_z2[1] & 0xFF);
-            if (ch->u.drum.stage == 3) ch->u.drum.stage_tick = 0xFF;
-        } else if (ch->u.drum.stage_tick) {
-            ch->u.drum.stage_tick--;
+        /* CLAP — 3 quick noise bursts + longer tail. Each burst is a bit of
+         * envelope-shaped noise; gaps between bursts give the "pa-ta-ta-tack"
+         * character. No biquad. stage runs 0..3, stage_tick counts samples
+         * within each stage. bq_z2[1] holds the per-burst length. */
+        int32_t amp = 0;
+        if (ch->u.drum.stage < 3) {
+            /* Triangle envelope within each burst: ramp up then down. */
+            int16_t burst_len = (int16_t)(ch->u.drum.bq_z2[1] & 0xFF);
+            if (burst_len < 8) burst_len = 8;
+            int32_t into = burst_len - (int16_t)ch->u.drum.stage_tick;
+            int32_t half = burst_len / 2;
+            int32_t env = (into < half) ? (into * 256 / half) : ((burst_len - into) * 256 / half);
+            if (env < 0) env = 0; if (env > 256) env = 256;
+            uint16_t n = drum_noise(ch);
+            int32_t src = (n & 1) ? 26000 : -26000;
+            amp = (src * env) >> 8;
+        } else {
+            /* Tail: low-level noise fading out over remaining ttl. */
+            uint16_t n = drum_noise(ch);
+            amp = (n & 1) ? 9000 : -9000;
         }
-        /* Active during bursts (stg 0..2) full; stage 3 tail at half amp. */
-        int32_t scale = (ch->u.drum.stage < 3) ? 255 : 128;
-        out = (int32_t)((acc * scale) >> 8);
+        /* Advance stage machine: bursts separated by their own length (gap). */
+        if (ch->u.drum.stage_tick > 0) {
+            ch->u.drum.stage_tick--;
+        } else if (ch->u.drum.stage < 3) {
+            ch->u.drum.stage++;
+            ch->u.drum.stage_tick = (ch->u.drum.stage == 3)
+                ? 0xFFFF
+                : (ch->u.drum.bq_z2[1] & 0xFF);
+        }
+        out = amp;
     }
 
     if (out > 32767) out = 32767; else if (out < -32767) out = -32767;
@@ -679,40 +684,29 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             ttl = (uint32_t)inst->drum_decay * 200 + 1024;
             if (dt == 4) ttl = ttl * 2; /* TOM holds longer */
         } else if (algo == 1) {
-            /* SNARE */
+            /* SNARE — noise + body pulse. stage = body/noise mix (snap),
+             * stage_tick = body envelope length in samples (tone-controlled,
+             * shorter = crisper "tok", longer = more "thud"). */
             ch->freq = dfreq > 0 ? dfreq : birb_note_freq[26]; /* D3 fallback */
-            /* body/noise mix in stage, 0..255 */
             ch->u.drum.stage = inst->drum_snap;
-            /* pitch_env = BP gain, pitch_env_target = pole position (cos(ω) × r) */
-            ch->u.drum.pitch_env = FX_ONE >> 2; /* g = 0.25 */
-            /* Pole at ~ tone/256 of Nyquist. */
-            fixed16 tone = (fixed16)((uint32_t)inst->drum_tone * (FX_ONE * 15 / 16) / 255);
-            ch->u.drum.pitch_env_target = (FX_ONE - (FX_ONE >> 5)) - tone / 2;
-            /* positive resonance pole */
-            if (ch->u.drum.pitch_env_target < 0) ch->u.drum.pitch_env_target = 0;
-            if (ch->u.drum.pitch_env_target > FX_ONE) ch->u.drum.pitch_env_target = FX_ONE - 1;
+            ch->u.drum.stage_tick = 64 + (inst->drum_tone >> 1); /* ~1.5..4 ms body */
             ttl = (uint32_t)inst->drum_decay * 120 + 1024;
         } else if (algo == 2) {
-            /* HAT / CRASH — op0 freq, op1 = op0*17 for irrational ratio. */
-            ch->freq = dfreq > 0 ? dfreq : birb_note_freq[62]; /* D6ish */
-            /* mod index from tone, HP coeff from snap */
-            ch->u.drum.pitch_env = (fixed16)((uint32_t)inst->drum_tone * (FX_ONE * 4) / 255);
+            /* HAT / CRASH — noise through one-pole HP. snap controls HP
+             * cutoff (higher = brighter hat), tone unused here but kept for
+             * future. pitch_env_target holds the HP coefficient. */
             fixed16 hp = (fixed16)((uint32_t)inst->drum_snap * (FX_ONE * 15 / 16) / 255);
             if (hp < FX_ONE / 16) hp = FX_ONE / 16;
             ch->u.drum.pitch_env_target = hp;
             ttl = (uint32_t)inst->drum_decay * 180 + 1024;
             if (dt == 5) ttl = 90000 + (uint32_t)inst->drum_decay * 400; /* CRASH ~2s+ */
         } else {
-            /* CLAP */
-            ch->u.drum.pitch_env = FX_ONE >> 2;
-            fixed16 tone = (fixed16)((uint32_t)inst->drum_tone * (FX_ONE * 15 / 16) / 255);
-            ch->u.drum.pitch_env_target = (FX_ONE - (FX_ONE >> 5)) - tone / 2;
-            if (ch->u.drum.pitch_env_target < 0) ch->u.drum.pitch_env_target = 0;
-            if (ch->u.drum.pitch_env_target > FX_ONE) ch->u.drum.pitch_env_target = FX_ONE - 1;
-            /* burst length stored in bq_z2[1]; snap controls burst spacing. */
-            ch->u.drum.bq_z2[1] = 20 + (inst->drum_snap >> 3);
+            /* CLAP — 3 quick bursts + tail. bq_z2[1] = per-burst length in
+             * samples; snap widens the burst spacing. stage starts at 0, runs
+             * through 0..3 as the stage counter fires. */
+            ch->u.drum.bq_z2[1] = 80 + (inst->drum_snap >> 1); /* ~2..5 ms per burst */
             ch->u.drum.stage = 0;
-            ch->u.drum.stage_tick = (uint8_t)ch->u.drum.bq_z2[1];
+            ch->u.drum.stage_tick = (uint16_t)ch->u.drum.bq_z2[1];
             ttl = (uint32_t)inst->drum_decay * 160 + 2048;
         }
         /* Clamp ttl to 24-bit. Drum TTL is a hard cap on audible lifetime;

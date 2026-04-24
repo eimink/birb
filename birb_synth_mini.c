@@ -124,14 +124,17 @@ static int16_t generate_drum(birb_channel *ch) {
     uint8_t dt = ch->u.drum.drum_type;
     int32_t out = 0;
     if (dt == 0) {
+        /* KICK: triangle body + pitch sweep + click */
         fixed16 p = ch->u.drum.pitch_env, t = ch->u.drum.pitch_env_target;
         int32_t gap = p - t;
         fixed16 rate = ch->base_duty; if (rate < 16) rate = 16;
         p -= (fixed16)(((int64_t)gap * rate) >> 20);
         ch->u.drum.pitch_env = p;
         ch->phase = (ch->phase + p) & FX_MASK;
-        fixed16 s = birb_sin_approx(ch->phase);
-        out = ((int32_t)s * 18000) >> FX_SHIFT;
+        int32_t tri = (ch->phase < FX_HALF)
+            ? ((int32_t)ch->phase * 4 - FX_ONE)
+            : (FX_ONE * 3 - (int32_t)ch->phase * 4);
+        out = ((int32_t)tri * 28000) >> FX_SHIFT;
         if (ch->u.drum.stage_tick) {
             uint16_t n = drum_noise_m(ch);
             int32_t peak = (int32_t)ch->u.drum.stage * 128;
@@ -139,36 +142,48 @@ static int16_t generate_drum(birb_channel *ch) {
             out += (n & 1) ? amp : -amp;
             ch->u.drum.stage_tick--;
         }
-    } else if (dt == 1 || dt == 3) {
-        /* SNARE / CLAP — unified BP-noise (mini CLAP is single-stage). */
+    } else if (dt == 1) {
+        /* SNARE: noise + short body pulse, no biquad */
         uint16_t n = drum_noise_m(ch);
-        int32_t noise = (n & 1) ? 14000 : -14000;
-        int32_t src = noise;
-        if (dt == 1) {
-            ch->phase = (ch->phase + ch->freq) & FX_MASK;
-            int32_t body = ((int32_t)birb_sin_approx(ch->phase) * 18000) >> FX_SHIFT;
-            src = (noise * (255 - ch->u.drum.stage) + body * ch->u.drum.stage) / 255;
-        }
-        fixed16 g = ch->u.drum.pitch_env, pp = ch->u.drum.pitch_env_target;
-        int64_t acc = ((int64_t)src * g) >> FX_SHIFT;
-        acc += ((int64_t)ch->u.drum.bq_z1[0] * pp) >> FX_SHIFT;
-        acc -= ((int64_t)ch->u.drum.bq_z2[0] * (FX_ONE - (FX_ONE >> 3))) >> FX_SHIFT;
-        if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
-        ch->u.drum.bq_z2[0] = ch->u.drum.bq_z1[0];
-        ch->u.drum.bq_z1[0] = (int32_t)acc;
-        out = (int32_t)acc;
-    } else {
-        /* HAT (CRASH routed here by the trigger — extended ttl does the rest). */
+        int32_t noise = (n & 1) ? 26000 : -26000;
         ch->phase = (ch->phase + ch->freq) & FX_MASK;
-        fixed16 f2 = ch->freq * 17;
-        ch->u.drum.phase2 = (ch->u.drum.phase2 + f2) & FX_MASK;
-        fixed16 mod_raw = birb_sin_approx(ch->u.drum.phase2);
-        int32_t mi = ch->u.drum.pitch_env;
-        fixed16 mod_out = (fixed16)(((int64_t)mod_raw * mi) >> FX_SHIFT);
-        fixed16 car = birb_sin_approx(ch->phase + mod_out);
-        int32_t s = ((int32_t)car * 18000) >> FX_SHIFT;
+        int32_t body = (ch->phase < FX_HALF) ? 22000 : -22000;
+        if (ch->u.drum.stage_tick) {
+            body = (body * (int32_t)ch->u.drum.stage_tick) / 256;
+            if (ch->u.drum.stage_tick > 1) ch->u.drum.stage_tick--;
+            else ch->u.drum.stage_tick = 0;
+        } else body = 0;
+        out = (noise * (255 - ch->u.drum.stage) + body * ch->u.drum.stage) / 255;
+    } else if (dt == 3) {
+        /* CLAP: 3 bursts + tail */
+        int32_t amp = 0;
+        if (ch->u.drum.stage < 3) {
+            int16_t burst_len = (int16_t)(ch->u.drum.bq_z2[1] & 0xFF);
+            if (burst_len < 8) burst_len = 8;
+            int32_t into = burst_len - (int16_t)ch->u.drum.stage_tick;
+            int32_t half = burst_len / 2;
+            int32_t env = (into < half) ? (into * 256 / half) : ((burst_len - into) * 256 / half);
+            if (env < 0) env = 0; if (env > 256) env = 256;
+            uint16_t n = drum_noise_m(ch);
+            amp = ((n & 1) ? 26000 : -26000) * env >> 8;
+        } else {
+            uint16_t n = drum_noise_m(ch);
+            amp = (n & 1) ? 9000 : -9000;
+        }
+        if (ch->u.drum.stage_tick > 0) ch->u.drum.stage_tick--;
+        else if (ch->u.drum.stage < 3) {
+            ch->u.drum.stage++;
+            ch->u.drum.stage_tick = (ch->u.drum.stage == 3)
+                ? 0xFFFF
+                : (ch->u.drum.bq_z2[1] & 0xFF);
+        }
+        out = amp;
+    } else {
+        /* HAT/CRASH: HP-filtered noise */
+        uint16_t n = drum_noise_m(ch);
+        int32_t src = (n & 1) ? 24000 : -24000;
         fixed16 hp = ch->u.drum.pitch_env_target;
-        int32_t y = s - ch->u.drum.bq_z1[0];
+        int32_t y = src - ch->u.drum.bq_z1[0];
         ch->u.drum.bq_z1[0] += (int32_t)(((int64_t)y * hp) >> FX_SHIFT);
         out = y;
     }
@@ -436,26 +451,18 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         } else if (algo == 1) {
             ch->freq = dfreq > 0 ? dfreq : base_freq[2] << 2;
             ch->u.drum.stage = inst->drum_snap;
-            ch->u.drum.pitch_env = FX_ONE >> 2;
-            fixed16 tone = (fixed16)((uint32_t)inst->drum_tone * (FX_ONE * 15 / 16) / 255);
-            ch->u.drum.pitch_env_target = (FX_ONE - (FX_ONE >> 5)) - tone / 2;
-            if (ch->u.drum.pitch_env_target < 0) ch->u.drum.pitch_env_target = 0;
-            if (ch->u.drum.pitch_env_target > FX_ONE) ch->u.drum.pitch_env_target = FX_ONE - 1;
+            ch->u.drum.stage_tick = 64 + (inst->drum_tone >> 1);
             ttl = (uint32_t)inst->drum_decay * 120 + 1024;
         } else if (algo == 2) {
-            ch->freq = dfreq > 0 ? dfreq : base_freq[2] << 5;
-            ch->u.drum.pitch_env = (fixed16)((uint32_t)inst->drum_tone * (FX_ONE * 4) / 255);
             fixed16 hp = (fixed16)((uint32_t)inst->drum_snap * (FX_ONE * 15 / 16) / 255);
             if (hp < FX_ONE / 16) hp = FX_ONE / 16;
             ch->u.drum.pitch_env_target = hp;
             ttl = (uint32_t)inst->drum_decay * 180 + 1024;
             if (dt == 5) ttl = 90000 + (uint32_t)inst->drum_decay * 400;
         } else {
-            ch->u.drum.pitch_env = FX_ONE >> 2;
-            fixed16 tone = (fixed16)((uint32_t)inst->drum_tone * (FX_ONE * 15 / 16) / 255);
-            ch->u.drum.pitch_env_target = (FX_ONE - (FX_ONE >> 5)) - tone / 2;
-            if (ch->u.drum.pitch_env_target < 0) ch->u.drum.pitch_env_target = 0;
-            if (ch->u.drum.pitch_env_target > FX_ONE) ch->u.drum.pitch_env_target = FX_ONE - 1;
+            ch->u.drum.bq_z2[1] = 80 + (inst->drum_snap >> 1);
+            ch->u.drum.stage = 0;
+            ch->u.drum.stage_tick = (uint16_t)ch->u.drum.bq_z2[1];
             ttl = (uint32_t)inst->drum_decay * 160 + 2048;
         }
         if (ttl > 0xFFFFFFu) ttl = 0xFFFFFFu;

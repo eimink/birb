@@ -2148,7 +2148,7 @@ function renderSong(patOnly, singlePat) {
         ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
             fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmi:0, fmFb:0, fmMi:64, fmNo:2, fmPrev:0,
             ksBuf:null, ksLen:0, ksPos:0, ksD:0,
-            drAl:0, drPhase2:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0,
+            drAl:0, drAlOrig:0, drPhase2:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0, drStage:0, drStageT:0, drBurstLen:0, drBodyT:0,
             fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtRc:0,
             fmtZ1:[0,0,0], fmtZ2:[0,0,0], fmtB0:[0,0,0], fmtA1:[0,0,0], fmtA2:[0,0,0]};
 
@@ -2241,40 +2241,37 @@ function renderSong(patOnly, singlePat) {
             let dfreq = nf(dn);
             let dec = j.drumDecay|0, tone = j.drumTone|0, snap = j.drumSnap|0;
             let ttl;
+            C.drAlOrig = dt;
             if (algo === 0) {
+                /* KICK/TOM */
                 C.drPe = dfreq << 1; C.drPet = dfreq >> 1;
                 C.drRate = Math.max(16, tone * 256);
                 C.drSnap = snap; C.drClick = 384;
                 ttl = dec * 200 + 1024;
                 if (dt === 4) ttl *= 2;
             } else if (algo === 1) {
+                /* SNARE */
                 C.f = dfreq > 0 ? dfreq : bf[2] << 2;
                 C.drMix = snap;
-                C.drPe = F >> 2;
-                let toneF = (tone * (F * 15 / 16 / 255))|0;
-                C.drPet = (F - (F >> 5)) - (toneF >> 1);
-                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                C.drBodyT = 64 + (tone >> 1);
                 ttl = dec * 120 + 1024;
             } else if (algo === 2) {
-                C.f = dfreq > 0 ? dfreq : bf[2] << 5;
-                C.drPe = (tone * 4 * F / 255)|0;
+                /* HAT / CRASH */
                 let hp = (snap * (F * 15 / 16 / 255))|0;
                 if (hp < F >> 4) hp = F >> 4;
                 C.drPet = hp;
+                C.drZ1 = 0;
                 ttl = dec * 180 + 1024;
                 if (dt === 5) ttl = 90000 + dec * 400;
             } else {
-                C.drPe = F >> 2;
-                let toneF = (tone * (F * 15 / 16 / 255))|0;
-                C.drPet = (F - (F >> 5)) - (toneF >> 1);
-                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                /* CLAP */
+                C.drBurstLen = 80 + (snap >> 1);
+                C.drStage = 0;
+                C.drStageT = C.drBurstLen;
                 ttl = dec * 160 + 2048;
             }
             if (ttl > 0xFFFFFF) ttl = 0xFFFFFF;
             C.drTtl = ttl;
-            /* drum amp envelope comes from the instrument's ADSR — typical
-             * drum preset: a=0 (peak via shortcut above), d tuned for punch,
-             * s=0 for snap, r unused. TTL caps audible lifetime. */
         }
         if (j.wave === 9) {
             let sw = j.fmtSrc !== undefined ? j.fmtSrc : 2;
@@ -2439,10 +2436,12 @@ function renderSong(patOnly, singlePat) {
                     let o = 0;
                     let lfshift = () => { let b = (C.drLf ^ (C.drLf >> 1)) & 1; C.drLf = ((C.drLf >> 1) | (b << 14)) & 0xFFFF; if (!C.drLf) C.drLf = 0x7FFF; return C.drLf; };
                     if (C.drAl === 0) {
+                        /* KICK/TOM: triangle body + pitch sweep + click */
                         let gap = C.drPe - C.drPet;
                         C.drPe -= ((gap * C.drRate) >> 20);
                         C.p = (C.p + C.drPe) % F;
-                        o = sinApprox(C.p) * 18000;
+                        let tri = C.p < F/2 ? (C.p * 4 - F) : (F * 3 - C.p * 4);
+                        o = ((tri * 28000 / F) | 0);
                         if (C.drClick > 0) {
                             let n = lfshift();
                             let peak = C.drSnap * 128;
@@ -2451,30 +2450,51 @@ function renderSong(patOnly, singlePat) {
                             C.drClick--;
                         }
                     } else if (C.drAl === 1) {
+                        /* SNARE: loud noise + short body pulse (no biquad) */
                         let n = lfshift();
-                        let noise = (n & 1) ? 14000 : -14000;
+                        let noise = (n & 1) ? 26000 : -26000;
                         C.p = (C.p + C.f) % F;
-                        let body = sinApprox(C.p) * 18000;
-                        let mix = ((noise * (255 - C.drMix) + body * C.drMix) / 255)|0;
-                        let acc = ((mix * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
-                        if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
-                        C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                        let body = C.p < F/2 ? 22000 : -22000;
+                        if (C.drBodyT > 0) {
+                            body = (body * C.drBodyT / 256) | 0;
+                            C.drBodyT--;
+                        } else body = 0;
+                        let mixB = C.drMix, mixN = 255 - mixB;
+                        o = ((noise * mixN + body * mixB) / 255) | 0;
                     } else if (C.drAl === 2) {
-                        C.p = (C.p + C.f) % F;
-                        C.drPhase2 = (C.drPhase2 + C.f * 17) % F;
-                        let modRaw = sinApprox(C.drPhase2);
-                        let modOut = (modRaw * C.drPe) | 0;
-                        let car = sinApprox(C.p + modOut);
-                        let sv = (car * 18000) | 0;
-                        let y = sv - C.drZ1;
+                        /* HAT/CRASH: HP-filtered noise */
+                        let n = lfshift();
+                        let src = (n & 1) ? 24000 : -24000;
+                        let y = src - C.drZ1;
                         C.drZ1 += (y * C.drPet) >> 16;
                         o = y;
+                        if (C.drAlOrig === 5) {
+                            /* CRASH shimmer */
+                            let lfo = sinApprox((C.drTtl << 3) & 0xFFFF);
+                            o = (o * (1 + lfo * 0.5)) | 0;
+                        }
                     } else {
-                        let n = lfshift();
-                        let noise = (n & 1) ? 16000 : -16000;
-                        let acc = ((noise * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
-                        if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
-                        C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                        /* CLAP: 3 quick bursts + noise tail. drStage counts 0..3. */
+                        let amp = 0;
+                        if (C.drStage < 3) {
+                            let burstLen = C.drBurstLen || 96;
+                            let into = burstLen - C.drStageT;
+                            let half = burstLen / 2;
+                            let env = (into < half) ? (into * 256 / half) : ((burstLen - into) * 256 / half);
+                            if (env < 0) env = 0; if (env > 256) env = 256;
+                            let n = lfshift();
+                            let src = (n & 1) ? 26000 : -26000;
+                            amp = (src * env) >> 8;
+                        } else {
+                            let n = lfshift();
+                            amp = (n & 1) ? 9000 : -9000;
+                        }
+                        if (C.drStageT > 0) C.drStageT--;
+                        else if (C.drStage < 3) {
+                            C.drStage++;
+                            C.drStageT = (C.drStage === 3) ? 0xFFFF : (C.drBurstLen || 96);
+                        }
+                        o = amp;
                     }
                     s = o / 32768;
                     if (s > 1) s = 1; else if (s < -1) s = -1;
@@ -2663,7 +2683,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             ch.push({p:0,f:0,b:0,w:0,n:0,u:this.F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
                 fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmNo:2,fmPrev:0,
                 ksBuf:new Int16Array(1024),ksLen:0,ksPos:0,ksD:0,
-                drAl:0,drPhase2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClick:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,
+                drAl:0,drAlOrig:0,drPhase2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClick:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0,
                 fmtSw:0,fmtLf:0x7FFF,fmtVa:0,fmtVb:0,fmtSp:0,fmtDir:1,fmtSS:0,fmtRc:0,
                 fmtZ1:[0,0,0],fmtZ2:[0,0,0],fmtB0:[0,0,0],fmtA1:[0,0,0],fmtA2:[0,0,0]});
         let spt = this.S*5/((this.song.bpm||125)*2)|0;
@@ -2754,6 +2774,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             let dfreq = this.nf(dn);
             let dec = j.drumDecay|0, tone = j.drumTone|0, snap = j.drumSnap|0;
             let ttl;
+            C.drAlOrig = dt;
             if (algo === 0) {
                 C.drPe = dfreq << 1; C.drPet = dfreq >> 1;
                 C.drRate = Math.max(16, tone * 256);
@@ -2763,29 +2784,23 @@ class BirbProcessor extends AudioWorkletProcessor {
             } else if (algo === 1) {
                 C.f = dfreq > 0 ? dfreq : this.bf[2] << 2;
                 C.drMix = snap;
-                C.drPe = F >> 2;
-                let toneF = (tone * (F * 15 / 16 / 255))|0;
-                C.drPet = (F - (F >> 5)) - (toneF >> 1);
-                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                C.drBodyT = 64 + (tone >> 1);
                 ttl = dec * 120 + 1024;
             } else if (algo === 2) {
-                C.f = dfreq > 0 ? dfreq : this.bf[2] << 5;
-                C.drPe = (tone * 4 * F / 255)|0;
                 let hp = (snap * (F * 15 / 16 / 255))|0;
                 if (hp < F >> 4) hp = F >> 4;
                 C.drPet = hp;
+                C.drZ1 = 0;
                 ttl = dec * 180 + 1024;
                 if (dt === 5) ttl = 90000 + dec * 400;
             } else {
-                C.drPe = F >> 2;
-                let toneF = (tone * (F * 15 / 16 / 255))|0;
-                C.drPet = (F - (F >> 5)) - (toneF >> 1);
-                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                C.drBurstLen = 80 + (snap >> 1);
+                C.drStage = 0;
+                C.drStageT = C.drBurstLen;
                 ttl = dec * 160 + 2048;
             }
             if (ttl > 0xFFFFFF) ttl = 0xFFFFFF;
             C.drTtl = ttl;
-            /* drum amp envelope comes from the instrument's ADSR (see inline trigNote comment) */
         }
         if (j.wave === 9) {
             let F = this.F;
@@ -2953,10 +2968,12 @@ class BirbProcessor extends AudioWorkletProcessor {
                         let b = (C.drLf ^ (C.drLf >> 1)) & 1;
                         let lfnext = () => { let bb = (C.drLf ^ (C.drLf >> 1)) & 1; C.drLf = ((C.drLf >> 1) | (bb << 14)) & 0xFFFF; if (!C.drLf) C.drLf = 0x7FFF; return C.drLf; };
                         if (C.drAl === 0) {
+                            /* KICK/TOM: triangle body + pitch sweep + click */
                             let gap = C.drPe - C.drPet;
                             C.drPe -= ((gap * C.drRate) >> 20);
                             C.p = (C.p + C.drPe) % F;
-                            o = this.sinApprox(C.p) * 18000;
+                            let tri = C.p < F/2 ? (C.p * 4 - F) : (F * 3 - C.p * 4);
+                            o = ((tri * 28000 / F) | 0);
                             if (C.drClick > 0) {
                                 let n = lfnext();
                                 let peak = C.drSnap * 128;
@@ -2965,30 +2982,48 @@ class BirbProcessor extends AudioWorkletProcessor {
                                 C.drClick--;
                             }
                         } else if (C.drAl === 1) {
+                            /* SNARE: noise + short body pulse */
                             let n = lfnext();
-                            let noise = (n & 1) ? 14000 : -14000;
+                            let noise = (n & 1) ? 26000 : -26000;
                             C.p = (C.p + C.f) % F;
-                            let body = this.sinApprox(C.p) * 18000;
-                            let mix = ((noise * (255 - C.drMix) + body * C.drMix) / 255)|0;
-                            let acc = ((mix * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
-                            if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
-                            C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                            let body = C.p < F/2 ? 22000 : -22000;
+                            if (C.drBodyT > 0) { body = (body * C.drBodyT / 256) | 0; C.drBodyT--; }
+                            else body = 0;
+                            let mixB = C.drMix, mixN = 255 - mixB;
+                            o = ((noise * mixN + body * mixB) / 255) | 0;
                         } else if (C.drAl === 2) {
-                            C.p = (C.p + C.f) % F;
-                            C.drPhase2 = (C.drPhase2 + C.f * 17) % F;
-                            let modRaw = this.sinApprox(C.drPhase2);
-                            let modOut = (modRaw * C.drPe) | 0;
-                            let car = this.sinApprox(C.p + modOut);
-                            let sv = (car * 18000) | 0;
-                            let y = sv - C.drZ1;
+                            /* HAT/CRASH: HP-filtered noise */
+                            let n = lfnext();
+                            let src = (n & 1) ? 24000 : -24000;
+                            let y = src - C.drZ1;
                             C.drZ1 += (y * C.drPet) >> 16;
                             o = y;
+                            if (C.drAlOrig === 5) {
+                                let lfo = this.sinApprox((C.drTtl << 3) & 0xFFFF);
+                                o = (o * (1 + lfo * 0.5)) | 0;
+                            }
                         } else {
-                            let n = lfnext();
-                            let noise = (n & 1) ? 16000 : -16000;
-                            let acc = ((noise * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
-                            if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
-                            C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                            /* CLAP: 3 bursts + tail */
+                            let amp = 0;
+                            if (C.drStage < 3) {
+                                let burstLen = C.drBurstLen || 96;
+                                let into = burstLen - C.drStageT;
+                                let half = burstLen / 2;
+                                let env = (into < half) ? (into * 256 / half) : ((burstLen - into) * 256 / half);
+                                if (env < 0) env = 0; if (env > 256) env = 256;
+                                let n = lfnext();
+                                let src = (n & 1) ? 26000 : -26000;
+                                amp = (src * env) >> 8;
+                            } else {
+                                let n = lfnext();
+                                amp = (n & 1) ? 9000 : -9000;
+                            }
+                            if (C.drStageT > 0) C.drStageT--;
+                            else if (C.drStage < 3) {
+                                C.drStage++;
+                                C.drStageT = (C.drStage === 3) ? 0xFFFF : (C.drBurstLen || 96);
+                            }
+                            o = amp;
                         }
                         s = o / 32768;
                         if (s > 1) s = 1; else if (s < -1) s = -1;
