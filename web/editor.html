@@ -5,12 +5,38 @@
 <title>birb tracker</title>
 <style>
 :root {
+    color-scheme: dark;
     --bg: #0c0c14; --bg1: #12121e; --bg2: #1a1a2e; --bg3: #222238;
     --fg: #c8c8d8; --dim: #555568; --acc: #88bbff; --acc2: #66ddaa;
     --row-hi: #1e1e32; --cursor: #88bbff30; --playing: #66ddaa40;
     --note-on: #aad4ff; --note-off: #ff8888; --fx-col: #ddaa66;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
+/* Dark-themed native form controls */
+input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    height: 14px; background: transparent; cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+    height: 3px; background: var(--bg3); border-radius: 2px;
+}
+input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 10px; height: 10px; margin-top: -4px;
+    background: var(--acc); border-radius: 50%; border: none;
+}
+input[type=range]:hover::-webkit-slider-thumb { background: var(--acc2); }
+input[type=range]::-moz-range-track { height: 3px; background: var(--bg3); border-radius: 2px; border: none; }
+input[type=range]::-moz-range-thumb { width: 10px; height: 10px; background: var(--acc); border-radius: 50%; border: none; }
+input[type=range]:hover::-moz-range-thumb { background: var(--acc2); }
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+    opacity: 0.35; filter: invert(0.8);
+}
+input[type=number]:hover::-webkit-inner-spin-button,
+input[type=number]:hover::-webkit-outer-spin-button { opacity: 0.9; }
+input[type=number] { -moz-appearance: textfield; }
+input[type=number]:focus { -moz-appearance: auto; }
 body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','Consolas',monospace; font-size: 12px; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
 .toolbar { display: flex; align-items: center; gap: 8px 12px; padding: 6px 12px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .toolbar .title { color: var(--acc); font-weight: bold; font-size: 14px; }
@@ -67,8 +93,27 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
 .inst-edit input[type=number] { width: 44px; text-align: center; }
 .inst-edit .val { color: var(--acc); font-size: 10px; width: 28px; text-align: right; }
 .adsr-canvas { width: 100%; height: 48px; background: var(--bg); border: 1px solid var(--bg3); margin-bottom: 6px; }
-/* -- Pattern editor -- */
+/* -- Main view tabs (PATTERN / INSTRUMENT) -- */
 .pattern-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.main-tab-bar { display: flex; background: var(--bg2); border-bottom: 1px solid var(--bg3); flex-shrink: 0; }
+.main-tab { padding: 6px 20px; background: transparent; color: var(--dim); border: none; border-right: 1px solid var(--bg3); cursor: pointer; font-family: inherit; font-size: 11px; letter-spacing: 1px; }
+.main-tab:hover { color: var(--fg); background: var(--bg3); }
+.main-tab.active { color: var(--acc); background: var(--bg1); border-bottom: 1px solid var(--acc); margin-bottom: -1px; }
+.main-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+.ie-header { padding: 10px 16px; background: var(--bg1); border-bottom: 1px solid var(--bg3); display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.ie-header .lbl { color: var(--dim); font-size: 11px; }
+.ie-header .idx { color: var(--acc); font-weight: bold; }
+.ie-header .nav-btn { background: var(--bg2); color: var(--acc); border: 1px solid var(--bg3); padding: 2px 8px; font-family: inherit; font-size: 11px; cursor: pointer; }
+.ie-header .nav-btn:hover { border-color: var(--acc); }
+.ie-body { flex: 1; overflow-y: auto; padding: 16px; display: grid; grid-template-columns: minmax(260px, 360px) minmax(260px, 1fr); gap: 16px; align-content: start; }
+.ie-col h4 { color: var(--acc); font-size: 11px; font-weight: normal; margin: 0 0 8px 0; letter-spacing: 1px; padding-bottom: 4px; border-bottom: 1px solid var(--bg3); }
+.ie-body .inst-edit { padding: 0; border-top: none; }
+.ie-body .inst-edit label { width: 48px; font-size: 11px; }
+.ie-body .inst-edit input[type=range] { width: 160px; }
+.ie-body .inst-edit .val { font-size: 11px; width: 36px; }
+.ie-body .inst-edit select { font-size: 11px; padding: 2px 6px; }
+.ie-body .adsr-canvas { height: 72px; }
+.ie-empty { grid-column: 1 / -1; text-align: center; color: var(--dim); padding: 40px; font-style: italic; }
 .order-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .pat-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .order-bar .lbl, .pat-bar .lbl { color: var(--acc); font-size: 11px; font-weight: bold; margin-right: 4px; }
@@ -175,23 +220,55 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
             </div>
             <div class="samples-list" id="samples-list"></div>
         </div>
-        <div class="inst-edit">
-            <canvas class="adsr-canvas" id="adsr-canvas" height="48"></canvas>
-            <div class="row"><label>Wave</label>
-                <select id="ie-wave" onchange="onWaveChange()"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option><option value="5">sample</option><option value="6">fm</option><option value="7">ks</option><option value="8">drum</option><option value="9">formant</option></select>
+    </div>
+
+    <div class="pattern-area">
+        <div class="main-tab-bar">
+            <button class="main-tab active" id="main-tab-pat" onclick="setMainTab('pattern')">PATTERN</button>
+            <button class="main-tab" id="main-tab-ins" onclick="setMainTab('instrument')">INSTRUMENT</button>
+        </div>
+
+        <div class="main-view" id="view-pattern">
+            <div class="order-bar" id="order-bar"></div>
+            <div class="pat-bar" id="pat-bar"></div>
+            <div class="pattern-grid" id="grid" tabindex="0"></div>
+        </div>
+
+        <div class="main-view" id="view-instrument" style="display:none">
+            <div class="ie-header">
+                <span class="lbl">Editing</span>
+                <span class="idx" id="ie-hdr-idx">—</span>
+                <span id="ie-hdr-name" style="color:var(--fg)"></span>
+                <button class="nav-btn" onclick="editPrevInstrument()" title="Previous instrument">&#9664;</button>
+                <button class="nav-btn" onclick="editNextInstrument()" title="Next instrument">&#9654;</button>
+                <span style="flex:1"></span>
+                <button class="nav-btn" onclick="setMainTab('pattern')" title="Back to pattern">Esc</button>
             </div>
-            <div class="row"><label>Duty</label>
-                <select id="ie-duty"><option value="0">12.5%</option><option value="1">25%</option><option value="2">50%</option><option value="3">75%</option></select>
-            </div>
-            <div class="row"><label>A</label><input type="range" id="ie-a" min="0" max="255" value="0"><span class="val" id="ie-a-v">0</span></div>
-            <div class="row"><label>D</label><input type="range" id="ie-d" min="0" max="255" value="0"><span class="val" id="ie-d-v">0</span></div>
-            <div class="row"><label>S</label><input type="range" id="ie-s" min="0" max="255" value="0"><span class="val" id="ie-s-v">0</span></div>
-            <div class="row"><label>R</label><input type="range" id="ie-r" min="0" max="255" value="0"><span class="val" id="ie-r-v">0</span></div>
-            <div class="row"><label>Vol</label><input type="range" id="ie-vol" min="0" max="255" value="255"><span class="val" id="ie-vol-v">255</span></div>
-            <div class="row"><label>PE</label><input type="number" id="ie-pe" value="0" min="-128" max="127" style="width:44px"><label>Len</label><input type="number" id="ie-pel" value="0" min="0" max="255" style="width:44px"></div>
-            <div class="row"><label>Arp</label><input type="number" id="ie-arp1" value="0" min="0" max="15" style="width:36px"><input type="number" id="ie-arp2" value="0" min="0" max="15" style="width:36px"></div>
-            <div class="row"><label>Name</label><input type="text" id="ie-name" value="" placeholder="unnamed" style="width:120px" oninput="saveInstName()"></div>
-            <div id="ie-fm-panel" style="display:none;border-top:1px solid var(--bg3);margin-top:6px;padding-top:6px">
+            <div class="ie-body" id="ie-body">
+                <div class="ie-col">
+                    <h4>GENERAL</h4>
+                    <div class="inst-edit" style="padding:0">
+                        <canvas class="adsr-canvas" id="adsr-canvas"></canvas>
+                        <div class="row"><label>Wave</label>
+                            <select id="ie-wave" onchange="onWaveChange()"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option><option value="5">sample</option><option value="6">fm</option><option value="7">ks</option><option value="8">drum</option><option value="9">formant</option></select>
+                        </div>
+                        <div class="row"><label>Duty</label>
+                            <select id="ie-duty"><option value="0">12.5%</option><option value="1">25%</option><option value="2">50%</option><option value="3">75%</option></select>
+                        </div>
+                        <div class="row"><label>A</label><input type="range" id="ie-a" min="0" max="255" value="0"><span class="val" id="ie-a-v">0</span></div>
+                        <div class="row"><label>D</label><input type="range" id="ie-d" min="0" max="255" value="0"><span class="val" id="ie-d-v">0</span></div>
+                        <div class="row"><label>S</label><input type="range" id="ie-s" min="0" max="255" value="0"><span class="val" id="ie-s-v">0</span></div>
+                        <div class="row"><label>R</label><input type="range" id="ie-r" min="0" max="255" value="0"><span class="val" id="ie-r-v">0</span></div>
+                        <div class="row"><label>Vol</label><input type="range" id="ie-vol" min="0" max="255" value="255"><span class="val" id="ie-vol-v">255</span></div>
+                        <div class="row"><label>PE</label><input type="number" id="ie-pe" value="0" min="-128" max="127" style="width:44px"><label>Len</label><input type="number" id="ie-pel" value="0" min="0" max="255" style="width:44px"></div>
+                        <div class="row"><label>Arp</label><input type="number" id="ie-arp1" value="0" min="0" max="15" style="width:36px"><input type="number" id="ie-arp2" value="0" min="0" max="15" style="width:36px"></div>
+                        <div class="row"><label>Name</label><input type="text" id="ie-name" value="" placeholder="unnamed" style="width:140px" oninput="saveInstName()"></div>
+                    </div>
+                </div>
+                <div class="ie-col">
+                    <h4 id="ie-ext-title">EXTENDED</h4>
+                    <div class="inst-edit" style="padding:0">
+            <div id="ie-fm-panel" style="display:none">
                 <div class="row"><label>Preset</label>
                     <select id="ie-fm-preset" onchange="applyFmPreset(this.value)" style="width:120px">
                         <option value="">(none)</option>
@@ -298,13 +375,10 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                     <input type="file" id="ie-sample-upload" accept=".wav,audio/wav" style="display:none" onchange="uploadSampleFile(this)">
                 </div>
             </div>
+                    </div>
+                </div>
+            </div>
         </div>
-    </div>
-
-    <div class="pattern-area">
-        <div class="order-bar" id="order-bar"></div>
-        <div class="pat-bar" id="pat-bar"></div>
-        <div class="pattern-grid" id="grid" tabindex="0"></div>
     </div>
 
     <div class="info-panel" id="info-panel">
@@ -991,16 +1065,13 @@ function selectTab(name) {
     let smpBtn = document.getElementById('tab-smpl-btn');
     let insPanel = document.getElementById('tab-inst');
     let smpPanel = document.getElementById('tab-smpl');
-    let instEdit = document.querySelector('.inst-edit');
     if (name === 'smpl') {
         smpBtn.classList.add('active'); insBtn.classList.remove('active');
         smpPanel.style.display = ''; insPanel.style.display = 'none';
-        if (instEdit) instEdit.style.display = 'none';
         renderSamplesList();
     } else {
         insBtn.classList.add('active'); smpBtn.classList.remove('active');
         insPanel.style.display = ''; smpPanel.style.display = 'none';
-        if (instEdit) instEdit.style.display = '';
     }
 }
 
@@ -1653,6 +1724,63 @@ function loadInstEditor() {
     updateKsPanelVisibility();
     updateDrumPanelVisibility();
     updateFormantPanelVisibility();
+    updateInstHeader();
+}
+function updateInstHeader() {
+    let ins = song.instruments[editInst];
+    let idxEl = document.getElementById('ie-hdr-idx');
+    let nameEl = document.getElementById('ie-hdr-name');
+    let extEl = document.getElementById('ie-ext-title');
+    if (!idxEl) return;
+    if (!ins) {
+        idxEl.textContent = '—'; nameEl.textContent = '';
+        if (extEl) extEl.textContent = 'EXTENDED';
+        return;
+    }
+    idxEl.textContent = (editInst + 1).toString(16).toUpperCase().padStart(2, '0');
+    nameEl.textContent = ins.name || '(unnamed)';
+    if (extEl) {
+        let titles = ['PULSE','TRIANGLE','SAWTOOTH','NOISE','SINE','SAMPLE','FM','KARPLUS-STRONG','DRUM','FORMANT'];
+        extEl.textContent = titles[ins.wave] || 'EXTENDED';
+    }
+}
+function setMainTab(name) {
+    let vp = document.getElementById('view-pattern');
+    let vi = document.getElementById('view-instrument');
+    let bp = document.getElementById('main-tab-pat');
+    let bi = document.getElementById('main-tab-ins');
+    if (!vp || !vi) return;
+    let toIns = (name === 'instrument');
+    vp.style.display = toIns ? 'none' : '';
+    vi.style.display = toIns ? '' : 'none';
+    bp.classList.toggle('active', !toIns);
+    bi.classList.toggle('active', toIns);
+    if (toIns) {
+        updateInstHeader();
+        // refresh subpanels in case current instrument changed while on pattern tab
+        updateSamplePanelVisibility();
+        updateFmPanelVisibility();
+        updateKsPanelVisibility();
+        updateDrumPanelVisibility();
+        updateFormantPanelVisibility();
+    } else {
+        let g = document.getElementById('grid');
+        if (g) g.focus();
+    }
+}
+function editPrevInstrument() {
+    if (!song.instruments.length) return;
+    editInst = (editInst - 1 + song.instruments.length) % song.instruments.length;
+    curInst = editInst;
+    renderInstList();
+    loadInstEditor();
+}
+function editNextInstrument() {
+    if (!song.instruments.length) return;
+    editInst = (editInst + 1) % song.instruments.length;
+    curInst = editInst;
+    renderInstList();
+    loadInstEditor();
 }
 function updateInstValues() {
     for (let k of ['a','d','s','r','vol']) {
@@ -1741,8 +1869,8 @@ function saveInstFromEditor() {
     markDirty();
 }
 
-// Bind inst editor inputs
-document.querySelector('.inst-edit').addEventListener('input', saveInstFromEditor);
+// Bind inst editor inputs — ie-body wraps both GENERAL and EXTENDED .inst-edit columns
+document.getElementById('ie-body').addEventListener('input', saveInstFromEditor);
 
 /* ADSR visualization */
 function drawADSR() {
@@ -1933,6 +2061,24 @@ function handleKey(e) {
 }
 
 document.getElementById('grid').addEventListener('keydown', handleKey);
+
+// Global: F2 switches to instrument editor, Esc returns to pattern view.
+// Skip when user is typing in an input/textarea/contenteditable.
+document.addEventListener('keydown', function(e) {
+    let t = e.target;
+    let typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    if (e.key === 'F2' && !typing) {
+        e.preventDefault();
+        let vi = document.getElementById('view-instrument');
+        setMainTab(vi && vi.style.display !== 'none' ? 'pattern' : 'instrument');
+    } else if (e.key === 'Escape' && !typing) {
+        let vi = document.getElementById('view-instrument');
+        if (vi && vi.style.display !== 'none') {
+            e.preventDefault();
+            setMainTab('pattern');
+        }
+    }
+});
 
 // Click to position cursor
 document.getElementById('grid').addEventListener('click', function(e) {
