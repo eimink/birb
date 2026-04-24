@@ -252,6 +252,13 @@ static int parse_instrument(const char *line, birb_song *song) {
         inst->drum_decay = 180;
         inst->drum_tone = 128;
         inst->drum_snap = 128;
+        /* Default amp envelope for drums: instant attack, quick decay to
+         * zero. Explicit adsr=... in text overrides. Without this drums
+         * default to ADSR=0,0,0,0 which makes them silent. */
+        inst->envelope.attack  = 0;
+        inst->envelope.decay   = 20;
+        inst->envelope.sustain = 0;
+        inst->envelope.release = 8;
     } else if (is_formant) {
         inst->synth_type = SYNTH_FORMANT;
         inst->waveform = WAVE_SAWTOOTH; /* placeholder */
@@ -1103,7 +1110,8 @@ static int write_js(const char *filename, birb_song *song) {
     fprintf(f,
         "function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]\n"
         "C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]\n"
-        "C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];C.t=1;C.e=0\n"
+        "C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];\n"
+        "if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}\n"
         "C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0\n"
         "if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}%s%s%s%s}\n",
         uses_fm
@@ -1118,7 +1126,7 @@ static int write_js(const char *filename, birb_song *song) {
               "else if(al===1){C.f=df>0?df:24<<2;C.drMix=snp;C.drPe=F>>2;var tF=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*120+1024}"
               "else if(al===2){C.f=df>0?df:24<<5;C.drPe=tone*4*F/255|0;var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}"
               "else{C.drPe=F>>2;var tF2=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF2>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*160+2048}"
-              "if(tt>0xFFFFFF)tt=0xFFFFFF;C.drTtl=tt;C.e=F;C.t=4;C.r=Math.max(1,dec>>3)}"
+              "if(tt>0xFFFFFF)tt=0xFFFFFF;C.drTtl=tt}"
             : "",
         formant_trigger
     );

@@ -557,8 +557,16 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
     ch->synth_type = inst->synth_type;
     ch->base_duty = inst->duty;
     ch->adsr = inst->envelope;
-    ch->env_stage = ENV_ATTACK;
-    ch->env_level = 0;
+    /* Attack=0 means the note must ring out at full volume on tick 0 — start
+     * in DECAY at peak level rather than ramping from 0 over the first tick.
+     * Matters most for drums (a=0 is the default there). */
+    if (ch->adsr.attack == 0) {
+        ch->env_level = FX_ONE;
+        ch->env_stage = ENV_DECAY;
+    } else {
+        ch->env_level = 0;
+        ch->env_stage = ENV_ATTACK;
+    }
     ch->pitch_env = inst->pitch_env;
     ch->pitch_env_ticks = inst->pitch_env_len;
     ch->arp_note1 = inst->arp_note1;
@@ -704,20 +712,12 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             ch->u.drum.stage_tick = (uint8_t)ch->u.drum.bq_z2[1];
             ttl = (uint32_t)inst->drum_decay * 160 + 2048;
         }
-        /* Clamp ttl to 24-bit. */
+        /* Clamp ttl to 24-bit. Drum TTL is a hard cap on audible lifetime;
+         * the instrument's ADSR shapes amplitude within that window. Typical
+         * drum ADSR: a=0, d tuned for punch, s=0, r unused (no note-off). */
         if (ttl > 0xFFFFFFu) ttl = 0xFFFFFFu;
         ch->u.drum.ttl_hi = (uint8_t)(ttl >> 16);
         ch->u.drum.ttl_lo = (uint16_t)(ttl & 0xFFFF);
-        /* Force a fast-decay envelope so the drum body fades over its ttl.
-         * Release is scaled from drum_decay so drum sustains match ttl roughly.
-         * adsr.attack=0 → instant on, decay=0 (goes to 0 sustain), release fires
-         * only after note-off which won't come — so we just start in ENV_RELEASE
-         * with level=FX_ONE and a decay rate proportional to drum_decay. */
-        ch->env_level = FX_ONE;
-        ch->env_stage = ENV_RELEASE;
-        /* Release time in ticks ≈ drum_decay/8: 0 → quick, 255 → ~32 ticks. */
-        ch->adsr.release = (uint8_t)(inst->drum_decay >> 3);
-        if (ch->adsr.release < 1) ch->adsr.release = 1;
     }
 #endif
 #ifndef BIRB_NO_FORMANT

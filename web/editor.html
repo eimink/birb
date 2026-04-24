@@ -518,18 +518,20 @@ const FORMANT_PRESETS = {
     sweep:  { src:2, duty:2, va:0, vb:3, sweep:64, res:128, vol:160 },
 };
 const VOWEL_NAMES = ['A','E','I','O','U'];
-/* Each preset sets drumType + Tune/Decay/Tone/Snap and volume.
- * These mirror the params described in birb2_plan.md phase 4. */
+/* Each preset sets drumType + Tune/Decay/Tone/Snap + amplitude ADSR + volume.
+ * Drum amp envelope uses the instrument's ADSR — typical shape is
+ * a=0 (instant peak), d tuned for punch, s=0 (fades to silence), r unused.
+ * drumDecay still controls pitch-env rate + audible TTL. */
 const DRUM_PRESETS = {
-    '808kick':   { drumType:0, tune:-12, decay:220, tone:60,  snap:40,  vol:255 },
-    '909kick':   { drumType:0, tune:-8,  decay:170, tone:120, snap:180, vol:255 },
-    'snare':     { drumType:1, tune:-12, decay:140, tone:160, snap:180, vol:220 },
-    'rim':       { drumType:1, tune:0,   decay:40,  tone:210, snap:40,  vol:200 },
-    'closedhat': { drumType:2, tune:36,  decay:30,  tone:100, snap:200, vol:160 },
-    'openhat':   { drumType:2, tune:36,  decay:140, tone:120, snap:180, vol:170 },
-    'clap':      { drumType:3, tune:0,   decay:140, tone:150, snap:140, vol:220 },
-    'crash':     { drumType:5, tune:24,  decay:200, tone:140, snap:160, vol:180 },
-    'ride':      { drumType:2, tune:24,  decay:200, tone:80,  snap:120, vol:150 },
+    '808kick':   { drumType:0, tune:-12, decay:220, tone:60,  snap:40,  vol:255, a:0, d:40, s:0, r:8 },
+    '909kick':   { drumType:0, tune:-8,  decay:170, tone:120, snap:180, vol:255, a:0, d:12, s:0, r:8 },
+    'snare':     { drumType:1, tune:-12, decay:140, tone:160, snap:180, vol:220, a:0, d:18, s:0, r:8 },
+    'rim':       { drumType:1, tune:0,   decay:40,  tone:210, snap:40,  vol:200, a:0, d:4,  s:0, r:8 },
+    'closedhat': { drumType:2, tune:36,  decay:30,  tone:100, snap:200, vol:160, a:0, d:6,  s:0, r:8 },
+    'openhat':   { drumType:2, tune:36,  decay:140, tone:120, snap:180, vol:170, a:0, d:32, s:0, r:8 },
+    'clap':      { drumType:3, tune:0,   decay:140, tone:150, snap:140, vol:220, a:0, d:20, s:0, r:8 },
+    'crash':     { drumType:5, tune:24,  decay:200, tone:140, snap:160, vol:180, a:0, d:96, s:0, r:8 },
+    'ride':      { drumType:2, tune:24,  decay:200, tone:80,  snap:120, vol:150, a:0, d:64, s:0, r:8 },
 };
 /* Synth type selector on the instrument: 0 = basic (wave 0..4), 1 = sample (wave 5), 2 = FM (wave 6).
  * The editor keeps storing `wave` as the UI dropdown value (0..6); buildJS/worklet derive synth_type from it. */
@@ -1114,6 +1116,12 @@ function onWaveChange() {
         ins.drumDecay = DRUM_DEFAULTS.decay;
         ins.drumTone = DRUM_DEFAULTS.tone;
         ins.drumSnap = DRUM_DEFAULTS.snap;
+        /* Drums want a short AD envelope to zero for punch — switch from
+         * the default a=0,d=8,s=180,r=8 (which would sustain indefinitely)
+         * only if the instrument is still at that default. */
+        if (ins.a == 0 && ins.d == 8 && ins.s == 180 && ins.r == 8) {
+            ins.d = 20; ins.s = 0; ins.r = 8;
+        }
     }
     /* Ensure formant data exists when switching to formant */
     if (ins && wv === 9 && ins.fmtSrc === undefined) {
@@ -1207,6 +1215,12 @@ function applyDrumPreset(name) {
     ins.drumTone = p.tone;
     ins.drumSnap = p.snap;
     ins.vol = p.vol;
+    /* Presets also set amplitude ADSR — drums use the instrument envelope
+     * for their amp shape, so e.g. 909 Kick needs d≈12,s=0 to sound punchy. */
+    if (p.a !== undefined) ins.a = p.a;
+    if (p.d !== undefined) ins.d = p.d;
+    if (p.s !== undefined) ins.s = p.s;
+    if (p.r !== undefined) ins.r = p.r;
     document.getElementById('ie-wave').value = 8;
     markDirty();
     updateDrumPanelVisibility();
@@ -2171,7 +2185,9 @@ function renderSong(patOnly, singlePat) {
     function trigNote(C, n, ii) {
         C.i = ii; let j = song.instruments[ii], semi = n - 2;
         C.n = semi; C.b = nf(semi); C.f = C.b; C.p = 0; C.w = j.wave; C.u = dv[j.duty & 3];
-        C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r; C.t = 1; C.e = 0;
+        C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
+        /* a=0 → start at peak in DECAY stage so the first tick isn't silent */
+        if (C.a == 0) { C.e = F; C.t = 2; } else { C.e = 0; C.t = 1; }
         C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2;
         C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255; C.k = 0; C.l = 0; C.ps = 0;
         if (j.wave === 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
@@ -2255,8 +2271,9 @@ function renderSong(patOnly, singlePat) {
             }
             if (ttl > 0xFFFFFF) ttl = 0xFFFFFF;
             C.drTtl = ttl;
-            C.e = F; C.t = 4; /* start in release for auto-fade */
-            C.r = Math.max(1, dec >> 3);
+            /* drum amp envelope comes from the instrument's ADSR — typical
+             * drum preset: a=0 (peak via shortcut above), d tuned for punch,
+             * s=0 for snap, r unused. TTL caps audible lifetime. */
         }
         if (j.wave === 9) {
             let sw = j.fmtSrc !== undefined ? j.fmtSrc : 2;
@@ -2698,7 +2715,9 @@ class BirbProcessor extends AudioWorkletProcessor {
         let semi = n - 2;
         C.i = ii; C.n = semi; C.b = this.nf(semi); C.f = C.b; C.p = 0;
         C.w = j.wave; C.u = this.dv[j.duty & 3];
-        C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r; C.t = 1; C.e = 0;
+        C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
+        /* a=0 → start at peak in DECAY stage (no silent first tick) */
+        if (C.a == 0) { C.e = this.F; C.t = 2; } else { C.e = 0; C.t = 1; }
         C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2;
         C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255;
         C.k = 0; C.l = 0; C.ps = 0;
@@ -2781,8 +2800,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             }
             if (ttl > 0xFFFFFF) ttl = 0xFFFFFF;
             C.drTtl = ttl;
-            C.e = F; C.t = 4;
-            C.r = Math.max(1, dec >> 3);
+            /* drum amp envelope comes from the instrument's ADSR (see inline trigNote comment) */
         }
         if (j.wave === 9) {
             let F = this.F;
@@ -2820,9 +2838,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             }
             if (C.i < ni) {
                 let j = this.song.instruments[C.i];
-                /* Live ADSR tweak during playback — but drums own their C.r
-                 * (set from drumDecay in trigNote). Don't clobber it. */
-                if (C.w !== 8) { C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r; }
+                C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
                 C.v = j.vol !== undefined ? j.vol : 255;
             }
             if (rv) C.rv = rv;
@@ -2866,8 +2882,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             let C = st.ch[c];
             if (C.i < ni) {
                 let j = this.song.instruments[C.i];
-                /* Drums carry their own release rate (drumDecay >> 3) — don't clobber. */
-                if (C.w !== 8) { C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r; }
+                C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
                 C.v = j.vol !== undefined ? j.vol : 255;
             }
             if (C.nd && st.ct === C.nd) { if (C.di < ni) this.trigNote(C, C.dn, C.di); C.nd = 0; }

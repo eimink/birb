@@ -342,8 +342,13 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
     ch->synth_type = inst->synth_type;
     ch->base_duty = inst->duty;
     ch->adsr = inst->envelope;
-    ch->env_stage = ENV_ATTACK;
-    ch->env_level = 0;
+    if (ch->adsr.attack == 0) {
+        ch->env_level = FX_ONE;
+        ch->env_stage = ENV_DECAY;
+    } else {
+        ch->env_level = 0;
+        ch->env_stage = ENV_ATTACK;
+    }
     ch->pitch_env = inst->pitch_env;
     ch->pitch_env_ticks = inst->pitch_env_len;
     ch->arp_note1 = inst->arp_note1;
@@ -453,10 +458,6 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         if (ttl > 0xFFFFFFu) ttl = 0xFFFFFFu;
         ch->u.drum.ttl_hi = (uint8_t)(ttl >> 16);
         ch->u.drum.ttl_lo = (uint16_t)(ttl & 0xFFFF);
-        ch->env_level = FX_ONE;
-        ch->env_stage = ENV_RELEASE;
-        ch->adsr.release = (uint8_t)(inst->drum_decay >> 3);
-        if (ch->adsr.release < 1) ch->adsr.release = 1;
     }
 #endif
 #ifndef BIRB_NO_FORMANT
