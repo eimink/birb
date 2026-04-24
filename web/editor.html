@@ -372,14 +372,24 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
         </table>
         <p class="desc">Auto-fills when entering a note. Use for fades and swells.</p>
 
-        <h3>Waveforms</h3>
+        <h3>Synth types</h3>
+        <p class="desc">Pick from the <strong style="color:var(--fg)">Wave</strong> dropdown on each instrument. Each type reveals its own parameter panel.</p>
         <table>
-            <tr><td>Pulse</td><td>Classic square, variable duty cycle</td></tr>
+            <tr><td>Pulse</td><td>Classic square, variable duty (12.5/25/50/75%)</td></tr>
             <tr><td>Triangle</td><td>Smooth, good for bass and kicks</td></tr>
             <tr><td>Sawtooth</td><td>Bright, aggressive</td></tr>
             <tr><td>Noise</td><td>LFSR noise — snares, hats</td></tr>
             <tr><td>Sine</td><td>Pure tone</td></tr>
+            <tr><td>Sample</td><td>ADPCM WAV playback (load in SAMPLES tab)</td></tr>
+            <tr><td>FM</td><td>2-op carrier+modulator. Ratio/level/ADSR per op, feedback, mod index. Presets: Bass, Bell, Organ, Brass</td></tr>
+            <tr><td>KS</td><td>Karplus-Strong pluck. One damping knob — low = ringy, high = muted click</td></tr>
+            <tr><td>Drum</td><td>Algorithmic kit: Kick/Snare/Hat/Clap/Tom/Crash. Tune/Decay/Tone/Snap re-purpose per algo. 9-preset library (808, 909, Rim, Closed/Open Hat, etc.)</td></tr>
+            <tr><td>Formant</td><td>Source wave → 3 vowel bandpass biquads. Pick Vowel A and B (A/E/I/O/U); Sweep bounces A↔B</td></tr>
         </table>
+        <p class="desc">Gate unused types at build time with <code style="color:var(--acc2)">-DBIRB_NO_FM</code>, <code style="color:var(--acc2)">-DBIRB_NO_KS</code>, <code style="color:var(--acc2)">-DBIRB_NO_DRUM</code>, <code style="color:var(--acc2)">-DBIRB_NO_FORMANT</code>, <code style="color:var(--acc2)">-DBIRB_NO_SAMPLES</code>. Each strips its engine code + shaves Brotli bytes for intro builds.</p>
+
+        <h3>Channels</h3>
+        <p class="desc">Channel count is set per song (4..16, even). When &gt; 4, a bank pager appears above the grid — arrows page through groups of 4. Cursor auto-follows into its bank when you tab between channels.</p>
 
         <h3>Exports</h3>
         <p class="desc">
