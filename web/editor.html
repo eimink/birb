@@ -178,7 +178,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
         <div class="inst-edit">
             <canvas class="adsr-canvas" id="adsr-canvas" height="48"></canvas>
             <div class="row"><label>Wave</label>
-                <select id="ie-wave" onchange="onWaveChange()"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option><option value="5">sample</option></select>
+                <select id="ie-wave" onchange="onWaveChange()"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option><option value="5">sample</option><option value="6">fm</option><option value="7">ks</option><option value="8">drum</option><option value="9">formant</option></select>
             </div>
             <div class="row"><label>Duty</label>
                 <select id="ie-duty"><option value="0">12.5%</option><option value="1">25%</option><option value="2">50%</option><option value="3">75%</option></select>
@@ -191,6 +191,95 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
             <div class="row"><label>PE</label><input type="number" id="ie-pe" value="0" min="-128" max="127" style="width:44px"><label>Len</label><input type="number" id="ie-pel" value="0" min="0" max="255" style="width:44px"></div>
             <div class="row"><label>Arp</label><input type="number" id="ie-arp1" value="0" min="0" max="15" style="width:36px"><input type="number" id="ie-arp2" value="0" min="0" max="15" style="width:36px"></div>
             <div class="row"><label>Name</label><input type="text" id="ie-name" value="" placeholder="unnamed" style="width:120px" oninput="saveInstName()"></div>
+            <div id="ie-fm-panel" style="display:none;border-top:1px solid var(--bg3);margin-top:6px;padding-top:6px">
+                <div class="row"><label>Preset</label>
+                    <select id="ie-fm-preset" onchange="applyFmPreset(this.value)" style="width:120px">
+                        <option value="">(none)</option>
+                        <option value="bass">Bass</option>
+                        <option value="bell">Bell</option>
+                        <option value="organ">Organ</option>
+                        <option value="brass">Brass</option>
+                    </select>
+                </div>
+                <div class="row"><label>ModIdx</label><input type="range" id="ie-fm-mi" min="0" max="255" value="64"><span class="val" id="ie-fm-mi-v">64</span></div>
+                <div class="row"><label>Feedb</label><input type="range" id="ie-fm-fb" min="0" max="255" value="0"><span class="val" id="ie-fm-fb-v">0</span></div>
+                <div class="row"><label>Nops</label>
+                    <select id="ie-fm-nops"><option value="2">2-op</option><option value="4">4-op</option></select>
+                    <label>Algo</label><input type="number" id="ie-fm-algo" min="0" max="7" value="0" style="width:36px">
+                </div>
+                <div id="ie-fm-ops" style="margin-top:4px"></div>
+            </div>
+            <div id="ie-ks-panel" style="display:none;border-top:1px solid var(--bg3);margin-top:6px;padding-top:6px">
+                <div class="row"><label>Damp</label><input type="range" id="ie-ks-damp" min="0" max="255" value="40"><span class="val" id="ie-ks-damp-v">40</span></div>
+                <p class="desc" style="margin:4px 0 0 0">Karplus-Strong pluck. Low damping = long sustain / ringy; high damping = short click.</p>
+            </div>
+            <div id="ie-drum-panel" style="display:none;border-top:1px solid var(--bg3);margin-top:6px;padding-top:6px">
+                <div class="row"><label>Preset</label>
+                    <select id="ie-drum-preset" onchange="applyDrumPreset(this.value)" style="width:140px">
+                        <option value="">(custom)</option>
+                        <option value="808kick">808 Kick</option>
+                        <option value="909kick">909 Kick</option>
+                        <option value="snare">Snare</option>
+                        <option value="rim">Rim</option>
+                        <option value="closedhat">Closed Hat</option>
+                        <option value="openhat">Open Hat</option>
+                        <option value="clap">Clap</option>
+                        <option value="crash">Crash</option>
+                        <option value="ride">Ride</option>
+                    </select>
+                </div>
+                <div class="row"><label>Type</label>
+                    <select id="ie-drum-type" onchange="setDrumType(+this.value)" style="width:100px">
+                        <option value="0">Kick</option>
+                        <option value="1">Snare</option>
+                        <option value="2">Hat</option>
+                        <option value="3">Clap</option>
+                        <option value="4">Tom</option>
+                        <option value="5">Crash</option>
+                    </select>
+                    <button class="order-btn" onclick="previewDrum()" style="margin-left:4px" title="Play">&#9654;</button>
+                </div>
+                <div class="row"><label>Tune</label><input type="range" id="ie-drum-tune" min="-127" max="127" value="0"><span class="val" id="ie-drum-tune-v">0</span></div>
+                <div class="row"><label>Decay</label><input type="range" id="ie-drum-decay" min="0" max="255" value="180"><span class="val" id="ie-drum-decay-v">180</span></div>
+                <div class="row"><label>Tone</label><input type="range" id="ie-drum-tone" min="0" max="255" value="128"><span class="val" id="ie-drum-tone-v">128</span></div>
+                <div class="row"><label>Snap</label><input type="range" id="ie-drum-snap" min="0" max="255" value="128"><span class="val" id="ie-drum-snap-v">128</span></div>
+                <p class="desc" style="margin:4px 0 0 0">Algorithmic drums. Each type has its own DSP; Tune/Decay/Tone/Snap re-purpose per drum.</p>
+            </div>
+            <div id="ie-formant-panel" style="display:none;border-top:1px solid var(--bg3);margin-top:6px;padding-top:6px">
+                <div class="row"><label>Preset</label>
+                    <select id="ie-formant-preset" onchange="applyFormantPreset(this.value)" style="width:140px">
+                        <option value="">(custom)</option>
+                        <option value="ahpad">Ah Pad</option>
+                        <option value="ohpad">Oh Pad</option>
+                        <option value="eebuzz">Ee Buzz</option>
+                        <option value="sweep">Vowel Sweep (A→O)</option>
+                    </select>
+                </div>
+                <div class="row"><label>Source</label>
+                    <select id="ie-formant-src" onchange="setFormantSrc(+this.value)" style="width:100px">
+                        <option value="0">Pulse</option>
+                        <option value="2">Saw</option>
+                        <option value="3">Noise</option>
+                    </select>
+                    <button class="order-btn" onclick="previewFormant()" style="margin-left:4px" title="Play">&#9654;</button>
+                </div>
+                <div class="row" id="ie-formant-duty-row"><label>Duty</label>
+                    <select id="ie-formant-duty" onchange="setFormantDuty(+this.value)"><option value="0">12.5%</option><option value="1">25%</option><option value="2">50%</option><option value="3">75%</option></select>
+                </div>
+                <div class="row"><label>Vowel A</label>
+                    <select id="ie-formant-va" onchange="setFormantVowel(0,+this.value)" style="width:60px">
+                        <option value="0">A</option><option value="1">E</option><option value="2">I</option><option value="3">O</option><option value="4">U</option>
+                    </select>
+                </div>
+                <div class="row"><label>Vowel B</label>
+                    <select id="ie-formant-vb" onchange="setFormantVowel(1,+this.value)" style="width:60px">
+                        <option value="0">A</option><option value="1">E</option><option value="2">I</option><option value="3">O</option><option value="4">U</option>
+                    </select>
+                </div>
+                <div class="row"><label>Sweep</label><input type="range" id="ie-formant-sweep" min="0" max="255" value="0"><span class="val" id="ie-formant-sweep-v">0</span></div>
+                <div class="row"><label>Reso</label><input type="range" id="ie-formant-res" min="0" max="255" value="128"><span class="val" id="ie-formant-res-v">128</span></div>
+                <p class="desc" style="margin:4px 0 0 0">Source through 3 bandpass biquads at vowel formant frequencies. Sweep bounces A↔B.</p>
+            </div>
             <div id="ie-sample-panel" style="display:none;border-top:1px solid var(--bg3);margin-top:6px;padding-top:6px">
                 <div class="row"><label>Sample</label>
                     <select id="ie-sample-idx" onchange="setSampleIdx(+this.value)" style="width:110px"></select>
@@ -334,7 +423,54 @@ s.start();</pre>
 /* ================================================================
    SONG STATE
    ================================================================ */
-const WAVE_NAMES = ['pulse','triangle','sawtooth','noise','sine'];
+const WAVE_NAMES = ['pulse','triangle','sawtooth','noise','sine','sample','fm','ks','drum','formant'];
+const KS_DEFAULTS = { damping: 40 };
+const DRUM_DEFAULTS = { drumType: 0, tune: 0, decay: 180, tone: 128, snap: 128 };
+const FORMANT_DEFAULTS = { src: 2 /* saw */, duty: 2, va: 0, vb: 3, sweep: 0, res: 128 };
+const FORMANT_PRESETS = {
+    ahpad:  { src:2, duty:2, va:0, vb:0, sweep:0,  res:128, vol:180 },
+    ohpad:  { src:2, duty:2, va:3, vb:3, sweep:0,  res:128, vol:180 },
+    eebuzz: { src:0, duty:1, va:2, vb:2, sweep:0,  res:160, vol:160 },
+    sweep:  { src:2, duty:2, va:0, vb:3, sweep:64, res:128, vol:160 },
+};
+const VOWEL_NAMES = ['A','E','I','O','U'];
+/* Each preset sets drumType + Tune/Decay/Tone/Snap and volume.
+ * These mirror the params described in birb2_plan.md phase 4. */
+const DRUM_PRESETS = {
+    '808kick':   { drumType:0, tune:-12, decay:220, tone:60,  snap:40,  vol:255 },
+    '909kick':   { drumType:0, tune:-8,  decay:170, tone:120, snap:180, vol:255 },
+    'snare':     { drumType:1, tune:-12, decay:140, tone:160, snap:180, vol:220 },
+    'rim':       { drumType:1, tune:0,   decay:40,  tone:210, snap:40,  vol:200 },
+    'closedhat': { drumType:2, tune:36,  decay:30,  tone:100, snap:200, vol:160 },
+    'openhat':   { drumType:2, tune:36,  decay:140, tone:120, snap:180, vol:170 },
+    'clap':      { drumType:3, tune:0,   decay:140, tone:150, snap:140, vol:220 },
+    'crash':     { drumType:5, tune:24,  decay:200, tone:140, snap:160, vol:180 },
+    'ride':      { drumType:2, tune:24,  decay:200, tone:80,  snap:120, vol:150 },
+};
+/* Synth type selector on the instrument: 0 = basic (wave 0..4), 1 = sample (wave 5), 2 = FM (wave 6).
+ * The editor keeps storing `wave` as the UI dropdown value (0..6); buildJS/worklet derive synth_type from it. */
+const FM_DEFAULTS = { nops:2, algo:0, fb:0, mi:64,
+    ops: [
+        {ri:1, rf:0, lv:255, a:0, d:8, s:200, r:8},
+        {ri:1, rf:0, lv:255, a:0, d:8, s:200, r:8},
+        {ri:1, rf:0, lv:0,   a:0, d:8, s:0,   r:8},
+        {ri:1, rf:0, lv:0,   a:0, d:8, s:0,   r:8}
+    ]};
+const FM_PRESETS = {
+    bass:  { nops:2, algo:0, fb:64, mi:40,
+        ops: [{ri:1,rf:0,lv:255,a:0,d:16,s:220,r:16}, {ri:1,rf:0,lv:200,a:0,d:32,s:128,r:16},
+              {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}, {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}] },
+    bell:  { nops:2, algo:0, fb:0,  mi:96,
+        ops: [{ri:1,rf:0,lv:255,a:0,d:48,s:0,r:32}, {ri:3,rf:8,lv:220,a:0,d:48,s:0,r:32},
+              {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}, {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}] },
+    organ: { nops:2, algo:0, fb:0,  mi:32,
+        ops: [{ri:1,rf:0,lv:255,a:2,d:4,s:240,r:8}, {ri:2,rf:0,lv:180,a:2,d:4,s:220,r:8},
+              {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}, {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}] },
+    brass: { nops:2, algo:0, fb:32, mi:80,
+        ops: [{ri:1,rf:0,lv:255,a:4,d:12,s:200,r:12}, {ri:1,rf:0,lv:220,a:6,d:12,s:180,r:12},
+              {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}, {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}] },
+};
+function cloneFmDefault() { return JSON.parse(JSON.stringify(FM_DEFAULTS)); }
 
 function defaultInstruments() {
     return [
@@ -357,10 +493,17 @@ let song = {
     samples: [],  // [{name, data:Int16Array, baseNote, loopStart, loopEnd}]
 };
 
-const NCH = 4;
+// Channel count is compile-time capped at NCH_MAX=16 in the engine.
+// Songs record their own channel count (min 4); the editor uses a bank
+// pager to show 4 channels at a time. For now every song is authored at
+// NCH=4 — multi-bank authoring comes once more channels are actually used.
+const NCH_MAX = 16;
+const BANK_WIDTH = 4;
+let NCH = 4;                 // per-song channel count (4..NCH_MAX)
+let currentBank = 0;         // which 4-channel bank is visible
 let curPat = 0, curRow = 0, curCh = 0, curCol = 0; // cursor
 let curInst = 0, curOctave = 4, curOrderPos = 0;
-let channelMuted = [false, false, false, false]; // NCH entries
+let channelMuted = new Array(NCH).fill(false);
 let selStart = -1, selEnd = -1; // row selection range (-1 = no selection)
 let clipboard = null; // [{note,inst,vol,fx,prm}, ...] per row for one channel
 let editInst = 0; // which instrument is selected for editing
@@ -370,6 +513,24 @@ function makeRow() {
     let r = [];
     for (let c = 0; c < NCH; c++) r.push({note:0,inst:255,vol:0,fx:0,prm:0});
     return r;
+}
+function banksTotal() { return Math.max(1, Math.ceil(NCH / BANK_WIDTH)); }
+function bankStart() { return currentBank * BANK_WIDTH; }
+function bankEnd() { return Math.min(NCH, bankStart() + BANK_WIDTH); }
+function setBank(b) {
+    let n = banksTotal();
+    if (b < 0) b = 0; if (b >= n) b = n - 1;
+    if (b === currentBank) return;
+    currentBank = b;
+    // keep cursor inside visible bank
+    if (curCh < bankStart() || curCh >= bankEnd()) curCh = bankStart();
+    saveSongToStorage();
+    renderGrid();
+}
+// Keep the visible bank aligned to curCh. Call after any curCh change.
+function ensureCurChVisible() {
+    let target = Math.floor(curCh / BANK_WIDTH);
+    if (target !== currentBank) { currentBank = target; }
 }
 function makePattern(rows) {
     let p = [];
@@ -404,7 +565,7 @@ function saveSongToStorage() {
             };
         });
         localStorage.setItem('birb_song', JSON.stringify({
-            bpm: song.bpm, tpr: song.tpr,
+            bpm: song.bpm, tpr: song.tpr, N: NCH,
             instruments: song.instruments,
             patterns: song.patterns,
             order: song.order,
@@ -413,7 +574,7 @@ function saveSongToStorage() {
         let songName = document.getElementById('song-name').value || 'song';
         localStorage.setItem('birb_editor', JSON.stringify({
             curPat, curRow, curCh, curCol, curOrderPos, curInst, curOctave, editInst, songName,
-            channelMuted
+            channelMuted, currentBank
         }));
     } catch(e) {}
 }
@@ -425,6 +586,9 @@ function loadSongFromStorage() {
         let data = JSON.parse(s);
         song.bpm = data.bpm || 140;
         song.tpr = data.tpr || 6;
+        if (typeof data.N === 'number' && data.N >= 4 && data.N <= NCH_MAX) NCH = data.N;
+        else NCH = 4;
+        channelMuted = new Array(NCH).fill(false);
         song.instruments = data.instruments || [];
         song.patterns = data.patterns || [];
         song.order = data.order || [[0,0,0,0]];
@@ -460,6 +624,7 @@ function loadSongFromStorage() {
             if (ed.songName) document.getElementById('song-name').value = ed.songName;
             if (Array.isArray(ed.channelMuted)) channelMuted = ed.channelMuted.slice(0, NCH);
             while (channelMuted.length < NCH) channelMuted.push(false);
+            if (typeof ed.currentBank === 'number') currentBank = Math.max(0, Math.min(banksTotal() - 1, ed.currentBank));
         }
         document.getElementById('bpm').value = song.bpm;
         document.getElementById('tpr').value = song.tpr;
@@ -528,11 +693,24 @@ function hexStr(v) {
 function renderGrid() {
     let pat = song.patterns[curPat];
     if (!pat) return;
-    let html = '<table class="grid-table"><tr><th></th>';
-    for (let c = 0; c < NCH; c++) {
+    let bs = bankStart(), be = bankEnd(), nTot = banksTotal();
+    let html = '';
+    // Channel bank pager — hide entirely when the song has no extra banks,
+    // otherwise show prev/next arrows and a "CH a-b / CH c-d" indicator.
+    if (nTot > 1) {
+        let prevDis = currentBank <= 0 ? ' disabled' : '';
+        let nextDis = currentBank >= nTot - 1 ? ' disabled' : '';
+        html += '<div class="ch-bank-pager" style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;color:var(--fg2)">';
+        html += `<button class="order-btn" onclick="setBank(currentBank - 1)"${prevDis}>&larr;</button>`;
+        html += `<span>CH ${bs+1}-${be} / ${NCH}</span>`;
+        html += `<button class="order-btn" onclick="setBank(currentBank + 1)"${nextDis}>&rarr;</button>`;
+        html += '</div>';
+    }
+    html += '<table class="grid-table"><tr><th></th>';
+    for (let c = bs; c < be; c++) {
         let muteCls = channelMuted[c] ? ' muted' : '';
         html += `<th colspan="5" class="ch-header${muteCls}"><span class="ch-label">Ch ${c+1}</span> <button class="ch-mute" onclick="toggleMute(${c})" title="Mute channel ${c+1}">${channelMuted[c] ? 'M' : 'M'}</button></th>`;
-        if (c < NCH - 1) html += '<th></th>';
+        if (c < be - 1) html += '<th></th>';
     }
     html += '</tr>';
     for (let r = 0; r < pat.length; r++) {
@@ -542,7 +720,7 @@ function renderGrid() {
         if (selStart >= 0 && r >= Math.min(selStart,selEnd) && r <= Math.max(selStart,selEnd)) rowClass += ' sel-row';
         html += `<tr class="${rowClass}">`;
         html += `<td class="row-num">${('0'+r.toString(16).toUpperCase()).slice(-2)}</td>`;
-        for (let c = 0; c < NCH; c++) {
+        for (let c = bs; c < be; c++) {
             let cell = pat[r][c];
             let n = cell.note, inst = cell.inst, vol = cell.vol, fx = cell.fx, prm = cell.prm;
             let nClass = n === 0 ? 'empty' : n === 1 ? 'off' : '';
@@ -568,7 +746,7 @@ function renderGrid() {
                 else val = (fx === 0 && prm === 0) ? '--' : hexStr(prm);
                 html += `<td class="${cls}" data-r="${r}" data-c="${c}" data-col="${col}">${val}</td>`;
             }
-            if (c < NCH - 1) html += '<td class="ch-sep"></td>';
+            if (c < be - 1) html += '<td class="ch-sep"></td>';
         }
         html += '</tr>';
     }
@@ -750,7 +928,19 @@ function addOrderPos() {
    INSTRUMENT PANEL
    ================================================================ */
 function instDisplayName(ins) {
-    return ins.name || (WAVE_NAMES[ins.wave] + (ins.wave===0 ? ['12','25','50','75'][ins.duty] : ''));
+    if (ins.name) return ins.name;
+    if (ins.wave === 6) return 'fm';
+    if (ins.wave === 7) return 'ks';
+    if (ins.wave === 8) {
+        const DNAMES = ['kick','snare','hat','clap','tom','crash'];
+        return 'drum:' + (DNAMES[ins.drumType] || '?');
+    }
+    if (ins.wave === 9) {
+        let a = VOWEL_NAMES[ins.fmtVa] || '?';
+        let b = VOWEL_NAMES[ins.fmtVb] || '?';
+        return 'fmt:' + (a === b ? a : a + '→' + b);
+    }
+    return WAVE_NAMES[ins.wave] + (ins.wave===0 ? ['12','25','50','75'][ins.duty] : '');
 }
 function renderInstList() {
     let html = '';
@@ -778,7 +968,7 @@ function selectInst(i) {
     loadInstEditor();
 }
 function addInstrument() {
-    song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'',sampleIdx:0});
+    song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'',sampleIdx:0,fm:cloneFmDefault(),ksDamp:KS_DEFAULTS.damping,drumType:0,drumTune:0,drumDecay:180,drumTone:128,drumSnap:128,fmtSrc:FORMANT_DEFAULTS.src,fmtDuty:FORMANT_DEFAULTS.duty,fmtVa:FORMANT_DEFAULTS.va,fmtVb:FORMANT_DEFAULTS.vb,fmtSweep:FORMANT_DEFAULTS.sweep,fmtRes:FORMANT_DEFAULTS.res});
     editInst = song.instruments.length - 1;
     curInst = editInst;
     markDirty();
@@ -830,8 +1020,35 @@ function deleteInstrument() {
 /* --- sample helpers --- */
 
 function onWaveChange() {
+    let ins = song.instruments[editInst];
+    let wv = +document.getElementById('ie-wave').value;
+    /* Ensure FM data exists when switching to FM */
+    if (ins && wv === 6 && !ins.fm) ins.fm = cloneFmDefault();
+    /* Ensure KS data exists when switching to KS */
+    if (ins && wv === 7 && ins.ksDamp === undefined) ins.ksDamp = KS_DEFAULTS.damping;
+    /* Ensure drum data exists when switching to drum */
+    if (ins && wv === 8 && ins.drumType === undefined) {
+        ins.drumType = DRUM_DEFAULTS.drumType;
+        ins.drumTune = DRUM_DEFAULTS.tune;
+        ins.drumDecay = DRUM_DEFAULTS.decay;
+        ins.drumTone = DRUM_DEFAULTS.tone;
+        ins.drumSnap = DRUM_DEFAULTS.snap;
+    }
+    /* Ensure formant data exists when switching to formant */
+    if (ins && wv === 9 && ins.fmtSrc === undefined) {
+        ins.fmtSrc = FORMANT_DEFAULTS.src;
+        ins.fmtDuty = FORMANT_DEFAULTS.duty;
+        ins.fmtVa = FORMANT_DEFAULTS.va;
+        ins.fmtVb = FORMANT_DEFAULTS.vb;
+        ins.fmtSweep = FORMANT_DEFAULTS.sweep;
+        ins.fmtRes = FORMANT_DEFAULTS.res;
+    }
     saveInstFromEditor();
     updateSamplePanelVisibility();
+    updateFmPanelVisibility();
+    updateKsPanelVisibility();
+    updateDrumPanelVisibility();
+    updateFormantPanelVisibility();
 }
 
 function updateSamplePanelVisibility() {
@@ -840,6 +1057,210 @@ function updateSamplePanelVisibility() {
     if (!panel) return;
     panel.style.display = (ins && ins.wave === 5) ? '' : 'none';
     if (ins && ins.wave === 5) renderSamplePanel();
+}
+
+function updateFmPanelVisibility() {
+    let ins = song.instruments[editInst];
+    let panel = document.getElementById('ie-fm-panel');
+    if (!panel) return;
+    panel.style.display = (ins && ins.wave === 6) ? '' : 'none';
+    if (ins && ins.wave === 6) renderFmPanel();
+}
+
+function updateKsPanelVisibility() {
+    let ins = song.instruments[editInst];
+    let panel = document.getElementById('ie-ks-panel');
+    if (!panel) return;
+    panel.style.display = (ins && ins.wave === 7) ? '' : 'none';
+    if (ins && ins.wave === 7) renderKsPanel();
+}
+
+function renderKsPanel() {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    if (ins.ksDamp === undefined) ins.ksDamp = KS_DEFAULTS.damping;
+    document.getElementById('ie-ks-damp').value = ins.ksDamp;
+    document.getElementById('ie-ks-damp-v').textContent = ins.ksDamp;
+}
+
+function updateDrumPanelVisibility() {
+    let ins = song.instruments[editInst];
+    let panel = document.getElementById('ie-drum-panel');
+    if (!panel) return;
+    panel.style.display = (ins && ins.wave === 8) ? '' : 'none';
+    if (ins && ins.wave === 8) renderDrumPanel();
+}
+function renderDrumPanel() {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    if (ins.drumType === undefined) {
+        ins.drumType = DRUM_DEFAULTS.drumType;
+        ins.drumTune = DRUM_DEFAULTS.tune;
+        ins.drumDecay = DRUM_DEFAULTS.decay;
+        ins.drumTone = DRUM_DEFAULTS.tone;
+        ins.drumSnap = DRUM_DEFAULTS.snap;
+    }
+    document.getElementById('ie-drum-type').value = ins.drumType;
+    document.getElementById('ie-drum-tune').value = ins.drumTune;
+    document.getElementById('ie-drum-tune-v').textContent = ins.drumTune;
+    document.getElementById('ie-drum-decay').value = ins.drumDecay;
+    document.getElementById('ie-drum-decay-v').textContent = ins.drumDecay;
+    document.getElementById('ie-drum-tone').value = ins.drumTone;
+    document.getElementById('ie-drum-tone-v').textContent = ins.drumTone;
+    document.getElementById('ie-drum-snap').value = ins.drumSnap;
+    document.getElementById('ie-drum-snap-v').textContent = ins.drumSnap;
+}
+function setDrumType(v) {
+    let ins = song.instruments[editInst]; if (!ins) return;
+    ins.drumType = v & 7;
+    markDirty();
+}
+function applyDrumPreset(name) {
+    if (!name) return;
+    let p = DRUM_PRESETS[name]; if (!p) return;
+    let ins = song.instruments[editInst]; if (!ins) return;
+    ins.wave = 8;
+    ins.drumType = p.drumType;
+    ins.drumTune = p.tune;
+    ins.drumDecay = p.decay;
+    ins.drumTone = p.tone;
+    ins.drumSnap = p.snap;
+    ins.vol = p.vol;
+    document.getElementById('ie-wave').value = 8;
+    markDirty();
+    updateDrumPanelVisibility();
+    renderDrumPanel();
+    loadInstEditor();
+    renderInstList();
+}
+function previewDrum() {
+    /* Preview = trigger a C-4 on the current drum instrument. */
+    previewNote(50, editInst); /* 48+2 = C4 */
+}
+
+function updateFormantPanelVisibility() {
+    let ins = song.instruments[editInst];
+    let panel = document.getElementById('ie-formant-panel');
+    if (!panel) return;
+    panel.style.display = (ins && ins.wave === 9) ? '' : 'none';
+    if (ins && ins.wave === 9) renderFormantPanel();
+}
+function renderFormantPanel() {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    if (ins.fmtSrc === undefined) {
+        ins.fmtSrc = FORMANT_DEFAULTS.src; ins.fmtDuty = FORMANT_DEFAULTS.duty;
+        ins.fmtVa = FORMANT_DEFAULTS.va; ins.fmtVb = FORMANT_DEFAULTS.vb;
+        ins.fmtSweep = FORMANT_DEFAULTS.sweep; ins.fmtRes = FORMANT_DEFAULTS.res;
+    }
+    document.getElementById('ie-formant-src').value = ins.fmtSrc;
+    document.getElementById('ie-formant-duty').value = ins.fmtDuty;
+    document.getElementById('ie-formant-duty-row').style.display = (ins.fmtSrc === 0) ? '' : 'none';
+    document.getElementById('ie-formant-va').value = ins.fmtVa;
+    document.getElementById('ie-formant-vb').value = ins.fmtVb;
+    document.getElementById('ie-formant-sweep').value = ins.fmtSweep;
+    document.getElementById('ie-formant-sweep-v').textContent = ins.fmtSweep;
+    document.getElementById('ie-formant-res').value = ins.fmtRes;
+    document.getElementById('ie-formant-res-v').textContent = ins.fmtRes;
+}
+function setFormantSrc(v) {
+    let ins = song.instruments[editInst]; if (!ins) return;
+    ins.fmtSrc = v;
+    document.getElementById('ie-formant-duty-row').style.display = (v === 0) ? '' : 'none';
+    markDirty();
+}
+function setFormantDuty(v) {
+    let ins = song.instruments[editInst]; if (!ins) return;
+    ins.fmtDuty = v;
+    markDirty();
+}
+function setFormantVowel(which, v) {
+    let ins = song.instruments[editInst]; if (!ins) return;
+    if (which === 0) ins.fmtVa = v; else ins.fmtVb = v;
+    markDirty();
+}
+function applyFormantPreset(name) {
+    if (!name) return;
+    let p = FORMANT_PRESETS[name]; if (!p) return;
+    let ins = song.instruments[editInst]; if (!ins) return;
+    ins.wave = 9;
+    ins.fmtSrc = p.src; ins.fmtDuty = p.duty;
+    ins.fmtVa = p.va; ins.fmtVb = p.vb;
+    ins.fmtSweep = p.sweep; ins.fmtRes = p.res;
+    ins.vol = p.vol;
+    document.getElementById('ie-wave').value = 9;
+    markDirty();
+    updateFormantPanelVisibility();
+    renderFormantPanel();
+    loadInstEditor();
+    renderInstList();
+}
+function previewFormant() {
+    previewNote(50, editInst);
+}
+
+function renderFmPanel() {
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    if (!ins.fm) ins.fm = cloneFmDefault();
+    document.getElementById('ie-fm-mi').value = ins.fm.mi;
+    document.getElementById('ie-fm-fb').value = ins.fm.fb;
+    document.getElementById('ie-fm-nops').value = ins.fm.nops;
+    document.getElementById('ie-fm-algo').value = ins.fm.algo;
+    document.getElementById('ie-fm-mi-v').textContent = ins.fm.mi;
+    document.getElementById('ie-fm-fb-v').textContent = ins.fm.fb;
+    /* Render per-op rows */
+    let html = '';
+    for (let i = 0; i < ins.fm.nops; i++) {
+        let o = ins.fm.ops[i];
+        let ratio = (o.ri + o.rf/16).toFixed(4).replace(/0+$/,'').replace(/\.$/,'');
+        html += `<div class="row" style="font-size:10px;gap:3px"><label style="width:18px">OP${i+1}</label>
+            <label style="width:auto">ratio</label><input type="text" value="${ratio}" data-op="${i}" data-f="ratio" style="width:40px">
+            <label style="width:auto">lv</label><input type="number" min="0" max="255" value="${o.lv}" data-op="${i}" data-f="lv" style="width:42px">
+        </div>
+        <div class="row" style="font-size:10px;gap:2px"><label style="width:18px"></label>
+            <label style="width:auto">A</label><input type="number" min="0" max="255" value="${o.a}" data-op="${i}" data-f="a" style="width:40px">
+            <label style="width:auto">D</label><input type="number" min="0" max="255" value="${o.d}" data-op="${i}" data-f="d" style="width:40px">
+            <label style="width:auto">S</label><input type="number" min="0" max="255" value="${o.s}" data-op="${i}" data-f="s" style="width:40px">
+            <label style="width:auto">R</label><input type="number" min="0" max="255" value="${o.r}" data-op="${i}" data-f="r" style="width:40px">
+        </div>`;
+    }
+    document.getElementById('ie-fm-ops').innerHTML = html;
+    /* Re-bind so edits on per-op inputs flush to the model */
+    for (let inp of document.querySelectorAll('#ie-fm-ops input')) {
+        inp.addEventListener('input', function() {
+            let op = +this.dataset.op, f = this.dataset.f;
+            let val = this.value;
+            if (f === 'ratio') {
+                let r = parseFloat(val);
+                if (!isNaN(r) && r >= 0) {
+                    ins.fm.ops[op].ri = Math.floor(r) & 0xFF;
+                    ins.fm.ops[op].rf = Math.round((r - Math.floor(r)) * 16) & 0xF;
+                }
+            } else {
+                let v = +val; if (isNaN(v)) v = 0;
+                if (v < 0) v = 0; if (v > 255) v = 255;
+                ins.fm.ops[op][f] = v;
+            }
+            markDirty();
+        });
+    }
+}
+
+function applyFmPreset(name) {
+    if (!name) return;
+    let preset = FM_PRESETS[name];
+    if (!preset) return;
+    let ins = song.instruments[editInst];
+    if (!ins) return;
+    ins.fm = JSON.parse(JSON.stringify(preset));
+    ins.wave = 6;
+    document.getElementById('ie-wave').value = 6;
+    markDirty();
+    renderFmPanel();
+    updateFmPanelVisibility();
+    drawADSR();
+    renderInstList();
 }
 
 function renderSamplePanel() {
@@ -1218,6 +1639,10 @@ function loadInstEditor() {
     updateInstValues();
     drawADSR();
     updateSamplePanelVisibility();
+    updateFmPanelVisibility();
+    updateKsPanelVisibility();
+    updateDrumPanelVisibility();
+    updateFormantPanelVisibility();
 }
 function updateInstValues() {
     for (let k of ['a','d','s','r','vol']) {
@@ -1246,6 +1671,60 @@ function saveInstFromEditor() {
     ins.arp1 = +document.getElementById('ie-arp1').value;
     ins.arp2 = +document.getElementById('ie-arp2').value;
     ins.vol = +document.getElementById('ie-vol').value;
+    /* FM params — only persist when FM panel is visible */
+    if (ins.wave === 6) {
+        if (!ins.fm) ins.fm = cloneFmDefault();
+        let mi = +document.getElementById('ie-fm-mi').value;
+        let fb = +document.getElementById('ie-fm-fb').value;
+        let nops = +document.getElementById('ie-fm-nops').value;
+        let algo = +document.getElementById('ie-fm-algo').value;
+        ins.fm.mi = mi; ins.fm.fb = fb;
+        if (nops !== ins.fm.nops) { ins.fm.nops = nops; renderFmPanel(); }
+        ins.fm.algo = algo;
+        document.getElementById('ie-fm-mi-v').textContent = mi;
+        document.getElementById('ie-fm-fb-v').textContent = fb;
+    }
+    /* KS params */
+    if (ins.wave === 7) {
+        let d = +document.getElementById('ie-ks-damp').value;
+        if (isNaN(d)) d = KS_DEFAULTS.damping;
+        ins.ksDamp = d;
+        document.getElementById('ie-ks-damp-v').textContent = d;
+    }
+    /* Drum params */
+    if (ins.wave === 8) {
+        let el = document.getElementById('ie-drum-type');
+        if (el) ins.drumType = +el.value & 7;
+        let t = +document.getElementById('ie-drum-tune').value;
+        if (isNaN(t)) t = 0; if (t < -127) t = -127; if (t > 127) t = 127;
+        ins.drumTune = t;
+        document.getElementById('ie-drum-tune-v').textContent = t;
+        for (let [f, id] of [['drumDecay','ie-drum-decay'], ['drumTone','ie-drum-tone'], ['drumSnap','ie-drum-snap']]) {
+            let v = +document.getElementById(id).value;
+            if (isNaN(v)) v = 0; if (v < 0) v = 0; if (v > 255) v = 255;
+            ins[f] = v;
+            document.getElementById(id + '-v').textContent = v;
+        }
+    }
+    /* Formant params */
+    if (ins.wave === 9) {
+        let srcEl = document.getElementById('ie-formant-src');
+        if (srcEl) ins.fmtSrc = +srcEl.value;
+        let dEl = document.getElementById('ie-formant-duty');
+        if (dEl) ins.fmtDuty = +dEl.value;
+        let vaEl = document.getElementById('ie-formant-va');
+        if (vaEl) ins.fmtVa = +vaEl.value & 7;
+        let vbEl = document.getElementById('ie-formant-vb');
+        if (vbEl) ins.fmtVb = +vbEl.value & 7;
+        let sw = +document.getElementById('ie-formant-sweep').value;
+        if (isNaN(sw)) sw = 0; if (sw < 0) sw = 0; if (sw > 255) sw = 255;
+        ins.fmtSweep = sw;
+        document.getElementById('ie-formant-sweep-v').textContent = sw;
+        let re = +document.getElementById('ie-formant-res').value;
+        if (isNaN(re)) re = 128; if (re < 0) re = 0; if (re > 255) re = 255;
+        ins.fmtRes = re;
+        document.getElementById('ie-formant-res-v').textContent = re;
+    }
     renderInstList();
     updateInstValues();
     drawADSR();
@@ -1437,6 +1916,7 @@ function handleKey(e) {
 
     if (handled) {
         e.preventDefault();
+        ensureCurChVisible();
         markDirty();
         renderGrid();
     }
@@ -1451,6 +1931,7 @@ document.getElementById('grid').addEventListener('click', function(e) {
         curRow = +td.dataset.r;
         curCh = +td.dataset.c;
         curCol = +td.dataset.col;
+        ensureCurChVisible();
         renderGrid();
     }
     this.focus();
@@ -1460,7 +1941,7 @@ document.getElementById('grid').addEventListener('click', function(e) {
    INLINE SYNTH (from birb_4k.js pattern, for audio preview)
    ================================================================ */
 function renderSong(patOnly, singlePat) {
-    let S = 44100, N = 4, F = 65536;
+    let S = 44100, N = NCH, F = 65536;
     let bpm = song.bpm, tpr = song.tpr;
     let ni = song.instruments.length, np = song.patterns.length;
     let bf = [24,26,27,29,31,32,34,36,38,41,43,46];
@@ -1471,7 +1952,8 @@ function renderSong(patOnly, singlePat) {
     // Build order and pattern data
     let ord, ol;
     if (patOnly) {
-        ord = [[singlePat,singlePat,singlePat,singlePat]];
+        ord = new Array(N).fill(singlePat);
+        ord = [ord];
         ol = 1;
     } else {
         ord = song.order.map(o => {
@@ -1493,9 +1975,42 @@ function renderSong(patOnly, singlePat) {
 
     let ch = [];
     for (let c = 0; c < N; c++)
-        ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0};
+        ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
+            fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmi:0, fmFb:0, fmMi:64, fmNo:2, fmPrev:0,
+            ksBuf:null, ksLen:0, ksPos:0, ksD:0,
+            drAl:0, drPhase2:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0,
+            fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtRc:0,
+            fmtZ1:[0,0,0], fmtZ2:[0,0,0], fmtB0:[0,0,0], fmtA1:[0,0,0], fmtA2:[0,0,0]};
 
     let ct = 0, cr = 0, op = 0, tc = 0, firstRow = true;
+
+    /* Fixed-point sine approximation matching birb_sin_approx. Input phase
+     * is 0..F, output is -1..1 (for JS float use). */
+    function sinApprox(phase) {
+        let p = ((phase % F) + F) % F;
+        let x = p < F/2 ? p - F/4 : (F*3/4) - p;
+        x *= 4;
+        let ax = x < 0 ? -x : x;
+        return x * (F - ax) / F * 4 / F;
+    }
+    /* Vowel formant coefficient table (mirrors birb_synth.c). */
+    const FMT_COEF = [
+        [[    423, -129523,  64691], [    439, -128255,  64281], [    547, -120662,  62803]], /* A */
+        [[    308, -130085,  64921], [    731, -124576,  63447], [    555, -120371,  62761]], /* E */
+        [[    157, -130661,  65222], [    901, -121719,  62962], [    664, -116183,  62216]], /* I */
+        [[    331, -129981,  64875], [    340, -129171,  64565], [    540, -120877,  62835]], /* O */
+        [[    175, -130603,  65187], [    352, -129069,  64531], [    504, -122060,  63015]]  /* U */
+    ];
+    function fmtInterp(C) {
+        let va = C.fmtVa|0; if (va > 4) va = 0;
+        let vb = C.fmtVb|0; if (vb > 4) vb = 0;
+        let t = C.fmtSp, omt = 255 - t;
+        for (let i = 0; i < 3; i++) {
+            C.fmtB0[i] = ((FMT_COEF[va][i][0] * omt + FMT_COEF[vb][i][0] * t) / 255)|0;
+            C.fmtA1[i] = ((FMT_COEF[va][i][1] * omt + FMT_COEF[vb][i][1] * t) / 255)|0;
+            C.fmtA2[i] = ((FMT_COEF[va][i][2] * omt + FMT_COEF[vb][i][2] * t) / 255)|0;
+        }
+    }
 
     function trigNote(C, n, ii) {
         C.i = ii; let j = song.instruments[ii], semi = n - 2;
@@ -1510,10 +2025,97 @@ function renderSong(patOnly, singlePat) {
             let sm = song.samples[si];
             if (sm && sm.data) {
                 C.si = si; C.sp = 0; C.sa = 1;
-                // playback speed = note_freq / base_note_freq in 16.16
                 let baseF = nf(sm.baseNote !== undefined ? sm.baseNote : 48);
                 C.ss = baseF > 0 ? Math.round(C.b * 65536 / baseF) : 65536;
             }
+        }
+        if (j.wave === 6) {
+            let fm = j.fm || FM_DEFAULTS;
+            C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmPrev = 0;
+            if (!C.fmR) C.fmR = [0,0,0,0];
+            for (let i = 0; i < 4; i++) {
+                C.fmp[i] = 0;
+                let op = fm.ops[i] || {ri:1,rf:0,lv:255};
+                C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16; /* float ratio */
+                C.fmf[i] = Math.round(C.b * C.fmR[i]);
+                C.fmL[i] = Math.round(F * (op.lv || 0) / 255);
+            }
+        }
+        if (j.wave === 7) {
+            /* Karplus-Strong: buffer length from freq (FX_ONE / freq), pre-filled with LFSR noise. */
+            let ln = C.b > 0 ? Math.floor(F / C.b) : 0;
+            if (ln < 4) ln = 4;
+            if (ln > 1024) ln = 1024;
+            C.ksLen = ln; C.ksPos = 0;
+            C.ksD = j.ksDamp !== undefined ? j.ksDamp : KS_DEFAULTS.damping;
+            if (!C.ksBuf || C.ksBuf.length < ln) C.ksBuf = new Int16Array(1024);
+            let lfsr = (0x7FFF ^ ((semi * 0x1D79) & 0xFFFF)) & 0xFFFF;
+            if (!lfsr) lfsr = 0x7FFF;
+            for (let i = 0; i < ln; i++) {
+                let bit = (lfsr ^ (lfsr >> 1)) & 1;
+                lfsr = ((lfsr >> 1) | (bit << 14)) & 0xFFFF;
+                C.ksBuf[i] = (lfsr & 1) ? 16383 : -16383;
+            }
+        }
+        if (j.wave === 8) {
+            let dt = j.drumType|0; if (dt > 5) dt = 0;
+            let algo = (dt === 4) ? 0 : (dt === 5) ? 2 : dt;
+            C.drAl = algo;
+            C.drPhase2 = 0; C.drZ1 = 0; C.drZ2 = 0;
+            C.drLf = (0x7FFF ^ ((semi * 0x3D7F) & 0xFFFF)) & 0xFFFF; if (!C.drLf) C.drLf = 0x7FFF;
+            let dn = semi + (j.drumTune|0);
+            if (dn < 0) dn = 0; if (dn > 95) dn = 95;
+            let dfreq = nf(dn);
+            let dec = j.drumDecay|0, tone = j.drumTone|0, snap = j.drumSnap|0;
+            let ttl;
+            if (algo === 0) {
+                C.drPe = dfreq << 1; C.drPet = dfreq >> 3;
+                C.drRate = Math.max(16, tone * 256);
+                C.drSnap = snap; C.drClick = 64;
+                ttl = dec * 200 + 1024;
+                if (dt === 4) ttl *= 2;
+            } else if (algo === 1) {
+                C.f = dfreq > 0 ? dfreq : bf[2] << 2;
+                C.drMix = snap;
+                C.drPe = F >> 2;
+                let toneF = (tone * (F * 15 / 16 / 255))|0;
+                C.drPet = (F - (F >> 5)) - (toneF >> 1);
+                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                ttl = dec * 120 + 1024;
+            } else if (algo === 2) {
+                C.f = dfreq > 0 ? dfreq : bf[2] << 5;
+                C.drPe = (tone * 4 * F / 255)|0;
+                let hp = (snap * (F * 15 / 16 / 255))|0;
+                if (hp < F >> 4) hp = F >> 4;
+                C.drPet = hp;
+                ttl = dec * 180 + 1024;
+                if (dt === 5) ttl = 90000 + dec * 400;
+            } else {
+                C.drPe = F >> 2;
+                let toneF = (tone * (F * 15 / 16 / 255))|0;
+                C.drPet = (F - (F >> 5)) - (toneF >> 1);
+                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                ttl = dec * 160 + 2048;
+            }
+            if (ttl > 0xFFFFFF) ttl = 0xFFFFFF;
+            C.drTtl = ttl;
+            C.e = F; C.t = 4; /* start in release for auto-fade */
+            C.r = Math.max(1, dec >> 3);
+        }
+        if (j.wave === 9) {
+            let sw = j.fmtSrc !== undefined ? j.fmtSrc : 2;
+            if (sw !== 0 && sw !== 2 && sw !== 3) sw = 2;
+            C.fmtSw = sw;
+            C.fmtLf = (0x7FFF ^ ((semi * 0x2BCD) & 0xFFFF)) & 0xFFFF; if (!C.fmtLf) C.fmtLf = 0x7FFF;
+            C.fmtVa = (j.fmtVa|0) > 4 ? 0 : (j.fmtVa|0);
+            C.fmtVb = (j.fmtVb|0) > 4 ? 0 : (j.fmtVb|0);
+            C.fmtSS = (j.fmtSweep|0);
+            C.fmtSp = 0; C.fmtDir = 1; C.fmtRc = 0;
+            for (let i = 0; i < 3; i++) { C.fmtZ1[i] = 0; C.fmtZ2[i] = 0; }
+            /* duty maps 0..3 → F/8, F/4, F/2, 3F/4 */
+            let dcode = (j.fmtDuty|0) & 3;
+            C.u = [F/8, F/4, F/2, F*3/4][dcode];
+            fmtInterp(C);
         }
     }
 
@@ -1585,6 +2187,10 @@ function renderSong(patOnly, singlePat) {
             if(e===1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
             else if(e===2){let g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
             else if(e===4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}
+            /* FM: rebuild op freqs from current carrier freq each tick */
+            if (C.w === 6 && C.fmR) {
+                for (let i = 0; i < 4; i++) C.fmf[i] = Math.round(C.f * C.fmR[i]);
+            }
         }
     }
 
@@ -1602,7 +2208,7 @@ function renderSong(patOnly, singlePat) {
         tc--;
         let v = 0;
         for (let c = 0; c < N; c++) {
-            let C = ch[c]; if (!C.t && !C.e && !C.sa) continue;
+            let C = ch[c]; if (!C.t && !C.e && !C.sa && !C.drTtl) continue;
             if (channelMuted[c]) { C.p = (C.p + C.f) % F; continue; }
             let h = C.p, s;
             if (C.w === 5) {
@@ -1627,6 +2233,122 @@ function renderSong(patOnly, singlePat) {
                     }
                 }
             }
+            else if (C.w===6) {
+                /* 2-op FM: op1 modulates op0. Mod scaling by mod_index × op1 level */
+                let modRaw = sinApprox(C.fmp[1]);
+                let scale = C.fmMi * C.fmL[1] / 255;
+                let modOut = modRaw * scale;
+                if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
+                let carRaw = sinApprox(C.fmp[0] + modOut);
+                C.fmPrev = carRaw * F;
+                C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
+                C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
+                s = carRaw * C.fmL[0] / F;
+            }
+            else if (C.w === 7) {
+                /* Karplus-Strong: read tap, write LP-filtered damped sample back. */
+                if (C.ksLen < 2) { s = 0; }
+                else {
+                    let p = C.ksPos, nx = p + 1; if (nx >= C.ksLen) nx = 0;
+                    let cur = C.ksBuf[p];
+                    let avg = (cur + C.ksBuf[nx]) >> 1;
+                    C.ksBuf[p] = (avg * (255 - C.ksD)) >> 8;
+                    C.ksPos = nx;
+                    s = cur / 32768;
+                }
+            }
+            else if (C.w === 8) {
+                /* algorithmic drums */
+                if (C.drTtl <= 0) { s = 0; C.e = 0; C.t = 0; }
+                else {
+                    C.drTtl--;
+                    let o = 0;
+                    let lfshift = () => { let b = (C.drLf ^ (C.drLf >> 1)) & 1; C.drLf = ((C.drLf >> 1) | (b << 14)) & 0xFFFF; if (!C.drLf) C.drLf = 0x7FFF; return C.drLf; };
+                    if (C.drAl === 0) {
+                        let gap = C.drPe - C.drPet;
+                        C.drPe -= ((gap * C.drRate) >> 20);
+                        C.p = (C.p + C.drPe) % F;
+                        let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
+                        x <<= 2; let ax = x < 0 ? -x : x;
+                        o = (x * (F - ax) / F * 4 / F) * 24000;
+                        if (C.drClick > 0) {
+                            let n = lfshift();
+                            let bit = (n & 1) ? 20000 : -20000;
+                            o += (bit * C.drSnap * C.drClick) >> 16;
+                            C.drClick--;
+                        }
+                    } else if (C.drAl === 1) {
+                        let n = lfshift();
+                        let noise = (n & 1) ? 14000 : -14000;
+                        C.p = (C.p + C.f) % F;
+                        let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
+                        x <<= 2; let ax = x < 0 ? -x : x;
+                        let body = (x * (F - ax) / F * 4 / F) * 18000;
+                        let mix = ((noise * (255 - C.drMix) + body * C.drMix) / 255)|0;
+                        let acc = ((mix * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
+                        if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
+                        C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                    } else if (C.drAl === 2) {
+                        C.p = (C.p + C.f) % F;
+                        let f2 = C.f * 17;
+                        C.drPhase2 = (C.drPhase2 + f2) % F;
+                        let ph2 = C.drPhase2, x2 = ph2 < F/2 ? ph2 - F/4 : (F*3/4) - ph2;
+                        x2 <<= 2; let ax2 = x2 < 0 ? -x2 : x2;
+                        let modRaw = x2 * (F - ax2) / F * 4 / F;
+                        let modOut = (modRaw * C.drPe) | 0;
+                        let cph = (C.p + modOut) % F;
+                        let xc = cph < F/2 ? cph - F/4 : (F*3/4) - cph;
+                        xc <<= 2; let axc = xc < 0 ? -xc : xc;
+                        let car = xc * (F - axc) / F * 4 / F;
+                        let sv = (car * 18000) | 0;
+                        let y = sv - C.drZ1;
+                        C.drZ1 += (y * C.drPet) >> 16;
+                        o = y;
+                    } else {
+                        let n = lfshift();
+                        let noise = (n & 1) ? 16000 : -16000;
+                        let acc = ((noise * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
+                        if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
+                        C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                    }
+                    s = o / 32768;
+                    if (s > 1) s = 1; else if (s < -1) s = -1;
+                }
+            }
+            else if (C.w === 9) {
+                /* Formant: drive src → 3 parallel BPFs, sum. */
+                let src;
+                if (C.fmtSw === 3) {
+                    let v2 = C.fmtLf, b2 = (v2 ^ (v2 >> 1)) & 1;
+                    v2 = ((v2 >> 1) | (b2 << 14)) & 0xFFFF; if (!v2) v2 = 0x7FFF;
+                    C.fmtLf = v2; src = (v2 & 1) ? 16383 : -16383;
+                } else if (C.fmtSw === 0) {
+                    src = h < C.u ? 16383 : -16383;
+                } else {
+                    src = ((h * 2 - F) * 32767 / F)|0;
+                }
+                let sum = 0;
+                for (let i = 0; i < 3; i++) {
+                    let b0 = C.fmtB0[i], a1 = C.fmtA1[i], a2 = C.fmtA2[i];
+                    let y = (b0 * src / 65536 | 0) + C.fmtZ1[i];
+                    C.fmtZ1[i] = (-(a1 * y / 65536 | 0)) + C.fmtZ2[i];
+                    C.fmtZ2[i] = (-b0 * src / 65536 | 0) - (a2 * y / 65536 | 0);
+                    sum += y;
+                }
+                if (sum > 32767) sum = 32767; else if (sum < -32767) sum = -32767;
+                s = sum / 32768;
+                if (C.fmtSS) {
+                    C.fmtRc = (C.fmtRc + 1) & 0xFF;
+                    if ((C.fmtRc & 0x1F) === 0) {
+                        let step = C.fmtSS >> 3; if (!step) step = 1;
+                        let sp = C.fmtSp + C.fmtDir * step;
+                        if (sp >= 255) { sp = 255; C.fmtDir = -1; }
+                        else if (sp <= 0) { sp = 0; C.fmtDir = 1; }
+                        C.fmtSp = sp;
+                        fmtInterp(C);
+                    }
+                }
+            }
             else if (!C.w) s = h < C.u ? .5 : -.5;
             else if (C.w===1) s = h < F/2 ? (h*4-F)/F : (F*3-h*4)/F;
             else if (C.w===2) s = (h*2-F)/F;
@@ -1643,7 +2365,7 @@ function renderSong(patOnly, singlePat) {
             let en = C.e + (C.tm ? C.e * C.tm / F : 0);
             if (en < 0) en = 0; if (en > F) en = F;
             v += s * en * (C.v || 255) * C.rv / F / 255 / 255;
-            if (C.w !== 5) C.p = (C.p + C.f) % F;
+            if (C.w !== 5 && C.w !== 8) C.p = (C.p + C.f) % F;
         }
         out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
     }
@@ -1720,7 +2442,7 @@ function snapshotSongForWorklet() {
         })))
     );
     return {
-        bpm: song.bpm, tpr: song.tpr,
+        bpm: song.bpm, tpr: song.tpr, N: NCH,
         instruments: song.instruments.map(i => Object.assign({}, i)),
         patterns,
         order: song.order.map(o => o.slice()),
@@ -1764,24 +2486,57 @@ class BirbProcessor extends AudioWorkletProcessor {
             loopStart: sm.loopStart,
             loopEnd: sm.loopEnd
         }));
+        // sender passes N on the song payload; default to 4 for legacy
+        if (s.N) this.N = s.N;
         return {
             bpm: s.bpm, tpr: s.tpr || 6,
             instruments: s.instruments,
             patterns: s.patterns,
             order: s.order,
             samples,
-            channelMuted: s.channelMuted || [false,false,false,false]
+            channelMuted: s.channelMuted || new Array(this.N).fill(false)
         };
     }
     newState(patOnly, curPat) {
-        let ord = patOnly ? [[curPat, curPat, curPat, curPat]] : this.song.order.map(o => o.slice());
+        let ord;
+        if (patOnly) { ord = [new Array(this.N).fill(curPat)]; }
+        else { ord = this.song.order.map(o => o.slice()); }
         let ch = [];
         for (let c = 0; c < this.N; c++)
-            ch.push({p:0,f:0,b:0,w:0,n:0,u:this.F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0});
+            ch.push({p:0,f:0,b:0,w:0,n:0,u:this.F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
+                fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmNo:2,fmPrev:0,
+                ksBuf:new Int16Array(1024),ksLen:0,ksPos:0,ksD:0,
+                drAl:0,drPhase2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClick:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,
+                fmtSw:0,fmtLf:0x7FFF,fmtVa:0,fmtVb:0,fmtSp:0,fmtDir:1,fmtSS:0,fmtRc:0,
+                fmtZ1:[0,0,0],fmtZ2:[0,0,0],fmtB0:[0,0,0],fmtA1:[0,0,0],fmtA2:[0,0,0]});
         let spt = this.S*5/((this.song.bpm||125)*2)|0;
         return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1, jo: -1, jr: 0 };
     }
+    sinApprox(ph) {
+        let F=this.F, p=((ph%F)+F)%F;
+        let x = p<F/2 ? p-F/4 : (F*3/4)-p;
+        x*=4;
+        let ax=x<0?-x:x;
+        return x*(F-ax)/F*4/F;
+    }
     nf(n) { if (n<0)n=0; if (n>95)n=95; return this.bf[n%12] << (n/12|0); }
+    fmtInterp(C) {
+        const TBL = [
+            [[423,-129523,64691],[439,-128255,64281],[547,-120662,62803]],
+            [[308,-130085,64921],[731,-124576,63447],[555,-120371,62761]],
+            [[157,-130661,65222],[901,-121719,62962],[664,-116183,62216]],
+            [[331,-129981,64875],[340,-129171,64565],[540,-120877,62835]],
+            [[175,-130603,65187],[352,-129069,64531],[504,-122060,63015]]
+        ];
+        let va = C.fmtVa|0; if (va > 4) va = 0;
+        let vb = C.fmtVb|0; if (vb > 4) vb = 0;
+        let t = C.fmtSp, omt = 255 - t;
+        for (let i = 0; i < 3; i++) {
+            C.fmtB0[i] = ((TBL[va][i][0] * omt + TBL[vb][i][0] * t) / 255)|0;
+            C.fmtA1[i] = ((TBL[va][i][1] * omt + TBL[vb][i][1] * t) / 255)|0;
+            C.fmtA2[i] = ((TBL[va][i][2] * omt + TBL[vb][i][2] * t) / 255)|0;
+        }
+    }
     trigNote(C, n, ii) {
         let j = this.song.instruments[ii]; if (!j) return;
         let semi = n - 2;
@@ -1801,6 +2556,92 @@ class BirbProcessor extends AudioWorkletProcessor {
                 let bf2 = this.nf(sm.baseNote !== undefined ? sm.baseNote : 48);
                 C.ss = bf2 > 0 ? Math.round(C.b * 65536 / bf2) : 65536;
             }
+        }
+        if (j.wave === 6) {
+            let fm = j.fm || {nops:2,algo:0,fb:0,mi:64,ops:[{ri:1,rf:0,lv:255},{ri:1,rf:0,lv:255},{ri:1,rf:0,lv:0},{ri:1,rf:0,lv:0}]};
+            C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmPrev = 0;
+            for (let i = 0; i < 4; i++) {
+                C.fmp[i] = 0;
+                let op = fm.ops[i] || {ri:1,rf:0,lv:255};
+                C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
+                C.fmf[i] = Math.round(C.b * C.fmR[i]);
+                C.fmL[i] = Math.round(this.F * (op.lv || 0) / 255);
+            }
+        }
+        if (j.wave === 7) {
+            let ln = C.b > 0 ? Math.floor(this.F / C.b) : 0;
+            if (ln < 4) ln = 4;
+            if (ln > 1024) ln = 1024;
+            C.ksLen = ln; C.ksPos = 0;
+            C.ksD = j.ksDamp !== undefined ? j.ksDamp : 40;
+            let lfsr = (0x7FFF ^ ((semi * 0x1D79) & 0xFFFF)) & 0xFFFF;
+            if (!lfsr) lfsr = 0x7FFF;
+            for (let i = 0; i < ln; i++) {
+                let bit = (lfsr ^ (lfsr >> 1)) & 1;
+                lfsr = ((lfsr >> 1) | (bit << 14)) & 0xFFFF;
+                C.ksBuf[i] = (lfsr & 1) ? 16383 : -16383;
+            }
+        }
+        if (j.wave === 8) {
+            let F = this.F;
+            let dt = j.drumType|0; if (dt > 5) dt = 0;
+            let algo = (dt === 4) ? 0 : (dt === 5) ? 2 : dt;
+            C.drAl = algo;
+            C.drPhase2 = 0; C.drZ1 = 0; C.drZ2 = 0;
+            C.drLf = (0x7FFF ^ ((semi * 0x3D7F) & 0xFFFF)) & 0xFFFF; if (!C.drLf) C.drLf = 0x7FFF;
+            let dn = semi + (j.drumTune|0);
+            if (dn < 0) dn = 0; if (dn > 95) dn = 95;
+            let dfreq = this.nf(dn);
+            let dec = j.drumDecay|0, tone = j.drumTone|0, snap = j.drumSnap|0;
+            let ttl;
+            if (algo === 0) {
+                C.drPe = dfreq << 1; C.drPet = dfreq >> 3;
+                C.drRate = Math.max(16, tone * 256);
+                C.drSnap = snap; C.drClick = 64;
+                ttl = dec * 200 + 1024;
+                if (dt === 4) ttl *= 2;
+            } else if (algo === 1) {
+                C.f = dfreq > 0 ? dfreq : this.bf[2] << 2;
+                C.drMix = snap;
+                C.drPe = F >> 2;
+                let toneF = (tone * (F * 15 / 16 / 255))|0;
+                C.drPet = (F - (F >> 5)) - (toneF >> 1);
+                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                ttl = dec * 120 + 1024;
+            } else if (algo === 2) {
+                C.f = dfreq > 0 ? dfreq : this.bf[2] << 5;
+                C.drPe = (tone * 4 * F / 255)|0;
+                let hp = (snap * (F * 15 / 16 / 255))|0;
+                if (hp < F >> 4) hp = F >> 4;
+                C.drPet = hp;
+                ttl = dec * 180 + 1024;
+                if (dt === 5) ttl = 90000 + dec * 400;
+            } else {
+                C.drPe = F >> 2;
+                let toneF = (tone * (F * 15 / 16 / 255))|0;
+                C.drPet = (F - (F >> 5)) - (toneF >> 1);
+                if (C.drPet < 0) C.drPet = 0; if (C.drPet > F) C.drPet = F - 1;
+                ttl = dec * 160 + 2048;
+            }
+            if (ttl > 0xFFFFFF) ttl = 0xFFFFFF;
+            C.drTtl = ttl;
+            C.e = F; C.t = 4;
+            C.r = Math.max(1, dec >> 3);
+        }
+        if (j.wave === 9) {
+            let F = this.F;
+            let sw = j.fmtSrc !== undefined ? j.fmtSrc : 2;
+            if (sw !== 0 && sw !== 2 && sw !== 3) sw = 2;
+            C.fmtSw = sw;
+            C.fmtLf = (0x7FFF ^ ((semi * 0x2BCD) & 0xFFFF)) & 0xFFFF; if (!C.fmtLf) C.fmtLf = 0x7FFF;
+            C.fmtVa = (j.fmtVa|0) > 4 ? 0 : (j.fmtVa|0);
+            C.fmtVb = (j.fmtVb|0) > 4 ? 0 : (j.fmtVb|0);
+            C.fmtSS = (j.fmtSweep|0);
+            C.fmtSp = 0; C.fmtDir = 1; C.fmtRc = 0;
+            for (let i = 0; i < 3; i++) { C.fmtZ1[i] = 0; C.fmtZ2[i] = 0; }
+            let dcode = (j.fmtDuty|0) & 3;
+            C.u = [F/8, F/4, F/2, F*3/4][dcode];
+            this.fmtInterp(C);
         }
     }
     doRow(st) {
@@ -1886,6 +2727,10 @@ class BirbProcessor extends AudioWorkletProcessor {
             if (e === 1) { C.e += this.F / (C.a + 1); if (C.e >= this.F) { C.e = this.F; C.t = 2; } }
             else if (e === 2) { let g = this.F * C.s / 255; C.e -= (this.F - g) / (C.d + 1); if (C.e <= g) { C.e = g; C.t = 3; } }
             else if (e === 4) { C.e -= C.e / (C.r + 1); if (C.e < 64) { C.e = 0; C.t = 0; } }
+            /* FM: rebuild per-op freqs each tick from C.f */
+            if (C.w === 6) {
+                for (let i = 0; i < 4; i++) C.fmf[i] = Math.round(C.f * C.fmR[i]);
+            }
         }
     }
     process(inputs, outputs) {
@@ -1899,7 +2744,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             let v = 0;
             for (let c = 0; c < N; c++) {
                 let C = st.ch[c];
-                if (!C.t && !C.e && !C.sa) continue;
+                if (!C.t && !C.e && !C.sa && !C.drTtl) continue;
                 if (muted[c]) { C.p = (C.p + C.f) % F; continue; }
                 let h = C.p, s = 0;
                 if (C.w === 5) {
@@ -1916,6 +2761,119 @@ class BirbProcessor extends AudioWorkletProcessor {
                                 } else { C.sa = 0; s = 0; }
                             }
                             if (C.sa) { s = sm.data[pos] / 32768; C.sp = (C.sp + C.ss) >>> 0; }
+                        }
+                    }
+                }
+                else if (C.w === 6) {
+                    let modRaw = this.sinApprox(C.fmp[1]);
+                    let scale = C.fmMi * C.fmL[1] / 255;
+                    let modOut = modRaw * scale;
+                    if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
+                    let carRaw = this.sinApprox(C.fmp[0] + modOut);
+                    C.fmPrev = carRaw * F;
+                    C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
+                    C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
+                    s = carRaw * C.fmL[0] / F;
+                }
+                else if (C.w === 7) {
+                    if (C.ksLen < 2) { s = 0; }
+                    else {
+                        let p = C.ksPos, nx = p + 1; if (nx >= C.ksLen) nx = 0;
+                        let cur = C.ksBuf[p];
+                        let avg = (cur + C.ksBuf[nx]) >> 1;
+                        C.ksBuf[p] = (avg * (255 - C.ksD)) >> 8;
+                        C.ksPos = nx;
+                        s = cur / 32768;
+                    }
+                }
+                else if (C.w === 8) {
+                    if (C.drTtl <= 0) { s = 0; C.e = 0; C.t = 0; }
+                    else {
+                        C.drTtl--;
+                        let o = 0;
+                        let b = (C.drLf ^ (C.drLf >> 1)) & 1;
+                        let lfnext = () => { let bb = (C.drLf ^ (C.drLf >> 1)) & 1; C.drLf = ((C.drLf >> 1) | (bb << 14)) & 0xFFFF; if (!C.drLf) C.drLf = 0x7FFF; return C.drLf; };
+                        if (C.drAl === 0) {
+                            let gap = C.drPe - C.drPet;
+                            C.drPe -= ((gap * C.drRate) >> 20);
+                            C.p = (C.p + C.drPe) % F;
+                            let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
+                            x <<= 2; let ax = x < 0 ? -x : x;
+                            o = (x * (F - ax) / F * 4 / F) * 24000;
+                            if (C.drClick > 0) {
+                                let n = lfnext();
+                                let bit = (n & 1) ? 20000 : -20000;
+                                o += (bit * C.drSnap * C.drClick) >> 16;
+                                C.drClick--;
+                            }
+                        } else if (C.drAl === 1) {
+                            let n = lfnext();
+                            let noise = (n & 1) ? 14000 : -14000;
+                            C.p = (C.p + C.f) % F;
+                            let ph = C.p, x = ph < F/2 ? ph - F/4 : (F*3/4) - ph;
+                            x <<= 2; let ax = x < 0 ? -x : x;
+                            let body = (x * (F - ax) / F * 4 / F) * 18000;
+                            let mix = ((noise * (255 - C.drMix) + body * C.drMix) / 255)|0;
+                            let acc = ((mix * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
+                            if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
+                            C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                        } else if (C.drAl === 2) {
+                            C.p = (C.p + C.f) % F;
+                            let f2 = C.f * 17;
+                            C.drPhase2 = (C.drPhase2 + f2) % F;
+                            let ph2 = C.drPhase2, x2 = ph2 < F/2 ? ph2 - F/4 : (F*3/4) - ph2;
+                            x2 <<= 2; let ax2 = x2 < 0 ? -x2 : x2;
+                            let modRaw = x2 * (F - ax2) / F * 4 / F;
+                            let modOut = (modRaw * C.drPe) | 0;
+                            let cph = (C.p + modOut) % F;
+                            let xc = cph < F/2 ? cph - F/4 : (F*3/4) - cph;
+                            xc <<= 2; let axc = xc < 0 ? -xc : xc;
+                            let car = xc * (F - axc) / F * 4 / F;
+                            let sv = (car * 18000) | 0;
+                            let y = sv - C.drZ1;
+                            C.drZ1 += (y * C.drPet) >> 16;
+                            o = y;
+                        } else {
+                            let n = lfnext();
+                            let noise = (n & 1) ? 16000 : -16000;
+                            let acc = ((noise * C.drPe) >> 16) + ((C.drZ1 * C.drPet) >> 16) - ((C.drZ2 * (F - (F >> 3))) >> 16);
+                            if (acc > 32767) acc = 32767; else if (acc < -32767) acc = -32767;
+                            C.drZ2 = C.drZ1; C.drZ1 = acc; o = acc;
+                        }
+                        s = o / 32768;
+                        if (s > 1) s = 1; else if (s < -1) s = -1;
+                    }
+                }
+                else if (C.w === 9) {
+                    let src;
+                    if (C.fmtSw === 3) {
+                        let v2 = C.fmtLf, b2 = (v2 ^ (v2 >> 1)) & 1;
+                        v2 = ((v2 >> 1) | (b2 << 14)) & 0xFFFF; if (!v2) v2 = 0x7FFF;
+                        C.fmtLf = v2; src = (v2 & 1) ? 16383 : -16383;
+                    } else if (C.fmtSw === 0) {
+                        src = h < C.u ? 16383 : -16383;
+                    } else {
+                        src = ((h * 2 - F) * 32767 / F)|0;
+                    }
+                    let sum = 0;
+                    for (let i = 0; i < 3; i++) {
+                        let b0 = C.fmtB0[i], a1 = C.fmtA1[i], a2 = C.fmtA2[i];
+                        let y = ((b0 * src) >> 16) + C.fmtZ1[i];
+                        C.fmtZ1[i] = (-((a1 * y) >> 16)) + C.fmtZ2[i];
+                        C.fmtZ2[i] = ((-b0 * src) >> 16) - ((a2 * y) >> 16);
+                        sum += y;
+                    }
+                    if (sum > 32767) sum = 32767; else if (sum < -32767) sum = -32767;
+                    s = sum / 32768;
+                    if (C.fmtSS) {
+                        C.fmtRc = (C.fmtRc + 1) & 0xFF;
+                        if ((C.fmtRc & 0x1F) === 0) {
+                            let step = C.fmtSS >> 3; if (!step) step = 1;
+                            let sp = C.fmtSp + C.fmtDir * step;
+                            if (sp >= 255) { sp = 255; C.fmtDir = -1; }
+                            else if (sp <= 0) { sp = 0; C.fmtDir = 1; }
+                            C.fmtSp = sp;
+                            this.fmtInterp(C);
                         }
                     }
                 }
@@ -1937,7 +2895,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                 let en = C.e + (C.tm ? C.e * C.tm / F : 0);
                 if (en < 0) en = 0; if (en > F) en = F;
                 v += s * en * C.v * C.rv / F / 255 / 255;
-                if (C.w !== 5) C.p = (C.p + C.f) % F;
+                if (C.w !== 5 && C.w !== 8) C.p = (C.p + C.f) % F;
             }
             out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
         }
@@ -2085,9 +3043,12 @@ function exportBin() {
     let buf = [];
     let push = v => buf.push(v & 0xFF);
 
-    // header
+    // header — NCH-1 pair encoded in the high 3 bits of the ticks_per_row byte.
+    // Encoding matches birb_format.h: channels = 4 + 2*code (0→4, 1→6, …, 6→16).
+    let nchCode = ((NCH - 4) / 2) & 0x7;
+    let tprByte = (song.tpr & 0x1F) | (nchCode << 5);
     push(0x42); push(0x52); push(0x42); push(0x31); // BRB1
-    push(song.bpm); push(song.tpr);
+    push(song.bpm); push(tprByte);
     push(song.instruments.length); push(song.patterns.length);
 
     // order
@@ -2162,6 +3123,70 @@ function exportBin() {
         }
     }
 
+    // FMIN section — FM instrument params (only when ≥1 FM inst present)
+    let fmInsts = song.instruments.map((ins, idx) => ({ins, idx})).filter(x => x.ins.wave === 6);
+    if (fmInsts.length > 0) {
+        push(70); push(77); push(73); push(78); // 'FMIN'
+        push(fmInsts.length);
+        for (let {ins, idx} of fmInsts) {
+            let fm = ins.fm || FM_DEFAULTS;
+            let nops = fm.nops || 2;
+            if (nops > 4) nops = 4;
+            push(idx); push(nops);
+            push(fm.algo || 0); push(fm.fb || 0);
+            push(fm.mi !== undefined ? fm.mi : 64); push(0); // reserved
+            for (let o = 0; o < nops; o++) {
+                let op = fm.ops[o] || {ri:1,rf:0,lv:255,a:0,d:8,s:200,r:8};
+                push(op.ri & 0xFF); push(op.rf & 0xFF); push(op.lv & 0xFF);
+                push(op.a & 0xFF); push(op.d & 0xFF); push(op.s & 0xFF); push(op.r & 0xFF);
+                push(0); // reserved
+            }
+        }
+    }
+
+    // KSIN section — Karplus-Strong instrument params
+    let ksInsts = song.instruments.map((ins, idx) => ({ins, idx})).filter(x => x.ins.wave === 7);
+    if (ksInsts.length > 0) {
+        push(75); push(83); push(73); push(78); // 'KSIN'
+        push(ksInsts.length);
+        for (let {ins, idx} of ksInsts) {
+            push(idx);
+            push(ins.ksDamp !== undefined ? ins.ksDamp : 40);
+        }
+    }
+
+    // DRIN section — drum instrument params
+    let drumInsts = song.instruments.map((ins, idx) => ({ins, idx})).filter(x => x.ins.wave === 8);
+    if (drumInsts.length > 0) {
+        push(68); push(82); push(73); push(78); // 'DRIN'
+        push(drumInsts.length);
+        for (let {ins, idx} of drumInsts) {
+            push(idx);
+            push((ins.drumType|0) & 7);
+            let tune = ins.drumTune|0;
+            push(tune < 0 ? tune + 256 : tune);
+            push((ins.drumDecay|0) & 0xFF);
+            push((ins.drumTone|0) & 0xFF);
+            push((ins.drumSnap|0) & 0xFF);
+        }
+    }
+
+    // FRIN section — formant instrument params
+    let formantInsts = song.instruments.map((ins, idx) => ({ins, idx})).filter(x => x.ins.wave === 9);
+    if (formantInsts.length > 0) {
+        push(70); push(82); push(73); push(78); // 'FRIN'
+        push(formantInsts.length);
+        for (let {ins, idx} of formantInsts) {
+            push(idx);
+            push((ins.fmtSrc|0) & 0xFF);
+            push((ins.fmtDuty|0) & 0xFF);
+            push((ins.fmtVa|0) & 0xFF);
+            push((ins.fmtVb|0) & 0xFF);
+            push((ins.fmtSweep|0) & 0xFF);
+            push((ins.fmtRes|0) & 0xFF);
+        }
+    }
+
     // NAME section — instrument names
     let hasNames = song.instruments.some(i => i.name);
     if (hasNames) {
@@ -2188,13 +3213,51 @@ function exportBin() {
 function buildJS() {
     let N = NCH, o = '';
 
-    o += 'function birb(X){\nvar S=44100,N=4,F=65536,\n';
+    o += `function birb(X){\nvar S=44100,N=${NCH},F=65536,\n`;
     o += `bpm=${song.bpm},tpr=${song.tpr},ni=${song.instruments.length},np=${song.patterns.length},ol=${song.order.length},\n`;
 
     o += 'O=[' + song.order.map(r => '[' + r.join(',') + ']').join(',') + '],\n';
 
+    /* Detect which synth types are actually used so the export can strip
+     * unused generator code. */
+    let usesFM = song.instruments.some(i => i.wave === 6);
+    let usesKS = song.instruments.some(i => i.wave === 7);
+    let usesDrum = song.instruments.some(i => i.wave === 8);
+    let usesFormant = song.instruments.some(i => i.wave === 9);
+    /* Track which drum algorithms are used — unused ones are skipped in output. */
+    let drumAlgos = new Set();
+    if (usesDrum) {
+        for (let i of song.instruments) if (i.wave === 8) {
+            let dt = (i.drumType|0), algo = dt === 4 ? 0 : dt === 5 ? 2 : dt;
+            drumAlgos.add(algo);
+        }
+    }
+
     o += 'I=[' + song.instruments.map(i => {
-        return `[${i.wave},${i.duty},${i.a},${i.d},${i.s},${i.r},${i.pe},${i.pel},${i.arp1},${i.arp2},${i.vol !== undefined ? i.vol : 255},${i.sampleIdx !== undefined ? i.sampleIdx : 0}]`;
+        let base = `[${i.wave},${i.duty},${i.a},${i.d},${i.s},${i.r},${i.pe},${i.pel},${i.arp1},${i.arp2},${i.vol !== undefined ? i.vol : 255},${i.sampleIdx !== undefined ? i.sampleIdx : 0}`;
+        if (usesFM) {
+            let fm = i.fm || FM_DEFAULTS;
+            let ops = [];
+            for (let k = 0; k < 4; k++) {
+                let op = fm.ops[k] || {ri:1,rf:0,lv:0};
+                ops.push(`[${op.ri},${op.rf},${op.lv}]`);
+            }
+            base += `,${fm.nops},${fm.fb},${fm.mi},[${ops.join(',')}]`;
+        } else if (usesKS || usesDrum || usesFormant) {
+            /* Reserve FM slots so later fields keep a fixed index. */
+            base += `,0,0,0,0`;
+        }
+        if (usesKS || usesDrum || usesFormant) {
+            base += `,${i.ksDamp !== undefined ? i.ksDamp : 40}`;
+        }
+        if (usesDrum || usesFormant) {
+            let tune = (i.drumTune|0); if (tune < 0) tune += 256;
+            base += `,${(i.drumType|0)&7},${tune},${(i.drumDecay|0)&0xFF},${(i.drumTone|0)&0xFF},${(i.drumSnap|0)&0xFF}`;
+        }
+        if (usesFormant) {
+            base += `,${(i.fmtSrc|0)&0xFF},${(i.fmtDuty|0)&3},${(i.fmtVa|0)&7},${(i.fmtVb|0)&7},${(i.fmtSweep|0)&0xFF},${(i.fmtRes|0)&0xFF}`;
+        }
+        return base + ']';
     }).join(',') + '],\n';
 
     o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
@@ -2253,18 +3316,34 @@ if(pr>32767)pr=32767;if(pr<-32768)pr=-32768;si+=AIA[nb];if(si<0)si=0;if(si>88)si
 return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}}),
 `;
     }
+    /* Instrument field indices in I[n] depend on which synth types the song
+     * uses. Base 12 (0..11), then FM block (12..15) if FM or KS or DRUM,
+     * then ksDamp at 16, then drumType/tune/decay/tone/snap at 17..21. */
+    let drumBase = (usesFM || usesKS || usesDrum || usesFormant) ? 17 : -1;
+    let formantBase = drumBase >= 0 ? (drumBase + 5) : -1;
     o += `var bf=[24,26,27,29,31,32,34,36,38,41,43,46],
 dv=[8192,16384,32768,49152],
 nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
 spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,
 out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
-for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0}
-function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
+for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0':''}${usesDrum?',drAl:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]':''}}
+${(usesFM || usesDrum) ? `function SA_(ph){var p=((ph%F)+F)%F;var x=p<F/2?p-F/4:(F*3/4)-p;x*=4;var ax=x<0?-x:x;return x*(F-ax)/F*4/F}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];C.t=1;C.e=0
 C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0
 if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}
-C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}}
+C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}${usesFM ? `
+if(j[0]===6){var fm=j[15];C.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255)}}` : ''}${usesKS ? `
+if(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?16383:-16383}}` : ''}${usesDrum ? `
+if(j[0]===8){var dt=j[${drumBase}]&7,al=dt===4?0:dt===5?2:dt,tn=j[${drumBase+1}];if(tn>127)tn-=256;var dec=j[${drumBase+2}],tone=j[${drumBase+3}],snp=j[${drumBase+4}],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;
+if(al===0){C.drPe=df<<1;C.drPet=df>>3;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=64;tt=dec*200+1024;if(dt===4)tt*=2}
+else if(al===1){C.f=df>0?df:bf[2]<<2;C.drMix=snp;C.drPe=F>>2;var tF=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*120+1024}
+else if(al===2){C.f=df>0?df:bf[2]<<5;C.drPe=tone*4*F/255|0;var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}
+else{C.drPe=F>>2;var tF2=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF2>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*160+2048}
+if(tt>0xFFFFFF)tt=0xFFFFFF;C.drTtl=tt;C.e=F;C.t=4;C.r=Math.max(1,dec>>3)}` : ''}${usesFormant ? `
+if(j[0]===9){var sw=j[${formantBase}];if(sw!==0&&sw!==2&&sw!==3)sw=2;C.ftSw=sw;C.ftLf=(0x7FFF^(s*0x2BCD&0xFFFF))&0xFFFF;if(!C.ftLf)C.ftLf=0x7FFF;C.ftVa=j[${formantBase+2}]&7;if(C.ftVa>4)C.ftVa=0;C.ftVb=j[${formantBase+3}]&7;if(C.ftVb>4)C.ftVb=0;C.ftSS=j[${formantBase+4}];C.ftSp=0;C.ftDr=1;C.ftRc=0;for(var fi=0;fi<3;fi++){C.ftZ1[fi]=0;C.ftZ2[fi]=0}C.u=[F/8,F/4,F/2,F*3/4][j[${formantBase+1}]&3];FI(C)}` : ''}}
+${usesFormant ? `var FT=[[[423,-129523,64691],[439,-128255,64281],[547,-120662,62803]],[[308,-130085,64921],[731,-124576,63447],[555,-120371,62761]],[[157,-130661,65222],[901,-121719,62962],[664,-116183,62216]],[[331,-129981,64875],[340,-129171,64565],[540,-120877,62835]],[[175,-130603,65187],[352,-129069,64531],[504,-122060,63015]]]
+function FI(C){var t=C.ftSp,omt=255-t,va=C.ftVa,vb=C.ftVb;for(var i=0;i<3;i++){C.ftB0[i]=(FT[va][i][0]*omt+FT[vb][i][0]*t)/255|0;C.ftA1[i]=(FT[va][i][1]*omt+FT[vb][i][1]*t)/255|0;C.ftA2[i]=(FT[va][i][2]*omt+FT[vb][i][2]*t)/255|0}}` : ''}
 function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue
 var n=P(pn,q,c,cr),ii=P(pi,q,c,cr)||255,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)
 C.ri=0;C.nc=0;C.nd=0
@@ -2301,20 +3380,30 @@ if(C.vd){C.f+=((C.vp&65535)*4-F*2>>8)*C.vd/F;C.vp+=C.vs}
             if(C.td){C.tm=((C.tp&65535)*4-F*2>>8)*C.td/F;C.tp+=C.ts}else C.tm=0
 var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
 else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
-else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}}}
+else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}${usesFM ? `
+if(C.w===6){for(var k=0;k<4;k++)C.fmf[k]=Math.round(C.f*C.fmR[k])}` : ''}}}
 for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
-var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa)continue
+var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa${usesDrum ? '&&!C.drTtl' : ''})continue
 var h=C.p,s=0
 if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
-if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}
+if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}${usesFM ? `
+else if(C.w===6){var mr=SA_(C.fmp[1]),sc=C.fmMi*C.fmL[1]/255,mo=mr*sc;if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*C.fmL[0]/F}` : ''}${usesKS ? `
+else if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*(255-C.kd))>>8;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
+else if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
+${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;C.drPe-=(gp*C.drRate)>>20;C.p=(C.p+C.drPe)%F;o_=SA_(C.p)*24000;if(C.drClk>0){var nn=lfn();var bit=(nn&1)?20000:-20000;o_+=(bit*C.drSnap*C.drClk)>>16;C.drClk--}}` : ''}
+${drumAlgos.has(1) ? `${drumAlgos.has(0) ? 'else ' : ''}if(C.drAl===1){var nn=lfn();var noi=(nn&1)?14000:-14000;C.p=(C.p+C.f)%F;var bd=SA_(C.p)*18000;var mx=(noi*(255-C.drMix)+bd*C.drMix)/255|0;var ac=((mx*C.drPe)>>16)+((C.drZ1*C.drPet)>>16)-((C.drZ2*(F-(F>>3)))>>16);if(ac>32767)ac=32767;else if(ac<-32767)ac=-32767;C.drZ2=C.drZ1;C.drZ1=ac;o_=ac}` : ''}
+${drumAlgos.has(2) ? `${(drumAlgos.has(0)||drumAlgos.has(1)) ? 'else ' : ''}if(C.drAl===2){C.p=(C.p+C.f)%F;C.drP2=(C.drP2+C.f*17)%F;var mr=SA_(C.drP2);var mo=(mr*C.drPe)|0;var cr2=SA_(C.p+mo);var sv=(cr2*18000)|0;var y=sv-C.drZ1;C.drZ1+=(y*C.drPet)>>16;o_=y}` : ''}
+${drumAlgos.has(3) ? `${(drumAlgos.has(0)||drumAlgos.has(1)||drumAlgos.has(2)) ? 'else ' : ''}if(C.drAl===3){var nn=lfn();var noi=(nn&1)?16000:-16000;var ac=((noi*C.drPe)>>16)+((C.drZ1*C.drPet)>>16)-((C.drZ2*(F-(F>>3)))>>16);if(ac>32767)ac=32767;else if(ac<-32767)ac=-32767;C.drZ2=C.drZ1;C.drZ1=ac;o_=ac}` : ''}
+s=o_/32768;if(s>1)s=1;else if(s<-1)s=-1}}` : ''}${usesFormant ? `
+else if(C.w===9){var src;if(C.ftSw===3){var fv=C.ftLf,fb=(fv^(fv>>1))&1;fv=((fv>>1)|(fb<<14))&0xFFFF;if(!fv)fv=0x7FFF;C.ftLf=fv;src=(fv&1)?16383:-16383}else if(C.ftSw===0){src=h<C.u?16383:-16383}else{src=(h*2-F)*32767/F|0}var sm=0;for(var fi=0;fi<3;fi++){var b0=C.ftB0[fi],a1=C.ftA1[fi],a2=C.ftA2[fi];var yy=(b0*src/65536|0)+C.ftZ1[fi];C.ftZ1[fi]=(-(a1*yy/65536|0))+C.ftZ2[fi];C.ftZ2[fi]=(-b0*src/65536|0)-(a2*yy/65536|0);sm+=yy}if(sm>32767)sm=32767;else if(sm<-32767)sm=-32767;s=sm/32768;if(C.ftSS){C.ftRc=(C.ftRc+1)&0xFF;if((C.ftRc&0x1F)===0){var st=C.ftSS>>3;if(!st)st=1;var sp=C.ftSp+C.ftDr*st;if(sp>=255){sp=255;C.ftDr=-1}else if(sp<=0){sp=0;C.ftDr=1}C.ftSp=sp;FI(C)}}}` : ''}
 else if(!C.w)s=h<C.u?.5:-.5
 else if(C.w===1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F
 else if(C.w===2)s=(h*2-F)/F
 else if(C.w===4){var ph=h&0xFFFF,x=ph<F/2?ph-F/4:(F*3/4)-ph;x<<=2;var ax=x<0?-x:x;s=x*(F-ax)/F*4/F}
 else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
 var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F
-v+=s*en*C.v*C.rv/F/255/255;if(C.w!==5)C.p=(C.p+C.f)%F}out[i]=v>1?1:v<-1?-1:v}
+v+=s*en*C.v*C.rv/F/255/255;if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}out[i]=v>1?1:v<-1?-1:v}
 return{o:out,spt:spt,T:T}}`;
     return o;
 }
@@ -2468,7 +3557,16 @@ function parseBin(d) {
     song.patterns = [];
     song.order = [];
     song.samples = [];
-    song.bpm = d[4]; song.tpr = d[5];
+    song.bpm = d[4];
+    // ticks_per_row byte: low 5 bits = tpr, high 3 bits = channel count code.
+    let tprByte = d[5];
+    song.tpr = tprByte & 0x1F;
+    let nchSong = 4 + 2 * ((tprByte >> 5) & 0x7);
+    if (nchSong > NCH_MAX) { alert('Song has more channels than editor supports'); return; }
+    NCH = nchSong;
+    // resize mute array to match
+    channelMuted = new Array(NCH).fill(false);
+    currentBank = 0;
     let ni = d[6], np = d[7], p = 8;
     let ol = d[p++];
     for (let i = 0; i < ol; i++) {
@@ -2531,6 +3629,91 @@ function parseBin(d) {
                 loopStart: ls === 0xFFFF ? -1 : ls,
                 loopEnd: le
             });
+        }
+    }
+
+    // optional FMIN section
+    if (p + 4 <= d.length && d[p]===70 && d[p+1]===77 && d[p+2]===73 && d[p+3]===78) {
+        p += 4;
+        let fmCount = d[p++];
+        for (let f = 0; f < fmCount; f++) {
+            if (p + 6 > d.length) break;
+            let idx = d[p], nops = d[p+1] || 2;
+            if (nops > 4) nops = 4;
+            let algo = d[p+2], fb = d[p+3], mi = d[p+4];
+            p += 6;
+            let ops = [];
+            for (let o = 0; o < nops; o++) {
+                if (p + 8 > d.length) break;
+                ops.push({
+                    ri: d[p], rf: d[p+1], lv: d[p+2],
+                    a: d[p+3], d: d[p+4], s: d[p+5], r: d[p+6]
+                });
+                p += 8;
+            }
+            /* pad unused ops to 4 */
+            while (ops.length < 4) ops.push({ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8});
+            if (idx < song.instruments.length) {
+                song.instruments[idx].wave = 6; /* FM */
+                song.instruments[idx].fm = { nops, algo, fb, mi, ops };
+            }
+        }
+    }
+
+    // optional KSIN section
+    if (p + 4 <= d.length && d[p]===75 && d[p+1]===83 && d[p+2]===73 && d[p+3]===78) {
+        p += 4;
+        let ksCount = d[p++];
+        for (let k = 0; k < ksCount; k++) {
+            if (p + 2 > d.length) break;
+            let idx = d[p], damp = d[p+1];
+            p += 2;
+            if (idx < song.instruments.length) {
+                song.instruments[idx].wave = 7; /* KS */
+                song.instruments[idx].ksDamp = damp;
+            }
+        }
+    }
+
+    // optional DRIN section (drum instruments)
+    if (p + 4 <= d.length && d[p]===68 && d[p+1]===82 && d[p+2]===73 && d[p+3]===78) {
+        p += 4;
+        let dcount = d[p++];
+        for (let k = 0; k < dcount; k++) {
+            if (p + 6 > d.length) break;
+            let idx = d[p], dtype = d[p+1] & 7;
+            let tune = d[p+2]; if (tune > 127) tune -= 256;
+            let decay = d[p+3], tone = d[p+4], snap = d[p+5];
+            p += 6;
+            if (idx < song.instruments.length) {
+                song.instruments[idx].wave = 8;
+                song.instruments[idx].drumType = dtype;
+                song.instruments[idx].drumTune = tune;
+                song.instruments[idx].drumDecay = decay;
+                song.instruments[idx].drumTone = tone;
+                song.instruments[idx].drumSnap = snap;
+            }
+        }
+    }
+
+    // optional FRIN section (formant instruments)
+    if (p + 4 <= d.length && d[p]===70 && d[p+1]===82 && d[p+2]===73 && d[p+3]===78) {
+        p += 4;
+        let fcount = d[p++];
+        for (let k = 0; k < fcount; k++) {
+            if (p + 7 > d.length) break;
+            let idx = d[p], sw = d[p+1], du = d[p+2];
+            let va = d[p+3], vb = d[p+4], sp = d[p+5], rs = d[p+6];
+            p += 7;
+            if (idx < song.instruments.length) {
+                song.instruments[idx].wave = 9;
+                song.instruments[idx].fmtSrc = sw;
+                song.instruments[idx].fmtDuty = du;
+                song.instruments[idx].fmtVa = va;
+                song.instruments[idx].fmtVb = vb;
+                song.instruments[idx].fmtSweep = sp;
+                song.instruments[idx].fmtRes = rs;
+            }
         }
     }
 

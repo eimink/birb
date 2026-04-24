@@ -1,0 +1,29 @@
+# Formant filter test — vowel pad with A→O sweep over long notes.
+# Saw source through 3 resonant BPFs at formant frequencies.
+@bpm 110
+@ticks 6
+
+@inst 0 formant source=saw vowela=A vowelb=O sweep=96 resonance=128 adsr=0,0,200,48 volume=200
+@inst 1 formant source=saw vowela=E vowelb=I sweep=0  resonance=128 adsr=2,0,220,32 volume=180
+@inst 2 formant source=pulse duty=2 vowela=O vowelb=U sweep=48 resonance=160 adsr=0,0,200,64 volume=180
+
+@order
+0 0 0 0
+
+@pattern 0 16
+C-4 00 --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+E-4 00 --- | G-3 01 --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+G-4 00 --- | C-4 01 --- | C-3 02 --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+A-4 00 --- | E-4 01 --- | E-3 02 --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---
+--- -- --- | --- -- --- | --- -- --- | --- -- ---

@@ -7,6 +7,10 @@
  *     'B' 'R' 'B' '1'        magic + version
  *     bpm: u8
  *     ticks_per_row: u8
+ *         Low 5 bits: ticks per row (1..31).
+ *         High 3 bits: channel-count code — decoded as `4 + 2*code`
+ *           (0→4, 1→6, 2→8, 3→10, 4→12, 5→14, 6→16, 7→reserved).
+ *         Older files never set the high bits, so they decode as 4 channels.
  *     num_instruments: u8
  *     num_patterns: u8
  *
@@ -57,6 +61,60 @@
  *       init_predictor: i16 (little-endian)
  *       data: u8[ceil(length/2)] (4-bit IMA-ADPCM packed, low nibble first)
  *
+ *   Optional FM section (FM instrument params):
+ *     'F' 'M' 'I' 'N'
+ *     count: u8 (number of FM instruments)
+ *     Per FM inst:
+ *       inst_idx: u8          (which instrument slot — synth_type is set to SYNTH_FM)
+ *       num_ops: u8           (2 or 4)
+ *       algorithm: u8         (0-7, for 4-op)
+ *       feedback: u8          (op0 feedback 0-255)
+ *       mod_index: u8         (global mod scaling 0-255)
+ *       reserved: u8          (alignment)
+ *       per-op × num_ops (6 bytes each):
+ *         ratio_i: u8
+ *         ratio_f: u8         (fractional sixteenths: ratio = i + f/16)
+ *         level: u8
+ *         attack: u8
+ *         decay: u8
+ *         (sustain, release packed: high nibble | low nibble isn't worth it —
+ *          just use 2 more bytes: sustain u8, release u8 → 8 bytes per op)
+ *       Actual per-op size: 8 bytes.
+ *     Loaders with -DBIRB_NO_FM skip the entire section cleanly.
+ *
+ *   Optional KSIN section (Karplus-Strong instrument params):
+ *     'K' 'S' 'I' 'N'
+ *     count: u8 (number of KS instruments)
+ *     Per KS inst (2 bytes):
+ *       inst_idx: u8  (loader sets this instrument's synth_type to SYNTH_KS)
+ *       damping:  u8  (0-255; higher = shorter sustain)
+ *     Loaders with -DBIRB_NO_KS skip the entire section cleanly.
+ *
+ *   Optional DRIN section (drum instrument params):
+ *     'D' 'R' 'I' 'N'
+ *     count: u8 (number of drum instruments)
+ *     Per drum inst (6 bytes):
+ *       inst_idx:   u8  (loader sets this instrument's synth_type to SYNTH_DRUM)
+ *       drum_type:  u8  (0=KICK 1=SNARE 2=HAT 3=CLAP 4=TOM 5=CRASH; low 3 bits)
+ *       drum_tune:  i8  (signed semitone offset)
+ *       drum_decay: u8
+ *       drum_tone:  u8
+ *       drum_snap:  u8
+ *     Loaders with -DBIRB_NO_DRUM skip the entire section cleanly.
+ *
+ *   Optional FRIN section (formant instrument params):
+ *     'F' 'R' 'I' 'N'
+ *     count: u8 (number of formant instruments)
+ *     Per formant inst (7 bytes):
+ *       inst_idx:     u8  (loader sets synth_type to SYNTH_FORMANT)
+ *       source_wave:  u8  (WAVE_PULSE / WAVE_SAWTOOTH / WAVE_NOISE)
+ *       duty:         u8  (duty code 0..3, relevant when source = pulse)
+ *       vowel_a:      u8  (0=A 1=E 2=I 3=O 4=U)
+ *       vowel_b:      u8
+ *       sweep_speed:  u8  (0 = static vowel_a; >0 bounces A↔B)
+ *       resonance:    u8  (0..255; currently advisory — table fixed at Q=8)
+ *     Loaders with -DBIRB_NO_FORMANT skip the entire section cleanly.
+ *
  *   Optional NAME section (instrument names):
  *     'N' 'A' 'M' 'E'
  *     For each instrument: length-prefixed string (u8 len + chars, no null term)
@@ -72,6 +130,14 @@
 #define BIRB_MAGIC_3 '1'
 
 #define BIRB_INST_SIZE 12
+
+/* Channel count encoding lives in the high 3 bits of the ticks_per_row byte.
+ * Encoded value c yields (4 + 2*c) channels, so existing files with the high
+ * bits clear decode as 4 channels. Code 7 is reserved. */
+#define BIRB_TPR_MASK           0x1F
+#define BIRB_CHANNELS_SHIFT     5
+#define BIRB_CHANNELS_DECODE(b) (4 + 2 * (((b) >> BIRB_CHANNELS_SHIFT) & 0x7))
+#define BIRB_CHANNELS_ENCODE(n) ((uint8_t)((((n) - 4) / 2) & 0x7))
 
 /* Duty encoding for binary format */
 #define BIRB_DUTY_12  0
@@ -111,19 +177,25 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
         ((uint8_t *)song)[i] = 0;
 
     song->bpm = data[4];
-    song->ticks_per_row = data[5];
+    /* ticks_per_row byte carries the channel count in its high 3 bits. */
+    uint8_t tpr_byte = data[5];
+    song->ticks_per_row = tpr_byte & BIRB_TPR_MASK;
+    int nch_song = BIRB_CHANNELS_DECODE(tpr_byte);
+    if (nch_song > BIRB_NUM_CHANNELS) return -1; /* build can't hold this many */
     song->num_instruments = data[6];
     song->num_patterns = data[7];
 
     int pos = 8;
 
-    /* order */
+    /* order: read nch_song bytes per slot; zero-pad unused channels. */
     if (pos >= len) return -1;
     song->order_length = data[pos++];
     for (int i = 0; i < song->order_length && i < BIRB_MAX_ORDER; i++) {
-        if (pos + 4 > len) return -1;
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
+        if (pos + nch_song > len) return -1;
+        for (int c = 0; c < nch_song; c++)
             song->order[i][c] = data[pos++];
+        for (int c = nch_song; c < BIRB_NUM_CHANNELS; c++)
+            song->order[i][c] = 0xFF; /* no pattern */
     }
 
     /* instruments */
@@ -142,6 +214,9 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
         inst->arp_note2 = data[pos + 9];
         inst->volume = data[pos + 10];
         inst->sample_idx = data[pos + 11];
+        /* Derive synth_type from waveform (migration: old files store only
+         * waveform, so WAVE_SAMPLE → SYNTH_SAMPLE, everything else → SYNTH_BASIC). */
+        inst->synth_type = (inst->waveform == WAVE_SAMPLE) ? SYNTH_SAMPLE : SYNTH_BASIC;
         pos += BIRB_INST_SIZE;
     }
 
@@ -173,11 +248,12 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
         }
     }
 
-    /* For each plane, if not flagged empty, read channel-major pattern-major */
+    /* For each plane, if not flagged empty, read channel-major pattern-major.
+     * Stream only contains nch_song channels; the rest stay at their defaults. */
     for (int pl = 0; pl < 5; pl++) {
         if (plane_flags & (1 << pl)) continue; /* empty plane, use defaults */
         (void)plane_defaults;
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
+        for (int c = 0; c < nch_song; c++) {
             for (int p = 0; p < np; p++) {
                 int nrows = song->pattern_lengths[p];
                 if (pos + nrows > len) return -1;
@@ -282,6 +358,156 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
             song->sample_pool_used += length;
         }
 #endif /* BIRB_NO_SAMPLES */
+    }
+
+#ifndef BIRB_NO_FM
+    /* optional FMIN section — FM instrument params.
+     * Attached to existing instrument slots: each record starts with an
+     * instrument index, and the loader promotes that instrument's
+     * synth_type to SYNTH_FM. */
+    if (pos + 4 <= len && data[pos] == 'F' && data[pos+1] == 'M' &&
+        data[pos+2] == 'I' && data[pos+3] == 'N') {
+        pos += 4;
+        if (pos >= len) return -1;
+        int fm_count = data[pos++];
+        for (int f = 0; f < fm_count; f++) {
+            if (pos + 6 > len) return -1;
+            uint8_t idx = data[pos];
+            uint8_t nops = data[pos+1];
+            if (nops == 0) nops = 2;
+            if (nops > 4) nops = 4;
+            if (idx < BIRB_MAX_INSTRUMENTS) {
+                birb_instrument *inst = &song->instruments[idx];
+                inst->synth_type = SYNTH_FM;
+                inst->fm.num_ops = nops;
+                inst->fm.algorithm = data[pos+2];
+                inst->fm.feedback = data[pos+3];
+                inst->fm.mod_index = data[pos+4];
+            }
+            pos += 6;
+            for (int o = 0; o < nops; o++) {
+                if (pos + 8 > len) return -1;
+                if (idx < BIRB_MAX_INSTRUMENTS) {
+                    birb_instrument *inst = &song->instruments[idx];
+                    inst->fm.ops[o].ratio_i = data[pos];
+                    inst->fm.ops[o].ratio_f = data[pos+1];
+                    inst->fm.ops[o].level   = data[pos+2];
+                    inst->fm.ops[o].adsr.attack  = data[pos+3];
+                    inst->fm.ops[o].adsr.decay   = data[pos+4];
+                    inst->fm.ops[o].adsr.sustain = data[pos+5];
+                    inst->fm.ops[o].adsr.release = data[pos+6];
+                    /* data[pos+7] reserved */
+                }
+                pos += 8;
+            }
+        }
+    }
+#endif
+    /* In BIRB_NO_FM builds, FMIN section (if any) is not parsed. The NAME
+     * section parse below guards on the 'N' magic — if an FMIN section is
+     * present ahead of NAME, NAME simply won't match and instrument names
+     * are skipped. Songs authored without FM are unaffected. */
+
+    /* optional KSIN section — Karplus-Strong instrument params.
+     * Attached to existing instrument slots: the loader promotes that
+     * instrument's synth_type to SYNTH_KS and records its damping. */
+    if (pos + 4 <= len && data[pos] == 'K' && data[pos+1] == 'S' &&
+        data[pos+2] == 'I' && data[pos+3] == 'N') {
+        pos += 4;
+#ifdef BIRB_NO_KS
+        if (pos < len) {
+            int ks_count = data[pos++];
+            if (pos + 2 * ks_count > len) return -1;
+            pos += 2 * ks_count; /* skip the whole section */
+        }
+#else
+        if (pos >= len) return -1;
+        int ks_count = data[pos++];
+        for (int k = 0; k < ks_count; k++) {
+            if (pos + 2 > len) return -1;
+            uint8_t idx = data[pos];
+            uint8_t damping = data[pos + 1];
+            if (idx < BIRB_MAX_INSTRUMENTS) {
+                birb_instrument *inst = &song->instruments[idx];
+                inst->synth_type = SYNTH_KS;
+                inst->ks_damping = damping;
+            }
+            pos += 2;
+        }
+#endif
+    }
+
+    /* optional DRIN section — drum instrument params. Attached to existing
+     * instrument slots; loader promotes that slot's synth_type to SYNTH_DRUM. */
+    if (pos + 4 <= len && data[pos] == 'D' && data[pos+1] == 'R' &&
+        data[pos+2] == 'I' && data[pos+3] == 'N') {
+        pos += 4;
+#ifdef BIRB_NO_DRUM
+        if (pos < len) {
+            int dcount = data[pos++];
+            if (pos + 6 * dcount > len) return -1;
+            pos += 6 * dcount;
+        }
+#else
+        if (pos >= len) return -1;
+        int dcount = data[pos++];
+        for (int k = 0; k < dcount; k++) {
+            if (pos + 6 > len) return -1;
+            uint8_t idx = data[pos];
+            uint8_t dtype = data[pos + 1] & 0x07;
+            int8_t tune = (int8_t)data[pos + 2];
+            uint8_t decay = data[pos + 3];
+            uint8_t tone = data[pos + 4];
+            uint8_t snap = data[pos + 5];
+            if (idx < BIRB_MAX_INSTRUMENTS) {
+                birb_instrument *inst = &song->instruments[idx];
+                inst->synth_type = SYNTH_DRUM;
+                inst->drum_type = dtype;
+                inst->drum_tune = tune;
+                inst->drum_decay = decay;
+                inst->drum_tone = tone;
+                inst->drum_snap = snap;
+            }
+            pos += 6;
+        }
+#endif
+    }
+
+    /* optional FRIN section — formant instrument params. */
+    if (pos + 4 <= len && data[pos] == 'F' && data[pos+1] == 'R' &&
+        data[pos+2] == 'I' && data[pos+3] == 'N') {
+        pos += 4;
+#ifdef BIRB_NO_FORMANT
+        if (pos < len) {
+            int fcount = data[pos++];
+            if (pos + 7 * fcount > len) return -1;
+            pos += 7 * fcount;
+        }
+#else
+        if (pos >= len) return -1;
+        int fcount = data[pos++];
+        for (int k = 0; k < fcount; k++) {
+            if (pos + 7 > len) return -1;
+            uint8_t idx = data[pos];
+            uint8_t sw  = data[pos + 1];
+            uint8_t duty = data[pos + 2];
+            uint8_t va  = data[pos + 3];
+            uint8_t vb  = data[pos + 4];
+            uint8_t sp  = data[pos + 5];
+            uint8_t res = data[pos + 6];
+            if (idx < BIRB_MAX_INSTRUMENTS) {
+                birb_instrument *inst = &song->instruments[idx];
+                inst->synth_type = SYNTH_FORMANT;
+                inst->formant_source_wave = sw;
+                inst->formant_duty = duty;
+                inst->formant_vowel_a = va;
+                inst->formant_vowel_b = vb;
+                inst->formant_sweep_speed = sp;
+                inst->formant_resonance = res;
+            }
+            pos += 7;
+        }
+#endif
     }
 
     /* optional NAME section */

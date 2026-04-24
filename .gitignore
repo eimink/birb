@@ -20,9 +20,24 @@ web/birb.wasm
 web/birb.wasm.br
 web/birb4k.wasm
 web/birb4k.wasm.br
+web/birb4k_*.wasm
+web/birb4k_*.wasm.br
+web/birb_minimal.wasm
+web/birb_minimal.wasm.br
+web/birb_drumkit.wasm
+web/birb_drumkit.wasm.br
+web/birb_standard.wasm
+web/birb_standard.wasm.br
+web/birb_full.wasm
+web/birb_full.wasm.br
 web/test_song.bin
 web/test_song.js
 web/editor.min.html
+web/editor.min.html.br
+
+# birbc-generated headers (build artifacts)
+examples/*.h
+samples_test.h
 
 # OS files
 .DS_Store

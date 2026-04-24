@@ -9,7 +9,7 @@ WASM_CC = $(shell \
 WASM_FLAGS = --target=wasm32-unknown-unknown -nostdlib -Oz \
     -fuse-ld=/opt/homebrew/bin/wasm-ld \
     -Wl,--no-entry -Wl,--export-dynamic \
-    -Wl,--initial-memory=524288 \
+    -Wl,--initial-memory=786432 \
     -Wno-void-pointer-to-int-cast
 
 # 4K build: size-optimized synth, explicit exports, smaller limits
@@ -23,9 +23,10 @@ WASM_4K_FLAGS = --target=wasm32-unknown-unknown -nostdlib -Oz \
     -Wno-void-pointer-to-int-cast \
     -DBIRB_MAX_PATTERNS=16 -DBIRB_MAX_ROWS=32 \
     -DBIRB_MAX_INSTRUMENTS=8 -DBIRB_MAX_ORDER=32 \
-    -DBIRB_MAX_SAMPLES=4 -DBIRB_SAMPLE_POOL=65536
+    -DBIRB_MAX_SAMPLES=4 -DBIRB_SAMPLE_POOL=65536 \
+    -DBIRB_KS_BUF_SIZE=256
 
-.PHONY: all clean test test-compiled web serve
+.PHONY: all clean test test-compiled web serve sizes tiers
 
 all: birb_wav birbc birb_play
 
@@ -59,6 +60,86 @@ web/birb.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 # Compile test song (all formats)
 test_song.bin test_song.h test_song.js: test_song.birb birbc
 	./birbc test_song.birb --js
+
+# 4K WASM build without KS (for size measurement vs KS-enabled build)
+web/birb4k_noks.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then \
+		echo "Error: No wasm-capable clang found. Install with: brew install llvm"; \
+		exit 1; \
+	fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_KS birb_synth_mini.c birb_wasm.c -o web/birb4k_noks.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz web/birb4k_noks.wasm -o web/birb4k_noks.wasm; \
+	fi
+	@ls -la web/birb4k_noks.wasm
+	@if command -v brotli >/dev/null 2>&1; then \
+		brotli --best -f web/birb4k_noks.wasm -o web/birb4k_noks.wasm.br; \
+		echo "brotli: $$(wc -c < web/birb4k_noks.wasm.br | tr -d ' ')b"; \
+	fi
+
+# 4K WASM build without FM (for size measurement vs FM-enabled build)
+web/birb4k_nofm.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then \
+		echo "Error: No wasm-capable clang found. Install with: brew install llvm"; \
+		exit 1; \
+	fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_FM birb_synth_mini.c birb_wasm.c -o web/birb4k_nofm.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz web/birb4k_nofm.wasm -o web/birb4k_nofm.wasm; \
+	fi
+	@ls -la web/birb4k_nofm.wasm
+	@if command -v brotli >/dev/null 2>&1; then \
+		brotli --best -f web/birb4k_nofm.wasm -o web/birb4k_nofm.wasm.br; \
+		echo "brotli: $$(wc -c < web/birb4k_nofm.wasm.br | tr -d ' ')b"; \
+	fi
+
+# 4K WASM build without drums (for size measurement vs drum-enabled build)
+web/birb4k_nodrum.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then \
+		echo "Error: No wasm-capable clang found. Install with: brew install llvm"; \
+		exit 1; \
+	fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_DRUM birb_synth_mini.c birb_wasm.c -o web/birb4k_nodrum.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz web/birb4k_nodrum.wasm -o web/birb4k_nodrum.wasm; \
+	fi
+	@ls -la web/birb4k_nodrum.wasm
+	@if command -v brotli >/dev/null 2>&1; then \
+		brotli --best -f web/birb4k_nodrum.wasm -o web/birb4k_nodrum.wasm.br; \
+		echo "brotli: $$(wc -c < web/birb4k_nodrum.wasm.br | tr -d ' ')b"; \
+	fi
+
+# 4K WASM drum-only build: drums kept, everything else stripped.
+web/birb4k_drumonly.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then \
+		echo "Error: No wasm-capable clang found. Install with: brew install llvm"; \
+		exit 1; \
+	fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_FM -DBIRB_NO_KS -DBIRB_NO_SAMPLES birb_synth_mini.c birb_wasm.c -o web/birb4k_drumonly.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz web/birb4k_drumonly.wasm -o web/birb4k_drumonly.wasm; \
+	fi
+	@ls -la web/birb4k_drumonly.wasm
+	@if command -v brotli >/dev/null 2>&1; then \
+		brotli --best -f web/birb4k_drumonly.wasm -o web/birb4k_drumonly.wasm.br; \
+		echo "brotli: $$(wc -c < web/birb4k_drumonly.wasm.br | tr -d ' ')b"; \
+	fi
+
+# 4K WASM build without formant (for size measurement vs formant-enabled build)
+web/birb4k_noformant.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then \
+		echo "Error: No wasm-capable clang found. Install with: brew install llvm"; \
+		exit 1; \
+	fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_FORMANT birb_synth_mini.c birb_wasm.c -o web/birb4k_noformant.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz web/birb4k_noformant.wasm -o web/birb4k_noformant.wasm; \
+	fi
+	@ls -la web/birb4k_noformant.wasm
+	@if command -v brotli >/dev/null 2>&1; then \
+		brotli --best -f web/birb4k_noformant.wasm -o web/birb4k_noformant.wasm.br; \
+		echo "brotli: $$(wc -c < web/birb4k_noformant.wasm.br | tr -d ' ')b"; \
+	fi
 
 # 4K WASM build without samples (even smaller)
 web/birb4k_nosamples.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
@@ -97,6 +178,56 @@ web/birb4k.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
 		echo "brotli: $$(wc -c < web/birb4k.wasm.br | tr -d ' ')b"; \
 	fi
 
+# ---- Size-tier build matrix (4K WASM) ----
+# Named tiers map synth feature sets to predictable Brotli sizes. Use these
+# for intros/4K where the song only exercises a subset of the engine.
+
+# Minimal: basic synth only. Target: smallest.
+web/birb_minimal.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_SAMPLES -DBIRB_NO_FM -DBIRB_NO_KS -DBIRB_NO_DRUM -DBIRB_NO_FORMANT \
+	    birb_synth_mini.c birb_wasm.c -o web/birb_minimal.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_minimal.wasm -o web/birb_minimal.wasm; fi
+	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_minimal.wasm -o web/birb_minimal.wasm.br; fi
+
+# Drum kit: basic + drum only, no FM/KS/samples/formant. Drum-only demos.
+web/birb_drumkit.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_SAMPLES -DBIRB_NO_FM -DBIRB_NO_KS -DBIRB_NO_FORMANT \
+	    birb_synth_mini.c birb_wasm.c -o web/birb_drumkit.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_drumkit.wasm -o web/birb_drumkit.wasm; fi
+	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_drumkit.wasm -o web/birb_drumkit.wasm.br; fi
+
+# Standard: everything except samples — the "no-sample floor" tier.
+web/birb_standard.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_SAMPLES \
+	    birb_synth_mini.c birb_wasm.c -o web/birb_standard.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_standard.wasm -o web/birb_standard.wasm; fi
+	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_standard.wasm -o web/birb_standard.wasm.br; fi
+
+# Full: everything including ADPCM samples.
+web/birb_full.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi
+	$(WASM_CC) $(WASM_4K_FLAGS) \
+	    birb_synth_mini.c birb_wasm.c -o web/birb_full.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_full.wasm -o web/birb_full.wasm; fi
+	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_full.wasm -o web/birb_full.wasm.br; fi
+
+tiers: web/birb_minimal.wasm web/birb_drumkit.wasm web/birb_standard.wasm web/birb_full.wasm
+
+# Print a size table across all tiers.
+sizes: tiers
+	@printf '\n%-18s %10s %10s\n' "TIER" "raw (B)" "brotli (B)"
+	@printf '%-18s %10s %10s\n' "------------------" "----------" "----------"
+	@for t in minimal drumkit standard full; do \
+	    raw=$$(wc -c < web/birb_$$t.wasm | tr -d ' '); \
+	    br="-"; \
+	    if [ -f web/birb_$$t.wasm.br ]; then br=$$(wc -c < web/birb_$$t.wasm.br | tr -d ' '); fi; \
+	    printf '%-18s %10s %10s\n' "$$t" "$$raw" "$$br"; \
+	done
+	@echo ""
+
 # Build everything for web
 web: web/birb.wasm web/birb4k.wasm test_song.bin test_song.js
 	cp test_song.bin web/test_song.bin
@@ -106,7 +237,16 @@ web: web/birb.wasm web/birb4k.wasm test_song.bin test_song.js
 web/editor.min.html: web/editor.html minify_editor.py
 	python3 minify_editor.py web/editor.html web/editor.min.html
 
-editor-dist: web/editor.min.html
+# Brotli-compressed minified editor (served with Content-Encoding: br)
+web/editor.min.html.br: web/editor.min.html
+	@if command -v brotli >/dev/null 2>&1; then \
+		brotli --best -f web/editor.min.html -o web/editor.min.html.br; \
+		echo "web/editor.min.html.br: $$(wc -c < web/editor.min.html.br | tr -d ' ') bytes"; \
+	else \
+		echo "Error: brotli not installed. brew install brotli"; exit 1; \
+	fi
+
+editor-dist: web/editor.min.html web/editor.min.html.br
 
 # Serve web directory (AudioWorklet requires HTTPS or localhost)
 serve: web
@@ -128,3 +268,14 @@ clean:
 	rm -f test_song.bin test_song.h test_song.js
 	rm -f web/birb.wasm web/birb.wasm.br web/test_song.bin web/test_song.js
 	rm -f web/birb4k.wasm web/birb4k.wasm.br
+	rm -f web/birb4k_nofm.wasm web/birb4k_nofm.wasm.br
+	rm -f web/birb4k_noks.wasm web/birb4k_noks.wasm.br
+	rm -f web/birb4k_nodrum.wasm web/birb4k_nodrum.wasm.br
+	rm -f web/birb4k_drumonly.wasm web/birb4k_drumonly.wasm.br
+	rm -f web/birb4k_nosamples.wasm web/birb4k_nosamples.wasm.br
+	rm -f web/birb4k_noformant.wasm web/birb4k_noformant.wasm.br
+	rm -f web/birb_minimal.wasm web/birb_minimal.wasm.br
+	rm -f web/birb_drumkit.wasm web/birb_drumkit.wasm.br
+	rm -f web/birb_standard.wasm web/birb_standard.wasm.br
+	rm -f web/birb_full.wasm web/birb_full.wasm.br
+	rm -f web/editor.min.html web/editor.min.html.br

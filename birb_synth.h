@@ -24,7 +24,17 @@ typedef unsigned long long uint64_t;
 #define BIRB_SAMPLE_RATE 44100
 #endif
 
+/* Channel count is compile-time configurable (min 4, max 16).
+ * Runtime loader reads the per-song count from the flag byte and validates
+ * it is <= BIRB_NUM_CHANNELS. Songs authored with fewer channels are padded
+ * with empty order columns. Override via -DBIRB_NUM_CHANNELS=N. */
+#ifndef BIRB_NUM_CHANNELS
 #define BIRB_NUM_CHANNELS  4
+#endif
+#if BIRB_NUM_CHANNELS < 4 || BIRB_NUM_CHANNELS > 16
+#error "BIRB_NUM_CHANNELS must be in 4..16"
+#endif
+
 #ifndef BIRB_MAX_PATTERNS
 #define BIRB_MAX_PATTERNS  64
 #endif
@@ -72,6 +82,19 @@ typedef enum {
     WAVE_COUNT
 } birb_wave;
 
+/* ---------- synth types ----------
+ * Top-level dispatch in generate_sample(). SYNTH_BASIC and SYNTH_SAMPLE are
+ * shipped; the remaining slots are reserved for future phases so the numeric
+ * codes stay stable across the format. */
+typedef enum {
+    SYNTH_BASIC   = 0,   /* pulse/tri/saw/noise/sine (waveform field selects) */
+    SYNTH_SAMPLE  = 1,   /* ADPCM sample playback */
+    SYNTH_FM      = 2,   /* reserved (Phase 2) */
+    SYNTH_KS      = 3,   /* reserved (Phase 3) */
+    SYNTH_DRUM    = 4,   /* reserved (Phase 4) */
+    SYNTH_FORMANT = 5    /* reserved (Phase 5) */
+} birb_synth_type;
+
 /* ---------- duty cycle presets ---------- */
 
 typedef enum {
@@ -112,10 +135,32 @@ typedef struct {
     uint8_t release;   /* ticks to reach zero after note off */
 } birb_adsr;
 
+/* ---------- FM operator (per-op instrument params) ----------
+ * Carrier is always op0; op1/2/3 are modulators. For 2-op, only op0 and op1
+ * are used (op1 → op0, classic carrier + modulator). 4-op uses all four with
+ * `algorithm` selecting the topology. */
+#ifndef BIRB_NO_FM
+typedef struct {
+    uint8_t ratio_i;   /* integer part of frequency ratio (0..15) */
+    uint8_t ratio_f;   /* fractional part in 1/16 units (so ratio = i + f/16) */
+    uint8_t level;     /* operator output level 0-255 */
+    birb_adsr adsr;    /* per-op envelope */
+} birb_fm_op;
+
+typedef struct {
+    uint8_t    num_ops;     /* 2 or 4 */
+    uint8_t    algorithm;   /* 0-7 topology for 4-op (unused for 2-op) */
+    uint8_t    feedback;    /* op0 feedback 0-255 */
+    uint8_t    mod_index;   /* global modulation index 0-255 (scales non-carrier ops) */
+    birb_fm_op ops[4];
+} birb_fm_inst;
+#endif
+
 /* ---------- instrument ---------- */
 
 typedef struct {
-    birb_wave waveform;
+    uint8_t   synth_type;    /* birb_synth_type — dispatch for generate_sample() */
+    birb_wave waveform;      /* basic-synth waveform (ignored for other synth types) */
     fixed16   duty;          /* duty cycle for pulse wave */
     birb_adsr envelope;
     int8_t    pitch_env;     /* pitch change per tick (signed) */
@@ -123,7 +168,32 @@ typedef struct {
     uint8_t   arp_note1;     /* arpeggio semitone offset 1 */
     uint8_t   arp_note2;     /* arpeggio semitone offset 2 */
     uint8_t   volume;        /* instrument volume 0-255, scales envelope output */
-    uint8_t   sample_idx;    /* index into song sample bank (when waveform == WAVE_SAMPLE) */
+    uint8_t   sample_idx;    /* index into song sample bank (when synth_type == SYNTH_SAMPLE) */
+#ifndef BIRB_NO_FM
+    birb_fm_inst fm;         /* FM params (only meaningful when synth_type == SYNTH_FM) */
+#endif
+#ifndef BIRB_NO_KS
+    uint8_t   ks_damping;    /* KS pluck damping 0-255; higher = shorter sustain */
+#endif
+#ifndef BIRB_NO_DRUM
+    /* Drum synth params (only meaningful when synth_type == SYNTH_DRUM). */
+    uint8_t   drum_type;     /* 0=KICK, 1=SNARE, 2=HAT, 3=CLAP, 4=TOM, 5=CRASH */
+    int8_t    drum_tune;     /* signed pitch offset (−128..127) */
+    uint8_t   drum_decay;    /* 0-255 */
+    uint8_t   drum_tone;     /* 0-255 */
+    uint8_t   drum_snap;     /* 0-255 */
+#endif
+#ifndef BIRB_NO_FORMANT
+    /* Formant filter params (only meaningful when synth_type == SYNTH_FORMANT).
+     * Source waveform is the subset {PULSE, SAW, NOISE} run through three
+     * resonant bandpass biquads at vowel formant frequencies. */
+    uint8_t   formant_source_wave;  /* WAVE_PULSE / WAVE_SAWTOOTH / WAVE_NOISE */
+    uint8_t   formant_duty;         /* pulse duty (0..3 code) if source is pulse */
+    uint8_t   formant_vowel_a;      /* 0=A 1=E 2=I 3=O 4=U */
+    uint8_t   formant_vowel_b;      /* sweep destination */
+    uint8_t   formant_sweep_speed;  /* 0=static vowel_a, >0 sweeps A→B→A */
+    uint8_t   formant_resonance;    /* 0-255 reserved; current table uses Q=8 */
+#endif
     char      name[32];      /* instrument name (editor only, not in core binary) */
 } birb_instrument;
 
@@ -155,18 +225,16 @@ typedef enum {
 } birb_env_stage;
 
 typedef struct {
+    /* ---- common state (shared by all synth types) ---- */
+
+    /* synth dispatch */
+    uint8_t       synth_type;  /* birb_synth_type — selects the union arm */
+
     /* oscillator */
     fixed16       phase;       /* phase accumulator 0..FX_ONE */
     fixed16       freq;        /* phase increment per sample */
     fixed16       base_freq;   /* freq before effects */
-    birb_wave     waveform;
-    fixed16       duty;        /* current duty cycle */
-    fixed16       base_duty;   /* duty before effects */
-
-    /* noise LFSR */
-    uint16_t      lfsr;
-    uint16_t      lfsr_period; /* samples between shifts */
-    uint16_t      lfsr_count;
+    fixed16       base_duty;   /* duty before effects (basic + formant) */
 
     /* envelope */
     birb_env_stage env_stage;
@@ -199,12 +267,143 @@ typedef struct {
     uint8_t       note_delay_tick; /* delay note trigger by N ticks */
     uint8_t       delayed_note;    /* note to trigger after delay */
     uint8_t       delayed_inst;    /* instrument for delayed note */
-    /* sample playback (WAVE_SAMPLE) */
-    uint32_t      sample_pos;      /* 16.16 fixed-point position in sample buffer */
-    uint32_t      sample_speed;    /* 16.16 fixed-point playback rate */
-    uint8_t       sample_idx;      /* which sample is playing */
-    uint8_t       sample_active;   /* 1 if sample currently playing */
+
+    /* ---- type-specific state (tagged by synth_type) ---- */
+    union {
+        /* SYNTH_BASIC: pulse / triangle / sawtooth / noise / sine */
+        struct {
+            birb_wave waveform;
+            fixed16   duty;        /* current duty cycle */
+            uint16_t  lfsr;
+            uint16_t  lfsr_period; /* samples between shifts */
+            uint16_t  lfsr_count;
+        } basic;
+        /* SYNTH_SAMPLE: IMA-ADPCM sample playback */
+        struct {
+            uint32_t  sample_pos;    /* 16.16 fixed-point position */
+            uint32_t  sample_speed;  /* 16.16 fixed-point playback rate */
+            uint8_t   sample_idx;    /* which sample is playing */
+            uint8_t   sample_active; /* 1 if sample currently playing */
+        } sample;
+#ifndef BIRB_NO_FM
+        /* SYNTH_FM: 2-op (default) or 4-op FM synthesis. Carrier is op0;
+         * op1..op3 are modulators. */
+        struct {
+            fixed16        op_phase[4]; /* per-op phase accumulator 0..FX_ONE */
+            fixed16        op_freq[4];  /* per-op phase increment */
+            fixed16        op_env[4];   /* per-op envelope level 0..FX_ONE */
+            birb_env_stage op_stage[4]; /* per-op ADSR stage */
+            fixed16        prev_out;    /* op0 feedback memory */
+            uint8_t        num_ops;     /* 2 or 4 */
+            uint8_t        algorithm;   /* 0-7 (4-op only) */
+            uint8_t        feedback;    /* op0 feedback 0-255 */
+            uint8_t        mod_index;   /* global mod scaling 0-255 */
+        } fm;
+#endif
+#ifndef BIRB_NO_KS
+/* Delay-buffer length for Karplus-Strong. Default 1024 samples covers pitches
+ * down to ~43 Hz at 44100 Hz; 4K WASM builds override this with 256 to shrink
+ * the channel union (512 B/channel vs 2048 B/channel). Higher notes clamp the
+ * used portion of the buffer anyway, so a smaller ceiling only limits the
+ * lowest usable note. */
+#ifndef BIRB_KS_BUF_SIZE
+#define BIRB_KS_BUF_SIZE 1024
+#endif
+        /* SYNTH_KS: Karplus-Strong plucked-string synthesis. On trigger the
+         * buffer is pre-filled with noise and read back with a low-pass +
+         * damping filter, producing a decaying pluck. */
+        struct {
+            int16_t  buf[BIRB_KS_BUF_SIZE];  /* delay line, noise-filled on trigger */
+            uint16_t buf_len;                /* active length, clamped to BIRB_KS_BUF_SIZE */
+            uint16_t buf_pos;                /* read/write head */
+            uint8_t  damping;                /* 0 = ring forever, 255 = fast decay */
+        } ks;
+#endif
+#ifndef BIRB_NO_DRUM
+        /* SYNTH_DRUM: six algorithmic drums sharing a biquad + exp LUT. The
+         * drum_type byte dispatches to KICK/SNARE/HAT/CLAP inline generators.
+         * TOM reuses KICK, CRASH reuses HAT — differences baked in at trigger. */
+        struct {
+            uint8_t  drum_type;        /* 0..5 */
+            uint8_t  stage;            /* multi-phase envelope stage (CLAP) */
+            uint8_t  stage_tick;       /* tick counter within stage */
+            uint8_t  ttl_hi;           /* high byte of samples-until-end */
+            fixed16  phase2;           /* second oscillator phase (body / mod) */
+            fixed16  pitch_env;        /* current pitch envelope value */
+            fixed16  pitch_env_target; /* target pitch for exp decay */
+            int32_t  bq_z1[2];         /* two biquads' state */
+            int32_t  bq_z2[2];
+            uint16_t noise_lfsr;
+            uint16_t ttl_lo;           /* remaining-samples low word (see ttl_hi) */
+        } drum;
+#endif
+#ifndef BIRB_NO_FORMANT
+        /* SYNTH_FORMANT: source oscillator (pulse/saw/noise) into three
+         * parallel bandpass biquads at vowel formant frequencies. Coefficients
+         * are kept per-channel so sweep between vowels can linearly interpolate
+         * without hitting the vowel table every sample. */
+        struct {
+            uint16_t src_lfsr;         /* noise source (when src is WAVE_NOISE) */
+            uint8_t  src_wave;         /* WAVE_PULSE / WAVE_SAWTOOTH / WAVE_NOISE */
+            uint8_t  sweep_pos;        /* 0..255 interp A→B */
+            int8_t   sweep_dir;        /* +1 / -1 */
+            uint8_t  sweep_speed;      /* >0 sweeps, 0 = static vowel_a */
+            uint8_t  vowel_a;
+            uint8_t  vowel_b;
+            uint8_t  recalc;           /* sample counter for re-interp */
+            uint8_t  _pad;
+            /* Per-formant biquad state + current interpolated coefficients.
+             * b1 = 0 and b2 = -b0 for BPF, so we store only b0, a1, a2. */
+            int32_t  bq_z1[3];
+            int32_t  bq_z2[3];
+            fixed16  bq_b0[3];
+            fixed16  bq_a1[3];
+            fixed16  bq_a2[3];
+        } formant;
+#endif
+    } u;
 } birb_channel;
+
+/* ---- compile-time size lock ----
+ * Refuse to link if the channel struct grows unexpectedly. The value is
+ * platform-dependent (enum/alignment), so track both a 64-bit macOS value
+ * and a 32-bit WASM value. Update these when intentionally adding fields.
+ * With KS enabled, the KS delay buffer dominates the union: 2*BIRB_KS_BUF_SIZE
+ * plus ~6 bytes of housekeeping. Without KS, FM 2-op is the ceiling (~80 B).
+ * Basic/sample remain the smaller arms. */
+#ifndef BIRB_NO_KS
+#if defined(__wasm__)
+_Static_assert(sizeof(birb_channel) <= 2 * BIRB_KS_BUF_SIZE + 128, "birb_channel bloat (wasm, KS)");
+#else
+_Static_assert(sizeof(birb_channel) <= 2 * BIRB_KS_BUF_SIZE + 144, "birb_channel bloat (native, KS)");
+#endif
+#elif !defined(BIRB_NO_FM)
+#if defined(__wasm__)
+_Static_assert(sizeof(birb_channel) <= 192, "birb_channel bloat (wasm, FM)");
+#else
+_Static_assert(sizeof(birb_channel) <= 208, "birb_channel bloat (native, FM)");
+#endif
+#elif !defined(BIRB_NO_FORMANT)
+/* FORMANT arm (no KS/FM) — ~88 B: 3 biquads × (2 state + 3 coeff) × 4B + housekeeping. */
+#if defined(__wasm__)
+_Static_assert(sizeof(birb_channel) <= 192, "birb_channel bloat (wasm, formant)");
+#else
+_Static_assert(sizeof(birb_channel) <= 208, "birb_channel bloat (native, formant)");
+#endif
+#elif !defined(BIRB_NO_DRUM)
+/* DRUM arm alone (no FM / no KS / no formant) is ~40 B. */
+#if defined(__wasm__)
+_Static_assert(sizeof(birb_channel) <= 144, "birb_channel bloat (wasm, drum-only)");
+#else
+_Static_assert(sizeof(birb_channel) <= 160, "birb_channel bloat (native, drum-only)");
+#endif
+#else
+#if defined(__wasm__)
+_Static_assert(sizeof(birb_channel) <= 112, "birb_channel bloat (wasm)");
+#else
+_Static_assert(sizeof(birb_channel) <= 128, "birb_channel bloat (native)");
+#endif
+#endif
 
 /* ---------- sample metadata ---------- */
 

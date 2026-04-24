@@ -216,19 +216,67 @@ static int parse_instrument(const char *line, birb_song *song) {
     memset(inst, 0, sizeof(*inst));
     inst->volume = 255; /* default full volume */
 
-    /* find waveform */
-    int found = 0;
-    for (const wave_name *w = wave_names; w->name; w++) {
-        if (strcmp(wavename, w->name) == 0) {
-            inst->waveform = w->wave;
-            inst->duty = birb_duty_decode(w->duty_code);
-            found = 1;
-            break;
+    /* FM/KS/DRUM/FORMANT use dedicated keywords in place of a waveform name. */
+    int is_fm = (strcmp(wavename, "fm") == 0);
+    int is_ks = (strcmp(wavename, "ks") == 0);
+    int is_drum = (strcmp(wavename, "drum") == 0);
+    int is_formant = (strcmp(wavename, "formant") == 0);
+
+    if (is_fm) {
+        inst->synth_type = SYNTH_FM;
+        inst->waveform = WAVE_SINE; /* FM carrier output is conceptually sine */
+        /* defaults: 2-op, ratio 1:1, full levels, no feedback */
+        inst->fm.num_ops = 2;
+        inst->fm.algorithm = 0;
+        inst->fm.feedback = 0;
+        inst->fm.mod_index = 64;
+        for (int o = 0; o < 4; o++) {
+            inst->fm.ops[o].ratio_i = 1;
+            inst->fm.ops[o].ratio_f = 0;
+            inst->fm.ops[o].level = 255;
+            inst->fm.ops[o].adsr.attack = 0;
+            inst->fm.ops[o].adsr.decay = 8;
+            inst->fm.ops[o].adsr.sustain = 200;
+            inst->fm.ops[o].adsr.release = 8;
         }
-    }
-    if (!found) {
-        fprintf(stderr, "Error: unknown waveform '%s'\n", wavename);
-        return -1;
+    } else if (is_ks) {
+        inst->synth_type = SYNTH_KS;
+        inst->waveform = WAVE_SAWTOOTH; /* placeholder — not used for KS dispatch */
+        inst->ks_damping = 40;          /* sensible default: long-ish sustain */
+    } else if (is_drum) {
+        inst->synth_type = SYNTH_DRUM;
+        inst->waveform = WAVE_SINE;     /* placeholder */
+        /* Defaults — overridden by kick/snare/... keyword below. */
+        inst->drum_type = 0;
+        inst->drum_tune = 0;
+        inst->drum_decay = 180;
+        inst->drum_tone = 128;
+        inst->drum_snap = 128;
+    } else if (is_formant) {
+        inst->synth_type = SYNTH_FORMANT;
+        inst->waveform = WAVE_SAWTOOTH; /* placeholder */
+        inst->formant_source_wave = WAVE_SAWTOOTH;
+        inst->formant_duty = BIRB_DUTY_50;
+        inst->formant_vowel_a = 0;  /* A */
+        inst->formant_vowel_b = 3;  /* O */
+        inst->formant_sweep_speed = 32;
+        inst->formant_resonance = 128;
+    } else {
+        /* find waveform */
+        int found = 0;
+        for (const wave_name *w = wave_names; w->name; w++) {
+            if (strcmp(wavename, w->name) == 0) {
+                inst->waveform = w->wave;
+                inst->duty = birb_duty_decode(w->duty_code);
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            fprintf(stderr, "Error: unknown waveform '%s'\n", wavename);
+            return -1;
+        }
+        inst->synth_type = (inst->waveform == WAVE_SAMPLE) ? SYNTH_SAMPLE : SYNTH_BASIC;
     }
 
     /* parse key:value pairs */
@@ -240,7 +288,112 @@ static int parse_instrument(const char *line, birb_song *song) {
         s = skip_ws(s);
         if (*s == '\0' || *s == '\n' || *s == '#') break;
 
-        if (s[0] == 'A' && s[1] == ':') {
+        if (is_fm && s[0] == 'r' && s[1] == 'a' && s[2] == 't' && s[3] == 'i' && s[4] == 'o') {
+            /* ratioN=X.Y — N is op index (1..4) */
+            int op = s[5] - '1';
+            if (op >= 0 && op < 4 && s[6] == '=') {
+                float r = (float)atof(s + 7);
+                if (r < 0) r = 0;
+                inst->fm.ops[op].ratio_i = (uint8_t)((int)r & 0xFF);
+                inst->fm.ops[op].ratio_f = (uint8_t)(((r - (int)r) * 16.0f) + 0.5f);
+            }
+        } else if (is_fm && s[0] == 'l' && s[1] == 'e' && s[2] == 'v' && s[3] == 'e' && s[4] == 'l') {
+            int op = s[5] - '1';
+            if (op >= 0 && op < 4 && s[6] == '=')
+                inst->fm.ops[op].level = (uint8_t)atoi(s + 7);
+        } else if (is_fm && s[0] == 'a' && s[1] == 'd' && s[2] == 's' && s[3] == 'r') {
+            /* adsrN=A,D,S,R */
+            int op = s[4] - '1';
+            if (op >= 0 && op < 4 && s[5] == '=') {
+                int a=0,d=0,ss=0,r=0;
+                sscanf(s + 6, "%d,%d,%d,%d", &a, &d, &ss, &r);
+                inst->fm.ops[op].adsr.attack  = (uint8_t)a;
+                inst->fm.ops[op].adsr.decay   = (uint8_t)d;
+                inst->fm.ops[op].adsr.sustain = (uint8_t)ss;
+                inst->fm.ops[op].adsr.release = (uint8_t)r;
+            }
+        } else if (is_ks && strncmp(s, "damping=", 8) == 0) {
+            inst->ks_damping = (uint8_t)atoi(s + 8);
+        } else if (is_drum && strncmp(s, "tune=", 5) == 0) {
+            inst->drum_tune = (int8_t)atoi(s + 5);
+        } else if (is_drum && strncmp(s, "decay=", 6) == 0) {
+            inst->drum_decay = (uint8_t)atoi(s + 6);
+        } else if (is_drum && strncmp(s, "tone=", 5) == 0) {
+            inst->drum_tone = (uint8_t)atoi(s + 5);
+        } else if (is_drum && strncmp(s, "snap=", 5) == 0) {
+            inst->drum_snap = (uint8_t)atoi(s + 5);
+        } else if (is_drum && strncmp(s, "volume=", 7) == 0) {
+            inst->volume = (uint8_t)atoi(s + 7);
+        } else if (is_drum) {
+            /* drum type keyword (kick/snare/hat/clap/tom/crash) — matches
+             * the token without needing an '=' sign. */
+            static const struct { const char *k; uint8_t v; } dmap[] = {
+                {"kick", 0}, {"snare", 1}, {"hat", 2}, {"clap", 3},
+                {"tom", 4}, {"crash", 5}, {NULL, 0}
+            };
+            for (int i = 0; dmap[i].k; i++) {
+                size_t kl = strlen(dmap[i].k);
+                if (strncmp(s, dmap[i].k, kl) == 0 &&
+                    (s[kl] == ' ' || s[kl] == '\t' || s[kl] == '\0' || s[kl] == '\n')) {
+                    inst->drum_type = dmap[i].v;
+                    break;
+                }
+            }
+        } else if (is_formant && strncmp(s, "source=", 7) == 0) {
+            const char *v = s + 7;
+            if      (strncmp(v, "pulse", 5) == 0) inst->formant_source_wave = WAVE_PULSE;
+            else if (strncmp(v, "saw",   3) == 0) inst->formant_source_wave = WAVE_SAWTOOTH;
+            else if (strncmp(v, "noise", 5) == 0) inst->formant_source_wave = WAVE_NOISE;
+        } else if (is_formant && strncmp(s, "duty=", 5) == 0) {
+            int d = atoi(s + 5);
+            /* Accept either a byte 0..255 (mapped to coarse code) or an explicit 0..3 code. */
+            if (d < 0) d = 0;
+            if (d > 255) d = 255;
+            inst->formant_duty = (d < 4) ? (uint8_t)d
+                               : (d < 64) ? BIRB_DUTY_12
+                               : (d < 96) ? BIRB_DUTY_25
+                               : (d < 160) ? BIRB_DUTY_50
+                               : BIRB_DUTY_75;
+        } else if (is_formant && strncmp(s, "vowela=", 7) == 0) {
+            char c = s[7]; if (c >= 'a' && c <= 'z') c -= 32;
+            switch (c) { case 'A': inst->formant_vowel_a = 0; break;
+                         case 'E': inst->formant_vowel_a = 1; break;
+                         case 'I': inst->formant_vowel_a = 2; break;
+                         case 'O': inst->formant_vowel_a = 3; break;
+                         case 'U': inst->formant_vowel_a = 4; break;
+                         default:  inst->formant_vowel_a = (uint8_t)atoi(s + 7); }
+        } else if (is_formant && strncmp(s, "vowelb=", 7) == 0) {
+            char c = s[7]; if (c >= 'a' && c <= 'z') c -= 32;
+            switch (c) { case 'A': inst->formant_vowel_b = 0; break;
+                         case 'E': inst->formant_vowel_b = 1; break;
+                         case 'I': inst->formant_vowel_b = 2; break;
+                         case 'O': inst->formant_vowel_b = 3; break;
+                         case 'U': inst->formant_vowel_b = 4; break;
+                         default:  inst->formant_vowel_b = (uint8_t)atoi(s + 7); }
+        } else if (is_formant && strncmp(s, "sweep=", 6) == 0) {
+            inst->formant_sweep_speed = (uint8_t)atoi(s + 6);
+        } else if (is_formant && strncmp(s, "resonance=", 10) == 0) {
+            inst->formant_resonance = (uint8_t)atoi(s + 10);
+        } else if (is_formant && strncmp(s, "adsr=", 5) == 0) {
+            int a=0,d=0,ss=0,r=0;
+            sscanf(s + 5, "%d,%d,%d,%d", &a, &d, &ss, &r);
+            inst->envelope.attack  = (uint8_t)a;
+            inst->envelope.decay   = (uint8_t)d;
+            inst->envelope.sustain = (uint8_t)ss;
+            inst->envelope.release = (uint8_t)r;
+        } else if (is_formant && strncmp(s, "volume=", 7) == 0) {
+            inst->volume = (uint8_t)atoi(s + 7);
+        } else if (is_fm && strncmp(s, "feedback=", 9) == 0) {
+            inst->fm.feedback = (uint8_t)atoi(s + 9);
+        } else if (is_fm && strncmp(s, "modidx=", 7) == 0) {
+            inst->fm.mod_index = (uint8_t)atoi(s + 7);
+        } else if (is_fm && strncmp(s, "algo=", 5) == 0) {
+            inst->fm.algorithm = (uint8_t)atoi(s + 5);
+        } else if (is_fm && strncmp(s, "nops=", 5) == 0) {
+            int n = atoi(s + 5);
+            if (n < 2) n = 2; if (n > 4) n = 4;
+            inst->fm.num_ops = (uint8_t)n;
+        } else if (s[0] == 'A' && s[1] == ':') {
             inst->envelope.attack = (uint8_t)atoi(s + 2);
         } else if (s[0] == 'D' && s[1] == ':') {
             inst->envelope.decay = (uint8_t)atoi(s + 2);
@@ -403,10 +556,14 @@ static int write_binary(const char *filename, birb_song *song) {
         return -1;
     }
 
-    /* header */
+    /* header — channel count lives in the high 3 bits of the ticks_per_row
+     * byte. For Phase 1 we always write BIRB_NUM_CHANNELS (which the current
+     * build is compiled for and the editor writes 4-channel .bsb into). */
+    uint8_t tpr_byte = (uint8_t)((song->ticks_per_row & BIRB_TPR_MASK) |
+                                 (BIRB_CHANNELS_ENCODE(BIRB_NUM_CHANNELS) << BIRB_CHANNELS_SHIFT));
     uint8_t hdr[8] = {
         BIRB_MAGIC_0, BIRB_MAGIC_1, BIRB_MAGIC_2, BIRB_MAGIC_3,
-        song->bpm, song->ticks_per_row, song->num_instruments, song->num_patterns
+        song->bpm, tpr_byte, song->num_instruments, song->num_patterns
     };
     fwrite(hdr, 1, 8, f);
 
@@ -565,6 +722,99 @@ static int write_binary(const char *filename, birb_song *song) {
         }
     }
 
+    /* FMIN section — FM instrument params (only when ≥1 FM inst present) */
+    int fm_count = 0;
+    for (int i = 0; i < song->num_instruments; i++)
+        if (song->instruments[i].synth_type == SYNTH_FM) fm_count++;
+    if (fm_count > 0) {
+        fwrite("FMIN", 1, 4, f);
+        uint8_t cnt = (uint8_t)fm_count;
+        fwrite(&cnt, 1, 1, f);
+        for (int i = 0; i < song->num_instruments; i++) {
+            birb_instrument *inst = &song->instruments[i];
+            if (inst->synth_type != SYNTH_FM) continue;
+            int nops = inst->fm.num_ops ? inst->fm.num_ops : 2;
+            if (nops > 4) nops = 4;
+            uint8_t hdr[6] = {
+                (uint8_t)i, (uint8_t)nops,
+                inst->fm.algorithm, inst->fm.feedback,
+                inst->fm.mod_index, 0
+            };
+            fwrite(hdr, 1, 6, f);
+            for (int o = 0; o < nops; o++) {
+                uint8_t rec[8] = {
+                    inst->fm.ops[o].ratio_i, inst->fm.ops[o].ratio_f,
+                    inst->fm.ops[o].level,
+                    inst->fm.ops[o].adsr.attack, inst->fm.ops[o].adsr.decay,
+                    inst->fm.ops[o].adsr.sustain, inst->fm.ops[o].adsr.release,
+                    0
+                };
+                fwrite(rec, 1, 8, f);
+            }
+        }
+    }
+
+    /* KSIN section — Karplus-Strong instrument params (when ≥1 KS inst). */
+    int ks_count = 0;
+    for (int i = 0; i < song->num_instruments; i++)
+        if (song->instruments[i].synth_type == SYNTH_KS) ks_count++;
+    if (ks_count > 0) {
+        fwrite("KSIN", 1, 4, f);
+        uint8_t cnt = (uint8_t)ks_count;
+        fwrite(&cnt, 1, 1, f);
+        for (int i = 0; i < song->num_instruments; i++) {
+            birb_instrument *inst = &song->instruments[i];
+            if (inst->synth_type != SYNTH_KS) continue;
+            uint8_t rec[2] = { (uint8_t)i, inst->ks_damping };
+            fwrite(rec, 1, 2, f);
+        }
+    }
+
+    /* DRIN section — drum instrument params (when ≥1 DRUM inst). */
+    int drum_count = 0;
+    for (int i = 0; i < song->num_instruments; i++)
+        if (song->instruments[i].synth_type == SYNTH_DRUM) drum_count++;
+    if (drum_count > 0) {
+        fwrite("DRIN", 1, 4, f);
+        uint8_t cnt = (uint8_t)drum_count;
+        fwrite(&cnt, 1, 1, f);
+        for (int i = 0; i < song->num_instruments; i++) {
+            birb_instrument *inst = &song->instruments[i];
+            if (inst->synth_type != SYNTH_DRUM) continue;
+            uint8_t rec[6] = {
+                (uint8_t)i,
+                (uint8_t)(inst->drum_type & 0x07),
+                (uint8_t)inst->drum_tune,
+                inst->drum_decay, inst->drum_tone, inst->drum_snap
+            };
+            fwrite(rec, 1, 6, f);
+        }
+    }
+
+    /* FRIN section — formant instrument params (when ≥1 FORMANT inst). */
+    int formant_count = 0;
+    for (int i = 0; i < song->num_instruments; i++)
+        if (song->instruments[i].synth_type == SYNTH_FORMANT) formant_count++;
+    if (formant_count > 0) {
+        fwrite("FRIN", 1, 4, f);
+        uint8_t cnt = (uint8_t)formant_count;
+        fwrite(&cnt, 1, 1, f);
+        for (int i = 0; i < song->num_instruments; i++) {
+            birb_instrument *inst = &song->instruments[i];
+            if (inst->synth_type != SYNTH_FORMANT) continue;
+            uint8_t rec[7] = {
+                (uint8_t)i,
+                inst->formant_source_wave,
+                inst->formant_duty,
+                inst->formant_vowel_a,
+                inst->formant_vowel_b,
+                inst->formant_sweep_speed,
+                inst->formant_resonance
+            };
+            fwrite(rec, 1, 7, f);
+        }
+    }
+
     /* NAME section — instrument names */
     int has_names = 0;
     for (int i = 0; i < song->num_instruments; i++)
@@ -673,18 +923,84 @@ static int write_js(const char *filename, birb_song *song) {
     }
     fprintf(f, "],\n");
 
-    /* instruments — flat arrays, 11 per instrument */
+    /* Detect which synth types we emit. */
+    int uses_fm = 0, uses_ks = 0, uses_drum = 0, uses_formant = 0;
+    int drum_algos = 0;  /* bitmask: bit 0=KICK/TOM, 1=SNARE, 2=HAT/CRASH, 3=CLAP */
+    for (int i = 0; i < song->num_instruments; i++) {
+        if (song->instruments[i].synth_type == SYNTH_FM) uses_fm = 1;
+        if (song->instruments[i].synth_type == SYNTH_KS) uses_ks = 1;
+        if (song->instruments[i].synth_type == SYNTH_DRUM) {
+            uses_drum = 1;
+            int dt = song->instruments[i].drum_type & 7;
+            int algo = (dt == 4) ? 0 : (dt == 5) ? 2 : dt;
+            drum_algos |= (1 << (algo & 3));
+        }
+        if (song->instruments[i].synth_type == SYNTH_FORMANT) uses_formant = 1;
+    }
+
+    /* Instruments. Base 11 fields (wave duty a d s r pe pel arp1 arp2 vol).
+     * When the song uses FM, append `nops, fb, mi, [[ri,rf,lv]×4]` at
+     * indices 11-14. When the song uses KS, append the damping value at the
+     * next index (11 if no FM, 15 if FM) so the JS generator can read
+     * consistent offsets. Non-KS / non-FM instruments get zero stubs so the
+     * array shape stays uniform. */
     fprintf(f, "I=[");
     for (int i = 0; i < song->num_instruments; i++) {
         birb_instrument *inst = &song->instruments[i];
+        int wave;
+        if (inst->synth_type == SYNTH_FM)      wave = 6;
+        else if (inst->synth_type == SYNTH_KS) wave = 7;
+        else if (inst->synth_type == SYNTH_DRUM) wave = 8;
+        else if (inst->synth_type == SYNTH_FORMANT) wave = 9;
+        else                                    wave = (int)inst->waveform;
         if (i) fprintf(f, ",");
-        fprintf(f, "[%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d]",
-                (int)inst->waveform, birb_duty_encode(inst->duty),
+        fprintf(f, "[%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+                wave, birb_duty_encode(inst->duty),
                 inst->envelope.attack, inst->envelope.decay,
                 inst->envelope.sustain, inst->envelope.release,
                 (int)inst->pitch_env, inst->pitch_env_len,
                 inst->arp_note1, inst->arp_note2,
                 inst->volume);
+#ifndef BIRB_NO_FM
+        if (uses_fm) {
+            int nops = inst->fm.num_ops ? inst->fm.num_ops : 2;
+            fprintf(f, ",%d,%d,%d,[", nops, inst->fm.feedback, inst->fm.mod_index ? inst->fm.mod_index : 64);
+            for (int o = 0; o < 4; o++) {
+                if (o) fprintf(f, ",");
+                fprintf(f, "[%d,%d,%d]",
+                        inst->fm.ops[o].ratio_i,
+                        inst->fm.ops[o].ratio_f,
+                        inst->fm.ops[o].level);
+            }
+            fprintf(f, "]");
+        } else if (uses_ks || uses_drum || uses_formant) {
+            fprintf(f, ",0,0,0,0");
+        }
+#else
+        if (uses_ks || uses_drum || uses_formant) fprintf(f, ",0,0,0,0");
+#endif
+#ifndef BIRB_NO_KS
+        if (uses_ks || uses_drum || uses_formant) {
+            fprintf(f, ",%d", (inst->synth_type == SYNTH_KS) ? inst->ks_damping : 0);
+        }
+#endif
+#ifndef BIRB_NO_DRUM
+        if (uses_drum || uses_formant) {
+            uint8_t tune_byte = (uint8_t)inst->drum_tune;
+            fprintf(f, ",%d,%d,%d,%d,%d",
+                    inst->drum_type & 7, tune_byte,
+                    inst->drum_decay, inst->drum_tone, inst->drum_snap);
+        }
+#endif
+#ifndef BIRB_NO_FORMANT
+        if (uses_formant) {
+            fprintf(f, ",%d,%d,%d,%d,%d,%d",
+                    inst->formant_source_wave, inst->formant_duty & 3,
+                    inst->formant_vowel_a & 7, inst->formant_vowel_b & 7,
+                    inst->formant_sweep_speed, inst->formant_resonance);
+        }
+#endif
+        fprintf(f, "]");
     }
     fprintf(f, "],\n");
 
@@ -757,14 +1073,58 @@ static int write_js(const char *filename, birb_song *song) {
         "dv=[8192,16384,32768,49152],\n"
         "nf=n=>(n=n<0?0:n>95?95:n,bf[n%%12]<<(n/12)),\n"
         "spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,\n"
-        "out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0\n"
-        "for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,tp:0,ts:0,td:0,tm:0}\n"
-        "var jo=-1,jr=0\n"
+        "out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0\n");
+    fprintf(f,
+        "for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,tp:0,ts:0,td:0,tm:0%s%s%s%s}\n"
+        "var jo=-1,jr=0\n",
+        uses_fm ? ",fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmPrev:0" : "",
+        uses_ks ? ",kb:new Int16Array(1024),kl:0,kp:0,kd:0" : "",
+        uses_drum ? ",drAl:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0" : "",
+        uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "");
+    if (uses_fm || uses_drum) {
+        fprintf(f,
+            "function SA_(ph){var p=((ph%%F)+F)%%F;var x=p<F/2?p-F/4:(F*3/4)-p;x*=4;var ax=x<0?-x:x;return x*(F-ax)/F*4/F}\n");
+    }
+    if (uses_formant) {
+        fprintf(f,
+            "var FT=[[[423,-129523,64691],[439,-128255,64281],[547,-120662,62803]],[[308,-130085,64921],[731,-124576,63447],[555,-120371,62761]],[[157,-130661,65222],[901,-121719,62962],[664,-116183,62216]],[[331,-129981,64875],[340,-129171,64565],[540,-120877,62835]],[[175,-130603,65187],[352,-129069,64531],[504,-122060,63015]]]\n"
+            "function FI(C){var t=C.ftSp,omt=255-t,va=C.ftVa,vb=C.ftVb;for(var i=0;i<3;i++){C.ftB0[i]=(FT[va][i][0]*omt+FT[vb][i][0]*t)/255|0;C.ftA1[i]=(FT[va][i][1]*omt+FT[vb][i][1]*t)/255|0;C.ftA2[i]=(FT[va][i][2]*omt+FT[vb][i][2]*t)/255|0}}\n");
+    }
+    /* KS damping lives at j[11] (no FM/drum) or j[16] (FM or drum pads 4). */
+    int ks_idx = (uses_fm || uses_drum || uses_formant) ? 16 : 11;
+    int drum_base = (uses_fm || uses_ks || uses_drum || uses_formant) ? 17 : -1;
+    int formant_base = drum_base >= 0 ? drum_base + 5 : -1;
+    char formant_trigger[512] = "";
+    if (uses_formant) {
+        snprintf(formant_trigger, sizeof(formant_trigger),
+            "\nif(j[0]===9){var sw=j[%d];if(sw!==0&&sw!==2&&sw!==3)sw=2;C.ftSw=sw;C.ftLf=(0x7FFF^(s*0x2BCD&0xFFFF))&0xFFFF;if(!C.ftLf)C.ftLf=0x7FFF;C.ftVa=j[%d]&7;if(C.ftVa>4)C.ftVa=0;C.ftVb=j[%d]&7;if(C.ftVb>4)C.ftVb=0;C.ftSS=j[%d];C.ftSp=0;C.ftDr=1;C.ftRc=0;for(var fi=0;fi<3;fi++){C.ftZ1[fi]=0;C.ftZ2[fi]=0}C.u=[F/8,F/4,F/2,F*3/4][j[%d]&3];FI(C)}",
+            formant_base, formant_base + 2, formant_base + 3, formant_base + 4, formant_base + 1);
+    }
+    fprintf(f,
         "function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]\n"
         "C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]\n"
         "C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];C.t=1;C.e=0\n"
         "C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0\n"
-        "if(j[0]>=3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}}\n"
+        "if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}%s%s%s%s}\n",
+        uses_fm
+            ? "\nif(j[0]===6){var fm=j[15];C.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255)}}"
+            : "",
+        uses_ks
+            ? "\nif(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kbit=(lf^(lf>>1))&1;lf=((lf>>1)|(kbit<<14))&0xFFFF;C.kb[ki]=(lf&1)?16383:-16383}}"
+            : "",
+        uses_drum
+            ? "\nif(j[0]===8){var dt=j[17]&7,al=dt===4?0:dt===5?2:dt,tn=j[18];if(tn>127)tn-=256;var dec=j[19],tone=j[20],snp=j[21],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;"
+              "if(al===0){C.drPe=df<<1;C.drPet=df>>3;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=64;tt=dec*200+1024;if(dt===4)tt*=2}"
+              "else if(al===1){C.f=df>0?df:24<<2;C.drMix=snp;C.drPe=F>>2;var tF=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*120+1024}"
+              "else if(al===2){C.f=df>0?df:24<<5;C.drPe=tone*4*F/255|0;var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}"
+              "else{C.drPe=F>>2;var tF2=tone*(F*15/16/255)|0;C.drPet=(F-(F>>5))-(tF2>>1);if(C.drPet<0)C.drPet=0;if(C.drPet>F)C.drPet=F-1;tt=dec*160+2048}"
+              "if(tt>0xFFFFFF)tt=0xFFFFFF;C.drTtl=tt;C.e=F;C.t=4;C.r=Math.max(1,dec>>3)}"
+            : "",
+        formant_trigger
+    );
+    (void)ks_idx; (void)drum_base; /* indices used via hardcoded layout above */
+    (void)formant_base;
+    fprintf(f,
         "function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue\n"
         "var n=P(pn,q,c,cr),ii=P(pi,q,c,cr)||255,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)\n"
         "C.ri=0;C.nc=0;C.nd=0\n"
@@ -800,17 +1160,56 @@ static int write_js(const char *filename, birb_song *song) {
         "if(C.td){C.tm=((C.tp&65535)*4-F*2>>8)*C.td/F;C.tp+=C.ts}else C.tm=0\n"
         "var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}\n"
         "else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}\n"
-        "else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}}}\n"
+        "else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}\n");
+    if (uses_fm) {
+        fprintf(f, "if(C.w===6){for(var k=0;k<4;k++)C.fmf[k]=Math.round(C.f*C.fmR[k])}\n");
+    }
+    fprintf(f, "}}\n");
+    fprintf(f,
         "for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--\n"
-        "var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e)continue\n"
-        "var h=C.p,s;if(!C.w)s=h<C.u?.5:-.5\n"
+        "var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e%s)continue\n"
+        "var h=C.p,s;\n",
+        uses_drum ? "&&!C.drTtl" : "");
+    if (uses_fm) {
+        fprintf(f,
+            "if(C.w===6){var mr=SA_(C.fmp[1]),sc=C.fmMi*C.fmL[1]/255,mo=mr*sc;if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%%F;s=cr_*C.fmL[0]/F}else \n");
+    }
+    if (uses_ks) {
+        fprintf(f,
+            "if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*(255-C.kd))>>8;C.kp=knx;s=kcur/32768}}else \n");
+    }
+    if (uses_drum) {
+        fprintf(f,
+            "if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};");
+        if (drum_algos & 1)
+            fprintf(f, "if(C.drAl===0){var gp=C.drPe-C.drPet;C.drPe-=(gp*C.drRate)>>20;C.p=(C.p+C.drPe)%%F;o_=SA_(C.p)*24000;if(C.drClk>0){var nn=lfn();var bit=(nn&1)?20000:-20000;o_+=(bit*C.drSnap*C.drClk)>>16;C.drClk--}}");
+        if (drum_algos & 2)
+            fprintf(f, "%sif(C.drAl===1){var nn=lfn();var noi=(nn&1)?14000:-14000;C.p=(C.p+C.f)%%F;var bd=SA_(C.p)*18000;var mx=(noi*(255-C.drMix)+bd*C.drMix)/255|0;var ac=((mx*C.drPe)>>16)+((C.drZ1*C.drPet)>>16)-((C.drZ2*(F-(F>>3)))>>16);if(ac>32767)ac=32767;else if(ac<-32767)ac=-32767;C.drZ2=C.drZ1;C.drZ1=ac;o_=ac}",
+                (drum_algos & 1) ? "else " : "");
+        if (drum_algos & 4)
+            fprintf(f, "%sif(C.drAl===2){C.p=(C.p+C.f)%%F;C.drP2=(C.drP2+C.f*17)%%F;var mr=SA_(C.drP2);var mo=(mr*C.drPe)|0;var cr2=SA_(C.p+mo);var sv=(cr2*18000)|0;var y=sv-C.drZ1;C.drZ1+=(y*C.drPet)>>16;o_=y}",
+                (drum_algos & 3) ? "else " : "");
+        if (drum_algos & 8)
+            fprintf(f, "%sif(C.drAl===3){var nn=lfn();var noi=(nn&1)?16000:-16000;var ac=((noi*C.drPe)>>16)+((C.drZ1*C.drPet)>>16)-((C.drZ2*(F-(F>>3)))>>16);if(ac>32767)ac=32767;else if(ac<-32767)ac=-32767;C.drZ2=C.drZ1;C.drZ1=ac;o_=ac}",
+                (drum_algos & 7) ? "else " : "");
+        fprintf(f, "s=o_/32768;if(s>1)s=1;else if(s<-1)s=-1}}else \n");
+    }
+    if (uses_formant) {
+        /* Biquad intermediates can overflow JS int32 under resonance, so use
+         * `/65536|0` (float div, truncate) rather than `>>16` for those paths. */
+        fprintf(f,
+            "if(C.w===9){var src;if(C.ftSw===3){var fv=C.ftLf,fb=(fv^(fv>>1))&1;fv=((fv>>1)|(fb<<14))&0xFFFF;if(!fv)fv=0x7FFF;C.ftLf=fv;src=(fv&1)?16383:-16383}else if(C.ftSw===0){src=h<C.u?16383:-16383}else{src=(h*2-F)*32767/F|0}var sm=0;for(var fi=0;fi<3;fi++){var b0=C.ftB0[fi],a1=C.ftA1[fi],a2=C.ftA2[fi];var yy=(b0*src/65536|0)+C.ftZ1[fi];C.ftZ1[fi]=(-(a1*yy/65536|0))+C.ftZ2[fi];C.ftZ2[fi]=(-b0*src/65536|0)-(a2*yy/65536|0);sm+=yy}if(sm>32767)sm=32767;else if(sm<-32767)sm=-32767;s=sm/32768;if(C.ftSS){C.ftRc=(C.ftRc+1)&0xFF;if((C.ftRc&0x1F)===0){var st=C.ftSS>>3;if(!st)st=1;var sp=C.ftSp+C.ftDr*st;if(sp>=255){sp=255;C.ftDr=-1}else if(sp<=0){sp=0;C.ftDr=1}C.ftSp=sp;FI(C)}}}else \n");
+    }
+    fprintf(f,
+        "if(!C.w)s=h<C.u?.5:-.5\n"
         "else if(C.w==1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F\n"
         "else if(C.w<3)s=(h*2-F)/F\n"
+        "else if(C.w==4){var ph2=h&0xFFFF,xx=ph2<F/2?ph2-F/4:(F*3/4)-ph2;xx<<=2;var ax2=xx<0?-xx:xx;s=xx*(F-ax2)/F*4/F}\n"
         "else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}\n"
         "var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F\n"
-        "v+=s*en*C.v*C.rv/F/255/255;C.p=(C.p+C.f)%%F}out[i]=v>1?1:v<-1?-1:v}\n"
-        "return{o:out,spt:spt,T:T}}\n"
-    );
+        "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=v>1?1:v<-1?-1:v}\n"
+        "return{o:out,spt:spt,T:T}}\n",
+        uses_drum ? "if(C.w!==8)" : "");
 
     fclose(f);
 
