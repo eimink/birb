@@ -22,7 +22,8 @@ WASM_4K_FLAGS = --target=wasm32-unknown-unknown -nostdlib -Oz \
     -Wl,--initial-memory=524288 \
     -Wno-void-pointer-to-int-cast \
     -DBIRB_MAX_PATTERNS=16 -DBIRB_MAX_ROWS=32 \
-    -DBIRB_MAX_INSTRUMENTS=8 -DBIRB_MAX_ORDER=32
+    -DBIRB_MAX_INSTRUMENTS=8 -DBIRB_MAX_ORDER=32 \
+    -DBIRB_MAX_SAMPLES=4 -DBIRB_SAMPLE_POOL=65536
 
 .PHONY: all clean test test-compiled web serve
 

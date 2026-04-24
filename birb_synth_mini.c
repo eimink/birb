@@ -153,6 +153,8 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
     ch->pitch_env_ticks = inst->pitch_env_len;
     ch->arp_note1 = inst->arp_note1;
     ch->arp_note2 = inst->arp_note2;
+    ch->volume = inst->volume;
+    ch->row_vol = 255;
     ch->arp_tick = 0;
     ch->pitch_slide = 0;
     if (inst->waveform == WAVE_NOISE) {
@@ -413,7 +415,12 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
                 if (env < 0) env = 0;
                 if (env > FX_ONE) env = FX_ONE;
             }
-            mix += (s * FX_TO_INT(env * 256)) >> 8;
+            int32_t vol = ch->volume ? ch->volume : 255;
+            int32_t rvol = ch->row_vol;
+            int32_t out = (s * FX_TO_INT(env * 256)) >> 8;
+            out = out * vol / 255;
+            out = out * rvol / 255;
+            mix += out;
             ch->phase += ch->freq;
             if (ch->phase >= FX_ONE) ch->phase -= FX_ONE;
         }
