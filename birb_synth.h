@@ -231,9 +231,11 @@ typedef struct {
     birb_row        patterns[BIRB_MAX_PATTERNS][BIRB_MAX_ROWS][BIRB_NUM_CHANNELS];
     uint8_t         pattern_lengths[BIRB_MAX_PATTERNS]; /* rows per pattern (default 64) */
 
+#ifndef BIRB_NO_SAMPLES
     birb_sample_meta samples[BIRB_MAX_SAMPLES];
     int16_t         sample_pool[BIRB_SAMPLE_POOL];
     uint32_t        sample_pool_used;
+#endif
 } birb_song;
 
 /* ---------- player state ---------- */

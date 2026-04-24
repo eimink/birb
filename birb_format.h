@@ -197,10 +197,26 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
 
     /* optional SMPL section — IMA-ADPCM sample bank */
     song->num_samples = 0;
+#ifndef BIRB_NO_SAMPLES
     song->sample_pool_used = 0;
+#endif
     if (pos + 4 <= len && data[pos] == 'S' && data[pos+1] == 'M' &&
         data[pos+2] == 'P' && data[pos+3] == 'L') {
         pos += 4;
+#ifdef BIRB_NO_SAMPLES
+        /* Skip SMPL section without decoding */
+        if (pos < len) {
+            int ns = data[pos++];
+            for (int s = 0; s < ns; s++) {
+                if (pos + 10 > len) break;
+                uint32_t length = data[pos] | (data[pos+1] << 8);
+                pos += 10;
+                uint32_t nibble_bytes = (length + 1) / 2;
+                if (pos + nibble_bytes > (uint32_t)len) break;
+                pos += nibble_bytes;
+            }
+        }
+#else
         /* IMA-ADPCM step table (89 entries) */
         static const int16_t adpcm_step[89] = {
             7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,
@@ -265,6 +281,7 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
             pos += nibble_bytes;
             song->sample_pool_used += length;
         }
+#endif /* BIRB_NO_SAMPLES */
     }
 
     /* optional NAME section */

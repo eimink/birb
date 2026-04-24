@@ -59,6 +59,7 @@ static int16_t gen_noise(birb_channel *ch) {
     return (ch->lfsr & 1) ? 16383 : -16383;
 }
 
+#ifndef BIRB_NO_SAMPLES
 static int16_t gen_sample_playback_mini(birb_channel *ch, birb_song *song) {
     if (!ch->sample_active || ch->sample_idx >= song->num_samples) return 0;
     birb_sample_meta *m = &song->samples[ch->sample_idx];
@@ -77,6 +78,7 @@ static int16_t gen_sample_playback_mini(birb_channel *ch, birb_song *song) {
     ch->sample_pos += ch->sample_speed;
     return s;
 }
+#endif
 
 static int16_t generate_sample(birb_channel *ch, birb_song *song) {
     switch (ch->waveform) {
@@ -84,8 +86,10 @@ static int16_t generate_sample(birb_channel *ch, birb_song *song) {
         case WAVE_TRIANGLE: return gen_triangle(ch->phase);
         case WAVE_SAWTOOTH: return gen_sawtooth(ch->phase);
         case WAVE_NOISE:    return gen_noise(ch);
+#ifndef BIRB_NO_SAMPLES
         case WAVE_SAMPLE:   return gen_sample_playback_mini(ch, song);
-        default:            return gen_triangle(ch->phase); /* sine→tri fallback */
+#endif
+        default:            return gen_triangle(ch->phase); /* sine→tri fallback, WAVE_SAMPLE also if BIRB_NO_SAMPLES */
     }
 }
 
@@ -164,6 +168,7 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         if (ch->lfsr_period < 1) ch->lfsr_period = 1;
     }
     ch->sample_active = 0;
+#ifndef BIRB_NO_SAMPLES
     if (inst->waveform == WAVE_SAMPLE && song && inst->sample_idx < song->num_samples) {
         birb_sample_meta *m = &song->samples[inst->sample_idx];
         int base = m->base_note; if (base > 95) base = 95;
@@ -174,6 +179,7 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         ch->sample_speed = base_f ? (uint32_t)(((uint64_t)note_f << FX_SHIFT) / base_f) : FX_ONE;
         ch->sample_active = 1;
     }
+#endif
 }
 
 /* ---------- tick effects (streamlined) ---------- */
@@ -268,10 +274,12 @@ static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param, bir
             ch->tremolo_speed = FX_ONE / 64 * ((param >> 4) & 0x0F);
             ch->tremolo_depth = (fixed16)(param & 0x0F) << 4;
             break;
+#ifndef BIRB_NO_SAMPLES
         case FX_SAMPLE_OFFSET:
             if (ch->waveform == WAVE_SAMPLE)
                 ch->sample_pos = ((uint32_t)param << 8) << FX_SHIFT;
             break;
+#endif
         case FX_POS_JUMP:
             state->jump_order = param;
             state->jump_row = 0;

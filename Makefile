@@ -60,6 +60,24 @@ web/birb.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 test_song.bin test_song.h test_song.js: test_song.birb birbc
 	./birbc test_song.birb --js
 
+# 4K WASM build without samples (even smaller)
+web/birb4k_nosamples.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then \
+		echo "Error: No wasm-capable clang found. Install with: brew install llvm"; \
+		exit 1; \
+	fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_SAMPLES birb_synth_mini.c birb_wasm.c -o web/birb4k_nosamples.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz web/birb4k_nosamples.wasm -o web/birb4k_nosamples.wasm; \
+	fi
+	@ls -la web/birb4k_nosamples.wasm
+	@gzip -9 -k -f web/birb4k_nosamples.wasm && \
+		echo "gzip:   $$(wc -c < web/birb4k_nosamples.wasm.gz | tr -d ' ')b" && rm web/birb4k_nosamples.wasm.gz
+	@if command -v brotli >/dev/null 2>&1; then \
+		brotli --best -f web/birb4k_nosamples.wasm -o web/birb4k_nosamples.wasm.br; \
+		echo "brotli: $$(wc -c < web/birb4k_nosamples.wasm.br | tr -d ' ')b"; \
+	fi
+
 # 4K WASM build (size-optimized)
 web/birb4k.wasm: birb_synth_mini.c birb_wasm.c birb_synth.h birb_format.h
 	@if [ -z "$(WASM_CC)" ]; then \
