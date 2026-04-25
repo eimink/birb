@@ -126,7 +126,7 @@ Typical songs: basic + FM + drums ~1.4 KB, drum-only pure-synth ~1.2 KB, all-fea
 |---|---|
 | `birb_synth.h` | Tagged channel union, configurable `BIRB_NUM_CHANNELS` (4-16), new synth types behind flags |
 | `birb_synth.c` | New generators: `generate_fm`, `generate_ks`, `generate_drum`, `generate_formant`. Dispatch on synth_type. |
-| `birb_synth_mini.c` | Mirror changes for 4K WASM build |
+| ~~`birb_synth_mini.c`~~ | (consolidated into `birb_synth.c` behind `BIRB_TINY_NOTE_TABLE`) |
 | `birb_format.h` | Parse new instrument types, validate channel count against compile-time max |
 | `birbc.c` | Export new synth types, conditional JS emission per used types |
 | `web/editor.html` | Channel pager, new instrument panels, preset libraries |

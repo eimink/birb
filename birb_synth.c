@@ -4,12 +4,24 @@
  */
 #include "birb_synth.h"
 
-/* ---------- note frequency table ---------- */
-/* Phase increment per sample at BIRB_SAMPLE_RATE=44100
- * freq[n] = (note_hz / SAMPLE_RATE) * FX_ONE
- * C0 (16.35 Hz) to B7 (7902.13 Hz), 96 entries
- * Generated from: f(n) = 440 * 2^((n-57)/12), increment = f/44100 * 65536
+/* ---------- note frequency lookup ---------- *
+ * Phase increment per sample at BIRB_SAMPLE_RATE=44100:
+ *   freq[n] = (note_hz / SAMPLE_RATE) * FX_ONE
+ * C0 (16.35 Hz) to B7 (7902.13 Hz), 96 semitones.
+ *
+ * Default: 96-entry static table, single load per trigger.
+ * BIRB_TINY_NOTE_TABLE: 12-entry octave-base table + shift, saves ~336 B.
  */
+#ifdef BIRB_TINY_NOTE_TABLE
+static const fixed16 octave_base[12] = {
+    24, 26, 27, 29, 31, 32, 34, 36, 38, 41, 43, 46,
+};
+fixed16 birb_note_to_freq(int note) {
+    if (note < 0) note = 0;
+    if (note > 95) note = 95;
+    return octave_base[note % 12] << (note / 12);
+}
+#else
 const fixed16 birb_note_freq[96] = {
     /* C0  */ 24,    26,    27,    29,    31,    32,    34,    36,    38,    41,    43,    46,
     /* C1  */ 48,    51,    54,    57,    61,    64,    68,    72,    76,    81,    86,    91,
@@ -20,6 +32,12 @@ const fixed16 birb_note_freq[96] = {
     /* C6  */ 1542,  1634,  1731,  1834,  1943,  2059,  2182,  2312,  2449,  2595,  2749,  2912,
     /* C7  */ 3084,  3268,  3462,  3668,  3886,  4118,  4363,  4624,  4899,  5191,  5498,  5825,
 };
+fixed16 birb_note_to_freq(int note) {
+    if (note < 0) note = 0;
+    if (note > 95) note = 95;
+    return birb_note_freq[note];
+}
+#endif
 
 /* ---------- sine approximation ---------- */
 /* Fast sine using parabolic approximation.
@@ -724,13 +742,10 @@ static void envelope_tick(birb_channel *ch) {
     }
 }
 
-/* ---------- note helpers ---------- */
-
-static fixed16 note_to_freq(int note) {
-    if (note < 0) note = 0;
-    if (note > 95) note = 95;
-    return birb_note_freq[note];
-}
+/* ---------- note helpers ---------- *
+ * Internal alias so the rest of this file is independent of which note-table
+ * variant got compiled (full 96-entry static or BIRB_TINY_NOTE_TABLE). */
+#define note_to_freq(n) birb_note_to_freq(n)
 
 static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, birb_song *song) {
     (void)song;
@@ -873,7 +888,7 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             /* SNARE — noise + body pulse. stage = body/noise mix (snap),
              * stage_tick = body envelope length in samples (tone-controlled,
              * shorter = crisper "tok", longer = more "thud"). */
-            ch->freq = dfreq > 0 ? dfreq : birb_note_freq[26]; /* D3 fallback */
+            ch->freq = dfreq > 0 ? dfreq : note_to_freq(26); /* D3 fallback */
             ch->u.drum.stage = inst->drum_snap;
             ch->u.drum.stage_tick = 64 + (inst->drum_tone >> 1); /* ~1.5..4 ms body */
             ttl = (uint32_t)inst->drum_decay * 120 + 1024;

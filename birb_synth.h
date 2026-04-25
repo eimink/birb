@@ -468,9 +468,16 @@ void birb_render(birb_state *state, int16_t *output, int num_samples);
 int  birb_get_row(birb_state *state);
 int  birb_get_pattern(birb_state *state);
 
-/* ---------- note frequency table (defined in birb_synth.c) ---------- */
-
+/* ---------- note frequency lookup ---------- *
+ * Default build ships a 96-entry phase-increment table. Define
+ * BIRB_TINY_NOTE_TABLE at build time to use a 12-entry octave-base table
+ * + bit-shift instead — saves ~336 bytes of __TEXT/__const at the cost
+ * of one branch + shift per note trigger. Audibly identical.
+ */
+fixed16 birb_note_to_freq(int note);
+#ifndef BIRB_TINY_NOTE_TABLE
 extern const fixed16 birb_note_freq[96];
+#endif
 
 /* sine approximation for vibrato */
 fixed16 birb_sin_approx(fixed16 phase);
