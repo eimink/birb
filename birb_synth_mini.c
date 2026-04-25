@@ -71,17 +71,112 @@ static int16_t gen_basic(birb_channel *ch) {
 }
 
 #ifndef BIRB_NO_FM
-/* 2-op FM: op1 modulates op0. Feedback dropped here to save bytes; the full
- * birb_synth.c keeps it. */
+/* 4-op FM with 8 algorithms — mirrors fmRender4() in editor.html. Same maths
+ * as birb_synth.c gen_fm; for size we keep this version structurally identical
+ * (no 2-op fast path elision — JS uses both, this stays in sync). */
 static int16_t gen_fm(birb_channel *ch) {
-    fixed16 mod_raw = birb_sin_approx(ch->u.fm.op_phase[1]);
-    int32_t scale = (int32_t)ch->u.fm.mod_index * ch->u.fm.op_env[1] / 255;
-    fixed16 mod_out = FX_MUL(mod_raw, (fixed16)scale);
-    fixed16 car_raw = birb_sin_approx(ch->u.fm.op_phase[0] + mod_out);
-    ch->u.fm.op_phase[0] = (ch->u.fm.op_phase[0] + ch->u.fm.op_freq[0]) & FX_MASK;
-    ch->u.fm.op_phase[1] = (ch->u.fm.op_phase[1] + ch->u.fm.op_freq[1]) & FX_MASK;
-    int32_t out = ((int32_t)car_raw * ch->u.fm.op_env[0]) >> FX_SHIFT;
-    out = (out * 32767) >> FX_SHIFT;
+    fixed16 lvl[4];
+    for (int i = 0; i < 4; i++)
+        lvl[i] = (fixed16)(((int64_t)ch->u.fm.op_lvl[i] * ch->u.fm.op_env[i]) >> FX_SHIFT);
+    int32_t mi = ch->u.fm.mod_index;
+    fixed16 fb = ch->u.fm.feedback
+        ? (fixed16)((int32_t)ch->u.fm.prev_out * ch->u.fm.feedback / 256)
+        : 0;
+    fixed16 raw, s;
+    int nops = ch->u.fm.num_ops < 4 ? 2 : 4;
+    if (nops == 4) {
+        fixed16 ph0 = ch->u.fm.op_phase[0], ph1 = ch->u.fm.op_phase[1];
+        fixed16 ph2 = ch->u.fm.op_phase[2], ph3 = ch->u.fm.op_phase[3];
+        switch (ch->u.fm.algorithm & 7) {
+            case 0: {
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2 + s3) * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s2) * lvl[1]) >> FX_SHIFT);
+                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
+                raw = birb_sin_approx(ph0 + s1m);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 1: {
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s3 + s2) * lvl[1]) >> FX_SHIFT);
+                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
+                raw = birb_sin_approx(ph0 + s1m);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 2: {
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2 + s3) * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
+                fixed16 mod = (fixed16)((((int64_t)s2 + s1) * mi) / 255);
+                raw = birb_sin_approx(ph0 + mod);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 3: {
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s3) * lvl[1]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
+                fixed16 mod = (fixed16)((((int64_t)s1 + s2) * mi) / 255);
+                raw = birb_sin_approx(ph0 + mod);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 4: {
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
+                fixed16 mod = (fixed16)((((int64_t)s3 + s2 + s1) * mi) / 255);
+                raw = birb_sin_approx(ph0 + mod);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 5: {
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
+                fixed16 s3m = (fixed16)(((int64_t)s3 * mi) / 255);
+                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
+                fixed16 r2 = birb_sin_approx(ph2 + s3m);
+                raw = birb_sin_approx(ph0 + s1m);
+                int64_t sum = (int64_t)r2 * lvl[2] + (int64_t)raw * lvl[0];
+                s = (fixed16)((sum >> FX_SHIFT) >> 1);
+                break;
+            }
+            case 6: {
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s3m = (fixed16)(((int64_t)s3 * mi) / 255);
+                fixed16 r2 = birb_sin_approx(ph2 + s3m);
+                fixed16 r1 = birb_sin_approx(ph1);
+                raw = birb_sin_approx(ph0);
+                int64_t sum = (int64_t)r2 * lvl[2] + (int64_t)r1 * lvl[1] + (int64_t)raw * lvl[0];
+                s = (fixed16)((sum >> FX_SHIFT) / 3);
+                break;
+            }
+            case 7: default: {
+                fixed16 r3 = birb_sin_approx(ph3 + fb);
+                fixed16 r2 = birb_sin_approx(ph2);
+                fixed16 r1 = birb_sin_approx(ph1);
+                raw = birb_sin_approx(ph0);
+                int64_t sum = (int64_t)r3 * lvl[3] + (int64_t)r2 * lvl[2]
+                            + (int64_t)r1 * lvl[1] + (int64_t)raw * lvl[0];
+                s = (fixed16)((sum >> FX_SHIFT) >> 2);
+                break;
+            }
+        }
+    } else {
+        fixed16 mod_raw = birb_sin_approx(ch->u.fm.op_phase[1]);
+        int64_t mod = ((int64_t)mod_raw * mi) / 255;
+        mod = (mod * lvl[1]) >> FX_SHIFT;
+        if (ch->u.fm.feedback) mod += fb;
+        raw = birb_sin_approx(ch->u.fm.op_phase[0] + (fixed16)mod);
+        s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+    }
+    ch->u.fm.prev_out = raw;
+    for (int i = 0; i < 4; i++)
+        ch->u.fm.op_phase[i] = (ch->u.fm.op_phase[i] + ch->u.fm.op_freq[i]) & FX_MASK;
+    int32_t out = ((int32_t)s * 32767) >> FX_SHIFT;
     if (out > 32767) out = 32767;
     if (out < -32767) out = -32767;
     return (int16_t)out;
@@ -194,27 +289,65 @@ static int16_t generate_drum(birb_channel *ch) {
 #endif
 
 #ifndef BIRB_NO_FORMANT
-/* Vowel formant coefficients (shared with birb_synth.c full build). */
-static const fixed16 formant_coeffs[5][3][3] = {
-    /* A */ { {    423, -129523,  64691 }, {    439, -128255,  64281 }, {    547, -120662,  62803 } },
-    /* E */ { {    308, -130085,  64921 }, {    731, -124576,  63447 }, {    555, -120371,  62761 } },
-    /* I */ { {    157, -130661,  65222 }, {    901, -121719,  62962 }, {    664, -116183,  62216 } },
-    /* O */ { {    331, -129981,  64875 }, {    340, -129171,  64565 }, {    540, -120877,  62835 } },
-    /* U */ { {    175, -130603,  65187 }, {    352, -129069,  64531 }, {    504, -122060,  63015 } },
+/* Vowel formant frequency table — coefficients computed at runtime so the
+ * resonance slider steers Q (mirrors birb_synth.c full build). */
+static const uint16_t formant_freqs_m[5][3] = {
+    /* A */ { 730, 1090, 2440 },
+    /* E */ { 530, 1840, 2480 },
+    /* I */ { 270, 2290, 3010 },
+    /* O */ { 570,  840, 2410 },
+    /* U */ { 300,  870, 2240 },
 };
+static const fixed16 formant_gains_m[3] = { FX_ONE, FX_ONE * 7 / 10, FX_ONE * 4 / 10 };
+
+/* fixed-point sin/cos, no libm. Domain restricted to [0, π/2]. */
+static fixed16 fix_sin_m(fixed16 x) {
+    int64_t x2 = ((int64_t)x * x) >> FX_SHIFT;
+    int64_t x3 = (x2 * x) >> FX_SHIFT;
+    int64_t x5 = (x3 * x2) >> FX_SHIFT;
+    return (fixed16)(x - x3 / 6 + x5 / 120);
+}
+static fixed16 fix_cos_m(fixed16 x) {
+    int64_t x2 = ((int64_t)x * x) >> FX_SHIFT;
+    int64_t x4 = (x2 * x2) >> FX_SHIFT;
+    return (fixed16)(FX_ONE - x2 / 2 + x4 / 24);
+}
+
+static void formant_calc_coeffs_m(uint8_t vowel, fixed16 q, fixed16 dst[3][3]) {
+    if (vowel > 4) vowel = 0;
+    if (q < FX_ONE / 2) q = FX_ONE / 2;
+    for (int i = 0; i < 3; i++) {
+        fixed16 omega = (fixed16)(((int32_t)formant_freqs_m[vowel][i] * 19) >> 1);
+        fixed16 sn = fix_sin_m(omega);
+        fixed16 cs = fix_cos_m(omega);
+        fixed16 alpha = (fixed16)(((int64_t)sn << FX_SHIFT) / (2 * (int64_t)q));
+        fixed16 denom = FX_ONE + alpha;
+        if (denom < 1) denom = 1;
+        fixed16 inv = (fixed16)(((int64_t)FX_ONE << FX_SHIFT) / denom);
+        int64_t b0 = ((int64_t)alpha * inv) >> FX_SHIFT;
+        b0 = (b0 * formant_gains_m[i]) >> FX_SHIFT;
+        dst[i][0] = (fixed16)b0;
+        int64_t a1 = (int64_t)(-2) * cs;
+        a1 = (a1 * inv) >> FX_SHIFT;
+        dst[i][1] = (fixed16)a1;
+        int64_t a2 = ((int64_t)(FX_ONE - alpha) * inv) >> FX_SHIFT;
+        dst[i][2] = (fixed16)a2;
+    }
+}
 
 static void formant_interp_m(birb_channel *ch) {
     uint8_t va = ch->u.formant.vowel_a; if (va > 4) va = 0;
     uint8_t vb = ch->u.formant.vowel_b; if (vb > 4) vb = 0;
+    fixed16 q = FX_ONE * 2 + (fixed16)(((int64_t)FX_ONE * 30 * ch->u.formant.resonance) / 255);
+    fixed16 cA[3][3], cB[3][3];
+    formant_calc_coeffs_m(va, q, cA);
+    formant_calc_coeffs_m(vb, q, cB);
     int32_t t = ch->u.formant.sweep_pos;
     int32_t omt = 255 - t;
     for (int i = 0; i < 3; i++) {
-        ch->u.formant.bq_b0[i] = (fixed16)((formant_coeffs[va][i][0] * omt
-                                          + formant_coeffs[vb][i][0] * t) / 255);
-        ch->u.formant.bq_a1[i] = (fixed16)((formant_coeffs[va][i][1] * omt
-                                          + formant_coeffs[vb][i][1] * t) / 255);
-        ch->u.formant.bq_a2[i] = (fixed16)((formant_coeffs[va][i][2] * omt
-                                          + formant_coeffs[vb][i][2] * t) / 255);
+        ch->u.formant.bq_b0[i] = (fixed16)((cA[i][0] * omt + cB[i][0] * t) / 255);
+        ch->u.formant.bq_a1[i] = (fixed16)((cA[i][1] * omt + cB[i][1] * t) / 255);
+        ch->u.formant.bq_a2[i] = (fixed16)((cA[i][2] * omt + cB[i][2] * t) / 255);
     }
 }
 
@@ -401,8 +534,14 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             uint32_t rf = inst->fm.ops[i].ratio_f;
             if (i < nops && (ri | rf) == 0) { ri = 1; rf = 0; }
             ch->u.fm.op_freq[i] = (fixed16)(((uint64_t)ch->base_freq * ((ri << 4) | (rf & 0xF))) >> 4);
-            ch->u.fm.op_env[i] = FX_ONE * (inst->fm.ops[i].level ? inst->fm.ops[i].level : 255) / 255;
-            ch->u.fm.op_stage[i] = ENV_ATTACK;
+            ch->u.fm.op_lvl[i] = (fixed16)(FX_ONE * (int32_t)inst->fm.ops[i].level / 255);
+            if (inst->fm.ops[i].adsr.attack == 0) {
+                ch->u.fm.op_env[i]   = FX_ONE;
+                ch->u.fm.op_stage[i] = ENV_DECAY;
+            } else {
+                ch->u.fm.op_env[i]   = 0;
+                ch->u.fm.op_stage[i] = ENV_ATTACK;
+            }
         }
     }
 #endif
@@ -484,6 +623,7 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         ch->u.formant.sweep_pos = 0;
         ch->u.formant.sweep_dir = +1;
         ch->u.formant.recalc = 0;
+        ch->u.formant.resonance = inst->formant_resonance;
         switch (inst->formant_duty) {
             case 0: ch->base_duty = DUTY_12; break;
             case 1: ch->base_duty = DUTY_25; break;
@@ -512,7 +652,47 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
 
 /* ---------- tick effects (streamlined) ---------- */
 
-static void tick_effects(birb_channel *ch) {
+#ifndef BIRB_NO_FM
+/* Per-op A/D/R envelope ticking + live op_lvl refresh. Mirrors editor doTick. */
+static void fm_op_envelope_tick_m(birb_channel *ch, birb_instrument *inst) {
+    if (!inst) return;
+    ch->u.fm.algorithm = inst->fm.algorithm;
+    for (int i = 0; i < 4; i++) {
+        birb_fm_op *op = &inst->fm.ops[i];
+        ch->u.fm.op_lvl[i] = (fixed16)(FX_ONE * (int32_t)op->level / 255);
+        birb_env_stage st = ch->u.fm.op_stage[i];
+        fixed16 en = ch->u.fm.op_env[i];
+        if (st == ENV_ATTACK) {
+            en += FX_ONE / (op->adsr.attack + 1);
+            if (en >= FX_ONE) { en = FX_ONE; st = ENV_DECAY; }
+        } else if (st == ENV_DECAY) {
+            fixed16 target = FX_ONE * op->adsr.sustain / 255;
+            en -= (FX_ONE - target) / (op->adsr.decay + 1);
+            if (en <= target) { en = target; st = ENV_SUSTAIN; }
+        } else if (st == ENV_RELEASE) {
+            en -= en / (op->adsr.release + 1);
+            if (en < 64) { en = 0; st = ENV_OFF; }
+        }
+        ch->u.fm.op_stage[i] = st;
+        ch->u.fm.op_env[i] = en;
+    }
+}
+#endif
+
+#ifndef BIRB_NO_FORMANT
+static void formant_live_tick_m(birb_channel *ch, birb_instrument *inst) {
+    if (!inst) return;
+    ch->u.formant.vowel_a     = inst->formant_vowel_a > 4 ? 0 : inst->formant_vowel_a;
+    ch->u.formant.vowel_b     = inst->formant_vowel_b > 4 ? 0 : inst->formant_vowel_b;
+    ch->u.formant.sweep_speed = inst->formant_sweep_speed;
+    ch->u.formant.resonance   = inst->formant_resonance;
+    uint8_t sw = inst->formant_source_wave;
+    if (sw == WAVE_PULSE || sw == WAVE_SAWTOOTH || sw == WAVE_NOISE)
+        ch->u.formant.src_wave = sw;
+}
+#endif
+
+static void tick_effects(birb_channel *ch, birb_song *song) {
     /* pitch envelope */
     if (ch->pitch_env_ticks > 0) {
         ch->base_freq += (fixed16)ch->pitch_env << 2;
@@ -566,15 +746,20 @@ static void tick_effects(birb_channel *ch) {
     envelope_tick(ch);
 
 #ifndef BIRB_NO_FM
-    if (ch->synth_type == SYNTH_FM && ch->base_freq > 0) {
-        fixed16 old_carrier = ch->u.fm.op_freq[0];
-        if (old_carrier > 0) {
-            for (int i = 1; i < 4; i++) {
-                if (ch->u.fm.op_freq[i])
-                    ch->u.fm.op_freq[i] = (fixed16)(((int64_t)ch->u.fm.op_freq[i] * ch->freq) / old_carrier);
-            }
+    if (ch->synth_type == SYNTH_FM && ch->base_freq > 0
+        && song && ch->cur_instrument < BIRB_MAX_INSTRUMENTS) {
+        birb_instrument *inst = &song->instruments[ch->cur_instrument];
+        for (int i = 0; i < 4; i++) {
+            uint32_t ri = inst->fm.ops[i].ratio_i;
+            uint32_t rf = inst->fm.ops[i].ratio_f;
+            ch->u.fm.op_freq[i] = (fixed16)(((uint64_t)ch->freq * ((ri << 4) | (rf & 0xF))) >> 4);
         }
-        ch->u.fm.op_freq[0] = ch->freq;
+        fm_op_envelope_tick_m(ch, inst);
+    }
+#endif
+#ifndef BIRB_NO_FORMANT
+    if (ch->synth_type == SYNTH_FORMANT && song && ch->cur_instrument < BIRB_MAX_INSTRUMENTS) {
+        formant_live_tick_m(ch, &song->instruments[ch->cur_instrument]);
     }
 #endif
 }
@@ -665,6 +850,13 @@ static void process_row(birb_state *state) {
             ch->note_delay_tick = r->param & 0x0F;
         } else if (r->note == BIRB_NOTE_OFF) {
             ch->env_stage = ENV_RELEASE;
+#ifndef BIRB_NO_FM
+            if (ch->synth_type == SYNTH_FM) {
+                for (int i = 0; i < 4; i++)
+                    if (ch->u.fm.op_stage[i] != ENV_OFF)
+                        ch->u.fm.op_stage[i] = ENV_RELEASE;
+            }
+#endif
         } else if (r->note >= BIRB_NOTE_C0) {
             if (is_tone_porta) {
                 ch->porta_target = note_to_freq(r->note - BIRB_NOTE_C0);
@@ -726,7 +918,7 @@ static void advance_tick(birb_state *state) {
                 ch->u.basic.lfsr = 0x7FFF; ch->u.basic.lfsr_count = 0;
             }
         }
-        tick_effects(ch);
+        tick_effects(ch, state->song);
     }
 }
 

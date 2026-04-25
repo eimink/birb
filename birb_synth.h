@@ -292,8 +292,9 @@ typedef struct {
             fixed16        op_phase[4]; /* per-op phase accumulator 0..FX_ONE */
             fixed16        op_freq[4];  /* per-op phase increment */
             fixed16        op_env[4];   /* per-op envelope level 0..FX_ONE */
+            fixed16        op_lvl[4];   /* per-op static level 0..FX_ONE (live-refreshed) */
             birb_env_stage op_stage[4]; /* per-op ADSR stage */
-            fixed16        prev_out;    /* op0 feedback memory */
+            fixed16        prev_out;    /* op0 feedback memory: raw carrier sine ×FX_ONE */
             uint8_t        num_ops;     /* 2 or 4 */
             uint8_t        algorithm;   /* 0-7 (4-op only) */
             uint8_t        feedback;    /* op0 feedback 0-255 */
@@ -352,7 +353,7 @@ typedef struct {
             uint8_t  vowel_a;
             uint8_t  vowel_b;
             uint8_t  recalc;           /* sample counter for re-interp */
-            uint8_t  _pad;
+            uint8_t  resonance;        /* 0..255 → Q 2..32 (cached from instrument) */
             /* Per-formant biquad state + current interpolated coefficients.
              * b1 = 0 and b2 = -b0 for BPF, so we store only b0, a1, a2. */
             int32_t  bq_z1[3];
@@ -380,9 +381,9 @@ _Static_assert(sizeof(birb_channel) <= 2 * BIRB_KS_BUF_SIZE + 144, "birb_channel
 #endif
 #elif !defined(BIRB_NO_FM)
 #if defined(__wasm__)
-_Static_assert(sizeof(birb_channel) <= 192, "birb_channel bloat (wasm, FM)");
+_Static_assert(sizeof(birb_channel) <= 224, "birb_channel bloat (wasm, FM)");
 #else
-_Static_assert(sizeof(birb_channel) <= 208, "birb_channel bloat (native, FM)");
+_Static_assert(sizeof(birb_channel) <= 240, "birb_channel bloat (native, FM)");
 #endif
 #elif !defined(BIRB_NO_FORMANT)
 /* FORMANT arm (no KS/FM) — ~88 B: 3 biquads × (2 state + 3 coeff) × 4B + housekeeping. */

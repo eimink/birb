@@ -93,40 +93,159 @@ static int16_t gen_basic(birb_channel *ch) {
 }
 
 #ifndef BIRB_NO_FM
-/* 2-op FM generator. op1 modulates op0 (carrier). For 2-op, both ops share
- * the channel's master ADSR (the common FM idiom: velocity maps to mod index,
- * amplitude envelope shapes both carrier and modulator). 4-op topologies are
- * sketched in the union but not yet implemented — TODO tracked in plan. */
+/* 4-op FM generator — mirrors fmRender4() in editor.html. 8 algorithms.
+ * Conventions:
+ *   op0 = output (in linear chain), op3 = deepest mod
+ *   each op's effective level lN = op_lvl[N] * op_env[N] / FX_ONE  (in [0..FX_ONE])
+ *   mod_index scales modulation entering any carrier (encoded /255)
+ *   feedback wraps prev_out (last raw carrier sine ×FX_ONE) into op3's phase
+ *
+ * Sub-expression sN holds modulator i's pre-mi phase contribution scaled by lN
+ * (same maths as JS: `sinApprox(...) * lN`). Multi-carrier algos (5/6/7) sum
+ * carriers and divide by carrier count to match the JS averaging.
+ *
+ * raw is the carrier op0's pre-level sine ×FX_ONE; it goes into prev_out for
+ * feedback. The 2-op path (num_ops < 4) is the simpler op1→op0 with feedback. */
 static int16_t gen_fm(birb_channel *ch) {
-    /* 2-op path: op1 modulates op0. 4-op is stubbed as a TODO — see plan. */
-    fixed16 mod_phase = ch->u.fm.op_phase[1];
-    fixed16 mod_raw = birb_sin_approx(mod_phase);
-    /* scale by op1 level + global mod index + op1 envelope */
-    int32_t scale = (int32_t)ch->u.fm.mod_index * ch->u.fm.op_env[1] / 255;
-    /* mod_raw is -FX_ONE..FX_ONE; produce a phase offset in the same units */
-    fixed16 mod_out = FX_MUL(mod_raw, (fixed16)scale);
+    /* Cache effective per-op levels (lvl × env), all in [0, FX_ONE]. */
+    fixed16 lvl[4];
+    for (int i = 0; i < 4; i++)
+        lvl[i] = (fixed16)(((int64_t)ch->u.fm.op_lvl[i] * ch->u.fm.op_env[i]) >> FX_SHIFT);
 
-    /* feedback on op0 */
-    if (ch->u.fm.feedback) {
-        int32_t fb_add = ((int32_t)ch->u.fm.prev_out * ch->u.fm.feedback) >> 8;
-        mod_out += fb_add;
+    /* mi in [0, 1] fixed-point: numerator = mod_index, denominator = 255.
+     * We keep the divide explicit at use sites (mirrors JS `mi = fmMi/255`). */
+    int32_t mi = ch->u.fm.mod_index;
+
+    /* fb is in raw modulator units (×FX_ONE). prev_out is car_raw × FX_ONE. */
+    fixed16 fb = ch->u.fm.feedback
+        ? (fixed16)((int32_t)ch->u.fm.prev_out * ch->u.fm.feedback / 256)
+        : 0;
+
+    fixed16 raw, s;
+    int nops = ch->u.fm.num_ops < 4 ? 2 : 4;
+
+    if (nops == 4) {
+        fixed16 ph0 = ch->u.fm.op_phase[0];
+        fixed16 ph1 = ch->u.fm.op_phase[1];
+        fixed16 ph2 = ch->u.fm.op_phase[2];
+        fixed16 ph3 = ch->u.fm.op_phase[3];
+        switch (ch->u.fm.algorithm & 7) {
+            case 0: {
+                /* 3→2→1→0 */
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2 + s3) * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s2) * lvl[1]) >> FX_SHIFT);
+                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
+                raw = birb_sin_approx(ph0 + s1m);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 1: {
+                /* 3+2 → 1 → 0 */
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s3 + s2) * lvl[1]) >> FX_SHIFT);
+                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
+                raw = birb_sin_approx(ph0 + s1m);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 2: {
+                /* 3→2→0, 1→0 */
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2 + s3) * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
+                fixed16 mod = (fixed16)((((int64_t)s2 + s1) * mi) / 255);
+                raw = birb_sin_approx(ph0 + mod);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 3: {
+                /* 3→1→0, 2→0 */
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s3) * lvl[1]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
+                fixed16 mod = (fixed16)((((int64_t)s1 + s2) * mi) / 255);
+                raw = birb_sin_approx(ph0 + mod);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 4: {
+                /* 3,2,1 → 0 (three modulators on one carrier) */
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
+                fixed16 mod = (fixed16)((((int64_t)s3 + s2 + s1) * mi) / 255);
+                raw = birb_sin_approx(ph0 + mod);
+                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+                break;
+            }
+            case 5: {
+                /* 3→2 (carrier), 1→0 (carrier). Sum then ÷ 2. */
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
+                fixed16 s3m = (fixed16)(((int64_t)s3 * mi) / 255);
+                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
+                fixed16 r2 = birb_sin_approx(ph2 + s3m);
+                raw = birb_sin_approx(ph0 + s1m);
+                /* (r2*l2 + raw*l0) / FX_ONE / 2 */
+                int64_t sum = (int64_t)r2 * lvl[2] + (int64_t)raw * lvl[0];
+                s = (fixed16)((sum >> FX_SHIFT) >> 1);
+                break;
+            }
+            case 6: {
+                /* 3→2 (carrier), 1, 0 (3 carriers). Sum ÷ 3. */
+                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
+                fixed16 s3m = (fixed16)(((int64_t)s3 * mi) / 255);
+                fixed16 r2 = birb_sin_approx(ph2 + s3m);
+                fixed16 r1 = birb_sin_approx(ph1);
+                raw = birb_sin_approx(ph0);
+                int64_t sum = (int64_t)r2 * lvl[2] + (int64_t)r1 * lvl[1] + (int64_t)raw * lvl[0];
+                s = (fixed16)((sum >> FX_SHIFT) / 3);
+                break;
+            }
+            case 7:
+            default: {
+                /* All 4 parallel carriers. Sum ÷ 4. */
+                fixed16 r3 = birb_sin_approx(ph3 + fb);
+                fixed16 r2 = birb_sin_approx(ph2);
+                fixed16 r1 = birb_sin_approx(ph1);
+                raw = birb_sin_approx(ph0);
+                int64_t sum = (int64_t)r3 * lvl[3] + (int64_t)r2 * lvl[2]
+                            + (int64_t)r1 * lvl[1] + (int64_t)raw * lvl[0];
+                s = (fixed16)((sum >> FX_SHIFT) >> 2);
+                break;
+            }
+        }
+    } else {
+        /* 2-op: op1 → op0 with feedback. Match JS:
+         *   modOut = sin(ph1) * (mi * l1 / 255);   if (fb) modOut += prev*fb/256
+         *   carRaw = sin(ph0 + modOut);   prev = carRaw * FX_ONE
+         *   s      = carRaw * l0 / FX_ONE */
+        fixed16 mod_raw = birb_sin_approx(ch->u.fm.op_phase[1]);
+        /* mod_raw is in [-FX_ONE, FX_ONE]; the JS does sin(...) (in [-1,1])
+         * times (mi * l1 / 255) where l1 is in [0,1]. In fixed: l1=lvl[1]/FX_ONE,
+         * so the JS amount is mod_raw_unit * mi/255 * l1/FX_ONE ; in fixed16
+         * units we want (mod_raw * mi / 255) * lvl[1] / FX_ONE. */
+        int64_t mod = ((int64_t)mod_raw * mi) / 255;
+        mod = (mod * lvl[1]) >> FX_SHIFT;
+        if (ch->u.fm.feedback) mod += fb;
+        raw = birb_sin_approx(ch->u.fm.op_phase[0] + (fixed16)mod);
+        s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
     }
 
-    fixed16 car_phase = ch->u.fm.op_phase[0] + mod_out;
-    fixed16 car_raw = birb_sin_approx(car_phase);
-    ch->u.fm.prev_out = car_raw;
+    /* prev_out tracks the raw carrier sine × FX_ONE so feedback maths matches
+     * across 2-op and 4-op (raw is already in [-FX_ONE, FX_ONE], so multiply
+     * by FX_ONE to match the JS `C.fmPrev = raw * F`). */
+    ch->u.fm.prev_out = raw;
 
-    /* advance both phases */
-    ch->u.fm.op_phase[0] += ch->u.fm.op_freq[0];
-    ch->u.fm.op_phase[1] += ch->u.fm.op_freq[1];
-    ch->u.fm.op_phase[0] &= FX_MASK;
-    ch->u.fm.op_phase[1] &= FX_MASK;
+    /* advance phases for all four ops (cheap for 2-op since op2/op3 freqs are
+     * either 0 or unused; mirrors the editor's unconditional 4-iter loop) */
+    for (int i = 0; i < 4; i++)
+        ch->u.fm.op_phase[i] = (ch->u.fm.op_phase[i] + ch->u.fm.op_freq[i]) & FX_MASK;
 
-    /* scale by op0 (carrier) output level */
-    int32_t out = ((int32_t)car_raw * ch->u.fm.op_env[0]) >> FX_SHIFT;
-    /* scale to int16 range. car_raw is -FX_ONE..FX_ONE; op_env is 0..FX_ONE;
-     * product divided by FX_ONE sits in -FX_ONE..FX_ONE, then ×32767/FX_ONE. */
-    out = (out * 32767) >> FX_SHIFT;
+    /* Convert s (∈ [-FX_ONE, FX_ONE]) to int16 range. */
+    int32_t out = ((int32_t)s * 32767) >> FX_SHIFT;
     if (out > 32767) out = 32767;
     if (out < -32767) out = -32767;
     return (int16_t)out;
@@ -328,38 +447,96 @@ static int16_t generate_drum(birb_channel *ch) {
 #endif /* BIRB_NO_DRUM */
 
 #ifndef BIRB_NO_FORMANT
-/* ---------- vowel formant coefficient table ----------
- * 5 vowels × 3 formants × 3 coefficients (b0, a1, a2) = 45 fixed16 = 180 B.
- * b1 is always 0 for the bandpass form (RBJ BPF constant-skirt), b2 = -b0.
- * Coefficients were pre-computed offline at Q=8 with per-formant gain baked
- * into b0: F1=1.0, F2=0.7, F3=0.4. Frequencies from standard phonetics
- * tables (Peterson & Barney). Generate via the Python in birb2_plan notes. */
-static const fixed16 formant_coeffs[5][3][3] = {
-    /* A */ { {    423, -129523,  64691 }, {    439, -128255,  64281 }, {    547, -120662,  62803 } },
-    /* E */ { {    308, -130085,  64921 }, {    731, -124576,  63447 }, {    555, -120371,  62761 } },
-    /* I */ { {    157, -130661,  65222 }, {    901, -121719,  62962 }, {    664, -116183,  62216 } },
-    /* O */ { {    331, -129981,  64875 }, {    340, -129171,  64565 }, {    540, -120877,  62835 } },
-    /* U */ { {    175, -130603,  65187 }, {    352, -129069,  64531 }, {    504, -122060,  63015 } },
+/* ---------- vowel formant frequency table ----------
+ * Vowel formant centre frequencies (Peterson & Barney) in Hz; coefficients are
+ * computed at runtime from these so the resonance slider can actually steer Q.
+ * Per-formant gain bakes into b0: F1=1.0, F2=0.7, F3=0.4 (formant_gains[]). */
+static const uint16_t formant_freqs[5][3] = {
+    /* A */ { 730, 1090, 2440 },
+    /* E */ { 530, 1840, 2480 },
+    /* I */ { 270, 2290, 3010 },
+    /* O */ { 570,  840, 2410 },
+    /* U */ { 300,  870, 2240 },
 };
+static const fixed16 formant_gains[3] = { FX_ONE, FX_ONE * 7 / 10, FX_ONE * 4 / 10 };
 
-/* Interpolate vowel A and B coefficients into the channel's working set at
- * sweep position t (0..255). Runs every N samples, not per-sample.
- * Signed intermediates throughout: `one_minus_t` stays int32_t so negative
- * coefficients don't get promoted to uint32_t during multiply. */
+/* ---------- fixed-point sin / cos (no libm) ----------
+ * Inputs in fixed16 with FX_ONE = 1.0 radian. Domain restricted to [0, π/2]
+ * (about 0..103000 in fixed16 units, comfortably under 2π). 5th-order Taylor
+ * for sin, 4th-order for cos. Used only for biquad coefficient computation
+ * at vowel formant frequencies (≤ 3010 Hz → ω ≤ 0.43 rad ≈ 28000), which is
+ * deep inside the convergence radius. Intermediates use int64 to avoid
+ * fixed-point overflow on x², x³, etc. */
+static fixed16 fix_sin(fixed16 x) {
+    int64_t x2 = ((int64_t)x * x) >> FX_SHIFT;
+    int64_t x3 = (x2 * x) >> FX_SHIFT;
+    int64_t x5 = (x3 * x2) >> FX_SHIFT;
+    return (fixed16)(x - x3 / 6 + x5 / 120);
+}
+static fixed16 fix_cos(fixed16 x) {
+    int64_t x2 = ((int64_t)x * x) >> FX_SHIFT;
+    int64_t x4 = (x2 * x2) >> FX_SHIFT;
+    return (fixed16)(FX_ONE - x2 / 2 + x4 / 24);
+}
+
+/* Compute biquad bandpass coefficients (RBJ constant-skirt form):
+ *   ω = 2π·f / SR;   α = sin(ω) / (2Q)
+ *   b0 =  α / (1+α);   a1 = -2·cos(ω) / (1+α);   a2 = (1-α) / (1+α)
+ * (b1 = 0, b2 = -b0 — both folded into the step function.)
+ * Frequencies are in Hz, sample rate is BIRB_SAMPLE_RATE (44100). The
+ * conversion 2π/44100 is approximated as multiply-by-19 then shift right 1
+ * (≈ 0.000145), which is ~1.7% high vs the true 0.0001425 — close enough
+ * that vowel character is unchanged but the Q control works as intended.
+ * Output is written into dst[3][3] as fixed16. */
+static void formant_calc_coeffs(uint8_t vowel, fixed16 q, fixed16 dst[3][3]) {
+    if (vowel > 4) vowel = 0;
+    if (q < FX_ONE / 2) q = FX_ONE / 2;
+    for (int i = 0; i < 3; i++) {
+        /* ω in fixed16. 19/2 ≈ 9.5 ≈ FX_ONE * 2π/44100. */
+        fixed16 omega = (fixed16)(((int32_t)formant_freqs[vowel][i] * 19) >> 1);
+        fixed16 sn = fix_sin(omega);
+        fixed16 cs = fix_cos(omega);
+        /* α = sn / (2Q) — q is fixed16, so divide as (sn << FX_SHIFT) / (2q). */
+        fixed16 alpha = (fixed16)(((int64_t)sn << FX_SHIFT) / (2 * (int64_t)q));
+        /* inv = 1 / (1 + α) in fixed16 → (FX_ONE << FX_SHIFT) / (FX_ONE + α). */
+        fixed16 denom = FX_ONE + alpha;
+        if (denom < 1) denom = 1;
+        fixed16 inv = (fixed16)(((int64_t)FX_ONE << FX_SHIFT) / denom);
+        /* b0 = α · inv · gain_i */
+        int64_t b0 = ((int64_t)alpha * inv) >> FX_SHIFT;
+        b0 = (b0 * formant_gains[i]) >> FX_SHIFT;
+        dst[i][0] = (fixed16)b0;
+        /* a1 = -2·cos(ω)·inv */
+        int64_t a1 = (int64_t)(-2) * cs;
+        a1 = (a1 * inv) >> FX_SHIFT;
+        dst[i][1] = (fixed16)a1;
+        /* a2 = (1 - α) · inv */
+        int64_t a2 = ((int64_t)(FX_ONE - alpha) * inv) >> FX_SHIFT;
+        dst[i][2] = (fixed16)a2;
+    }
+}
+
+/* Interpolate vowel A and B coefficients (computed at the channel's current
+ * Q from `resonance`) into the working set at sweep position t (0..255).
+ * Recomputes both vowels every call; with the 32-sample re-interp gate in
+ * generate_formant() this still amortises to ~0.5 trig calls per sample.
+ * Signed intermediates so negative a1 coefficients don't promote to uint32_t. */
 static void formant_interp(birb_channel *ch) {
     uint8_t va = ch->u.formant.vowel_a;
     uint8_t vb = ch->u.formant.vowel_b;
     if (va > 4) va = 0;
     if (vb > 4) vb = 0;
+    /* Resonance 0..255 → Q 2..32, fixed16. q = 2 + (res/255)*30. */
+    fixed16 q = FX_ONE * 2 + (fixed16)(((int64_t)FX_ONE * 30 * ch->u.formant.resonance) / 255);
+    fixed16 coefA[3][3], coefB[3][3];
+    formant_calc_coeffs(va, q, coefA);
+    formant_calc_coeffs(vb, q, coefB);
     int32_t t = ch->u.formant.sweep_pos;          /* 0..255 */
     int32_t omt = 255 - t;
     for (int i = 0; i < 3; i++) {
-        ch->u.formant.bq_b0[i] = (fixed16)((formant_coeffs[va][i][0] * omt
-                                          + formant_coeffs[vb][i][0] * t) / 255);
-        ch->u.formant.bq_a1[i] = (fixed16)((formant_coeffs[va][i][1] * omt
-                                          + formant_coeffs[vb][i][1] * t) / 255);
-        ch->u.formant.bq_a2[i] = (fixed16)((formant_coeffs[va][i][2] * omt
-                                          + formant_coeffs[vb][i][2] * t) / 255);
+        ch->u.formant.bq_b0[i] = (fixed16)((coefA[i][0] * omt + coefB[i][0] * t) / 255);
+        ch->u.formant.bq_a1[i] = (fixed16)((coefA[i][1] * omt + coefB[i][1] * t) / 255);
+        ch->u.formant.bq_a2[i] = (fixed16)((coefA[i][2] * omt + coefB[i][2] * t) / 255);
     }
 }
 
@@ -616,8 +793,17 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             uint32_t rf = inst->fm.ops[i].ratio_f;
             if (i < nops && (ri | rf) == 0) { ri = 1; rf = 0; }
             ch->u.fm.op_freq[i] = (fixed16)(((uint64_t)ch->base_freq * ((ri << 4) | (rf & 0xF))) >> 4);
-            ch->u.fm.op_env[i] = FX_ONE * (inst->fm.ops[i].level ? inst->fm.ops[i].level : 255) / 255;
-            ch->u.fm.op_stage[i] = ENV_ATTACK;
+            /* Static per-op level (refreshed live in fm_op_envelope_tick). */
+            ch->u.fm.op_lvl[i] = (fixed16)(FX_ONE * (int32_t)inst->fm.ops[i].level / 255);
+            /* Per-op ADSR start: a==0 jumps to DECAY at peak so the first
+             * tick isn't silent (mirrors fmRender4 trigger in editor). */
+            if (inst->fm.ops[i].adsr.attack == 0) {
+                ch->u.fm.op_env[i]   = FX_ONE;
+                ch->u.fm.op_stage[i] = ENV_DECAY;
+            } else {
+                ch->u.fm.op_env[i]   = 0;
+                ch->u.fm.op_stage[i] = ENV_ATTACK;
+            }
         }
     }
 #endif
@@ -738,6 +924,7 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         ch->u.formant.sweep_pos = 0;
         ch->u.formant.sweep_dir = +1;
         ch->u.formant.recalc = 0;
+        ch->u.formant.resonance = inst->formant_resonance;
         /* decode pulse duty code (0..3) into fixed16 duty reused by source. */
         switch (inst->formant_duty) {
             case 0: ch->base_duty = DUTY_12; break;
@@ -775,6 +962,18 @@ static void release_note(birb_channel *ch) {
     if (ch->env_stage != ENV_OFF) {
         ch->env_stage = ENV_RELEASE;
     }
+#ifndef BIRB_NO_FM
+    /* Per-op envelopes need to be released too; otherwise modulators keep
+     * sustaining and the sound never decays even after note-off. Editor JS
+     * does this in the note==1 handler (`if (C.fmStg[i]) C.fmStg[i] = 4`). */
+    if (ch->synth_type == SYNTH_FM) {
+        for (int i = 0; i < 4; i++) {
+            if (ch->u.fm.op_stage[i] != ENV_OFF) {
+                ch->u.fm.op_stage[i] = ENV_RELEASE;
+            }
+        }
+    }
+#endif
 }
 
 /* ---------- effect processing ---------- */
@@ -842,7 +1041,66 @@ static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param, bir
     }
 }
 
-static void tick_effects(birb_channel *ch) {
+#ifndef BIRB_NO_FM
+/* Per-op A/D/R envelope ticking + live refresh of op_lvl from instrument.
+ * Mirrors the editor's per-tick loop: each op runs an independent A/D/R state
+ * machine using the instrument's per-op ADSR values (read live, not cached at
+ * trigger), and op_lvl is also refreshed from inst->fm.ops[i].level so editor
+ * tweaks while a note is held take effect on the next tick. */
+static void fm_op_envelope_tick(birb_channel *ch, birb_instrument *inst) {
+    if (!inst) return;
+    /* Algorithm + feedback + mod_index are live too (matches editor behaviour). */
+    ch->u.fm.algorithm = inst->fm.algorithm;
+    /* (feedback / mod_index could also be live-refreshed; conservative: leave
+     * them set at trigger time so existing songs don't change pitch.) */
+    for (int i = 0; i < 4; i++) {
+        birb_fm_op *op = &inst->fm.ops[i];
+        ch->u.fm.op_lvl[i] = (fixed16)(FX_ONE * (int32_t)op->level / 255);
+        birb_env_stage st = ch->u.fm.op_stage[i];
+        fixed16 en = ch->u.fm.op_env[i];
+        switch (st) {
+            case ENV_ATTACK:
+                en += FX_ONE / (op->adsr.attack + 1);
+                if (en >= FX_ONE) { en = FX_ONE; st = ENV_DECAY; }
+                break;
+            case ENV_DECAY: {
+                fixed16 target = FX_ONE * op->adsr.sustain / 255;
+                en -= (FX_ONE - target) / (op->adsr.decay + 1);
+                if (en <= target) { en = target; st = ENV_SUSTAIN; }
+                break;
+            }
+            case ENV_RELEASE:
+                en -= en / (op->adsr.release + 1);
+                if (en < 64) { en = 0; st = ENV_OFF; }
+                break;
+            case ENV_SUSTAIN:
+            case ENV_OFF:
+            default:
+                break;
+        }
+        ch->u.fm.op_stage[i] = st;
+        ch->u.fm.op_env[i] = en;
+    }
+}
+#endif
+
+#ifndef BIRB_NO_FORMANT
+/* Live refresh of formant params from instrument so editor tweaks (vowel A/B,
+ * sweep speed, source wave, resonance) take effect on the next tick. Coeffs
+ * are recomputed by formant_interp on its normal 32-sample cadence. */
+static void formant_live_tick(birb_channel *ch, birb_instrument *inst) {
+    if (!inst) return;
+    ch->u.formant.vowel_a     = inst->formant_vowel_a > 4 ? 0 : inst->formant_vowel_a;
+    ch->u.formant.vowel_b     = inst->formant_vowel_b > 4 ? 0 : inst->formant_vowel_b;
+    ch->u.formant.sweep_speed = inst->formant_sweep_speed;
+    ch->u.formant.resonance   = inst->formant_resonance;
+    uint8_t sw = inst->formant_source_wave;
+    if (sw == WAVE_PULSE || sw == WAVE_SAWTOOTH || sw == WAVE_NOISE)
+        ch->u.formant.src_wave = sw;
+}
+#endif
+
+static void tick_effects(birb_channel *ch, birb_song *song) {
     /* pitch envelope */
     if (ch->pitch_env_ticks > 0) {
         ch->base_freq += (fixed16)ch->pitch_env << 2;
@@ -904,27 +1162,23 @@ static void tick_effects(birb_channel *ch) {
 #ifndef BIRB_NO_FM
     /* FM: derive per-operator frequencies from the current carrier freq.
      * The op_freq array is rebuilt each tick so arpeggio/vibrato/porta/slide
-     * all affect the FM note pitch without extra plumbing. Per-op ratio is
-     * stored as (ratio_i<<4 | ratio_f) fixed-point 4.4 in op_env upper bits?
-     * No — we keep the ratio on the instrument and re-read via channel state:
-     * op_freq already holds the initial ratio-weighted freq at note-on. Here
-     * we scale proportionally to any freq change since. */
-    if (ch->synth_type == SYNTH_FM && ch->base_freq > 0) {
-        /* Simple approach: recompute op_freq[i] = ch->freq * (op_freq_init[i] / base_freq_init).
-         * We don't store the initial ratios separately; instead, divide current
-         * op_freq by its old carrier freq and re-multiply. To keep this cheap
-         * and avoid cumulative drift, we cheat: op_freq[0] tracks ch->freq
-         * directly (carrier), and op_freq[i] is scaled relative to op_freq[0]. */
-        fixed16 old_carrier = ch->u.fm.op_freq[0];
-        if (old_carrier > 0) {
-            for (int i = 1; i < 4; i++) {
-                if (ch->u.fm.op_freq[i]) {
-                    /* ratio scaled to new carrier */
-                    ch->u.fm.op_freq[i] = (fixed16)(((int64_t)ch->u.fm.op_freq[i] * ch->freq) / old_carrier);
-                }
-            }
+     * all affect the FM note pitch without extra plumbing. We read the ratio
+     * live from the instrument (matches editor: `for i: C.fmf[i] = C.f * C.fmR[i]`).
+     * Then advance per-op A/D/R envelopes with `fm_op_envelope_tick`. */
+    if (ch->synth_type == SYNTH_FM && ch->base_freq > 0
+        && song && ch->cur_instrument < BIRB_MAX_INSTRUMENTS) {
+        birb_instrument *inst = &song->instruments[ch->cur_instrument];
+        for (int i = 0; i < 4; i++) {
+            uint32_t ri = inst->fm.ops[i].ratio_i;
+            uint32_t rf = inst->fm.ops[i].ratio_f;
+            ch->u.fm.op_freq[i] = (fixed16)(((uint64_t)ch->freq * ((ri << 4) | (rf & 0xF))) >> 4);
         }
-        ch->u.fm.op_freq[0] = ch->freq;
+        fm_op_envelope_tick(ch, inst);
+    }
+#endif
+#ifndef BIRB_NO_FORMANT
+    if (ch->synth_type == SYNTH_FORMANT && song && ch->cur_instrument < BIRB_MAX_INSTRUMENTS) {
+        formant_live_tick(ch, &song->instruments[ch->cur_instrument]);
     }
 #endif
 }
@@ -1051,7 +1305,7 @@ static void advance_tick(birb_state *state) {
             }
         }
 
-        tick_effects(ch);
+        tick_effects(ch, state->song);
     }
 }
 
