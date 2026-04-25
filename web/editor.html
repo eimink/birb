@@ -114,20 +114,21 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
 .ie-body .inst-edit select { font-size: 11px; padding: 2px 6px; }
 .ie-body .adsr-canvas { height: 72px; }
 .ie-empty { grid-column: 1 / -1; text-align: center; color: var(--dim); padding: 40px; font-style: italic; }
-/* FM per-operator block: header row (name + ratio + level slider), then a
- * 3-column grid (label | slider | value) for A/D/S/R. */
-.fm-op { margin-top: 8px; padding-top: 6px; border-top: 1px dotted var(--bg3); }
+/* FM per-operator block: header row (name, ratio, level), ADSR row (A/D/S/R
+ * inline as "label slider value" triples). Fixed-width sliders so things stay
+ * tight regardless of column width, controls flow with flex-wrap on narrow. */
+.fm-op { margin-top: 6px; padding-top: 6px; border-top: 1px dotted var(--bg3); }
 .fm-op:first-child { border-top: none; padding-top: 0; margin-top: 0; }
-.fm-op-head { display: grid; grid-template-columns: 36px auto 56px auto 1fr 36px; align-items: center; gap: 6px; margin-bottom: 4px; }
-.fm-op-head .fm-op-name { color: var(--acc); font-weight: bold; font-size: 11px; }
-.fm-op-head label { font-size: 10px; color: var(--dim); }
-.fm-op-head input[type=text] { width: 56px; }
-.fm-op-head input[type=range] { width: 100%; }
-.fm-op-head .val { font-size: 11px; color: var(--acc); text-align: right; }
-.fm-op-adsr { display: grid; grid-template-columns: 16px 1fr 36px 16px 1fr 36px; column-gap: 6px; row-gap: 4px; align-items: center; }
-.fm-op-adsr label { font-size: 11px; color: var(--dim); text-align: right; }
-.fm-op-adsr .val { font-size: 11px; color: var(--acc); text-align: right; }
-.fm-op-adsr input[type=range] { width: 100%; }
+.fm-op-head, .fm-op-adsr { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.fm-op-head { margin-bottom: 3px; }
+.fm-op-adsr { padding-left: 40px; }
+.fm-op .fm-op-name { color: var(--acc); font-weight: bold; font-size: 11px; min-width: 32px; }
+.fm-op label { font-size: 11px; color: var(--dim); width: auto; min-width: 0; }
+.fm-op-head input[type=text] { width: 52px; text-align: center; }
+.fm-op-head input[type=range] { width: 130px; }
+.fm-op-adsr input[type=range] { width: 80px; }
+.fm-op .val { font-size: 11px; color: var(--acc); min-width: 28px; text-align: right; }
+.fm-ctl { display: inline-flex; align-items: center; gap: 4px; }
 .order-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .pat-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .order-bar .lbl, .pat-bar .lbl { color: var(--acc); font-size: 11px; font-weight: bold; margin-right: 4px; }
@@ -1330,14 +1331,14 @@ function renderFmPanel() {
         html += `<div class="fm-op">
             <div class="fm-op-head">
                 <span class="fm-op-name">OP${i+1}</span>
-                <label>ratio</label><input type="text" value="${ratio}" data-op="${i}" data-f="ratio">
-                <label>lv</label><input type="range" min="0" max="255" value="${o.lv}" data-op="${i}" data-f="lv"><span class="val" data-vv="${i}-lv">${o.lv}</span>
+                <span class="fm-ctl"><label>ratio</label><input type="text" value="${ratio}" data-op="${i}" data-f="ratio"></span>
+                <span class="fm-ctl"><label>lv</label><input type="range" min="0" max="255" value="${o.lv}" data-op="${i}" data-f="lv"><span class="val" data-vv="${i}-lv">${o.lv}</span></span>
             </div>
             <div class="fm-op-adsr">
-                <label>A</label><input type="range" min="0" max="255" value="${o.a}" data-op="${i}" data-f="a"><span class="val" data-vv="${i}-a">${o.a}</span>
-                <label>D</label><input type="range" min="0" max="255" value="${o.d}" data-op="${i}" data-f="d"><span class="val" data-vv="${i}-d">${o.d}</span>
-                <label>S</label><input type="range" min="0" max="255" value="${o.s}" data-op="${i}" data-f="s"><span class="val" data-vv="${i}-s">${o.s}</span>
-                <label>R</label><input type="range" min="0" max="255" value="${o.r}" data-op="${i}" data-f="r"><span class="val" data-vv="${i}-r">${o.r}</span>
+                <span class="fm-ctl"><label>A</label><input type="range" min="0" max="255" value="${o.a}" data-op="${i}" data-f="a"><span class="val" data-vv="${i}-a">${o.a}</span></span>
+                <span class="fm-ctl"><label>D</label><input type="range" min="0" max="255" value="${o.d}" data-op="${i}" data-f="d"><span class="val" data-vv="${i}-d">${o.d}</span></span>
+                <span class="fm-ctl"><label>S</label><input type="range" min="0" max="255" value="${o.s}" data-op="${i}" data-f="s"><span class="val" data-vv="${i}-s">${o.s}</span></span>
+                <span class="fm-ctl"><label>R</label><input type="range" min="0" max="255" value="${o.r}" data-op="${i}" data-f="r"><span class="val" data-vv="${i}-r">${o.r}</span></span>
             </div>
         </div>`;
     }
