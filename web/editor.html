@@ -2149,7 +2149,7 @@ function renderSong(patOnly, singlePat) {
     let ch = [];
     for (let c = 0; c < N; c++)
         ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
-            fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmi:0, fmFb:0, fmMi:64, fmNo:2, fmPrev:0,
+            fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmR:[1,1,0,0], fmEnv:[0,0,0,0], fmStg:[0,0,0,0], fmFb:0, fmMi:64, fmNo:2, fmPrev:0,
             ksBuf:null, ksLen:0, ksPos:0, ksD:0,
             drAl:0, drAlOrig:0, drPhase2:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0, drStage:0, drStageT:0, drBurstLen:0, drBodyT:0,
             fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtRc:0,
@@ -2209,12 +2209,17 @@ function renderSong(patOnly, singlePat) {
             let fm = j.fm || FM_DEFAULTS;
             C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmPrev = 0;
             if (!C.fmR) C.fmR = [0,0,0,0];
+            if (!C.fmEnv) C.fmEnv = [0,0,0,0];
+            if (!C.fmStg) C.fmStg = [0,0,0,0];
             for (let i = 0; i < 4; i++) {
                 C.fmp[i] = 0;
-                let op = fm.ops[i] || {ri:1,rf:0,lv:255};
-                C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16; /* float ratio */
+                let op = fm.ops[i] || {ri:1,rf:0,lv:255,a:0,d:8,s:200,r:8};
+                C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
                 C.fmf[i] = Math.round(C.b * C.fmR[i]);
                 C.fmL[i] = Math.round(F * (op.lv || 0) / 255);
+                /* Per-op envelope: a==0 → start at peak in DECAY (no silent first tick) */
+                if ((op.a|0) == 0) { C.fmEnv[i] = F; C.fmStg[i] = 2; }
+                else                { C.fmEnv[i] = 0; C.fmStg[i] = 1; }
             }
         }
         if (j.wave === 7) {
@@ -2303,7 +2308,7 @@ function renderSong(patOnly, singlePat) {
             let itp = fx === 5, ind = fx === 7 && ((pm >> 4) & 0xF) === 0xD;
             if (ind && n >= 2) {
                 C.dn = n; C.di = ii === 255 ? C.i : ii; C.nd = pm & 15;
-            } else if (n === 1) { C.t = 4; }
+            } else if (n === 1) { C.t = 4; for (let i = 0; i < 4; i++) if (C.fmStg && C.fmStg[i]) C.fmStg[i] = 4; }
             else if (n >= 2) {
                 if (itp) { C.pt = nf(n - 2); }
                 else { if (ii === 255) ii = C.i; if (ii < ni) trigNote(C, n, ii); }
@@ -2361,9 +2366,29 @@ function renderSong(patOnly, singlePat) {
             if(e===1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
             else if(e===2){let g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
             else if(e===4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}
-            /* FM: rebuild op freqs from current carrier freq each tick */
+            /* FM: rebuild op freqs from current carrier freq, advance per-op envelopes */
             if (C.w === 6 && C.fmR) {
                 for (let i = 0; i < 4; i++) C.fmf[i] = Math.round(C.f * C.fmR[i]);
+                let inst = song.instruments[C.i];
+                if (inst && inst.fm) {
+                    for (let i = 0; i < 4; i++) {
+                        let op = inst.fm.ops[i] || {a:0,d:8,s:200,r:8};
+                        let st = C.fmStg[i], en = C.fmEnv[i];
+                        let oa = op.a|0, od = op.d|0, os = op.s|0, oR = op.r|0;
+                        if (st === 1) {
+                            en += F / (oa + 1);
+                            if (en >= F) { en = F; st = 2; }
+                        } else if (st === 2) {
+                            let g = (F * os / 255) | 0;
+                            en -= (F - g) / (od + 1);
+                            if (en <= g) { en = g; st = 3; }
+                        } else if (st === 4) {
+                            en -= en / (oR + 1);
+                            if (en < 64) { en = 0; st = 0; }
+                        }
+                        C.fmStg[i] = st; C.fmEnv[i] = en;
+                    }
+                }
             }
         }
     }
@@ -2408,16 +2433,34 @@ function renderSong(patOnly, singlePat) {
                 }
             }
             else if (C.w===6) {
-                /* 2-op FM: op1 modulates op0. Mod scaling by mod_index × op1 level */
-                let modRaw = sinApprox(C.fmp[1]);
-                let scale = C.fmMi * C.fmL[1] / 255;
-                let modOut = modRaw * scale;
-                if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
-                let carRaw = sinApprox(C.fmp[0] + modOut);
-                C.fmPrev = carRaw * F;
-                C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
-                C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
-                s = carRaw * C.fmL[0] / F;
+                /* FM: serial chain. nops=2 → op1→op0; nops=4 → op3→op2→op1→op0.
+                 * Each op's level scales by its own envelope. fmMi scales the
+                 * modulator immediately driving the carrier (op1→op0 boundary). */
+                if (C.fmNo >= 4) {
+                    let l3 = C.fmL[3] * C.fmEnv[3] / F;
+                    let l2 = C.fmL[2] * C.fmEnv[2] / F;
+                    let l1 = C.fmL[1] * C.fmEnv[1] / F;
+                    let l0 = C.fmL[0] * C.fmEnv[0] / F;
+                    let m3 = sinApprox(C.fmp[3]) * l3;
+                    let m2 = sinApprox(C.fmp[2] + m3) * l2;
+                    let m1 = sinApprox(C.fmp[1] + m2) * l1 * C.fmMi / 255;
+                    if (C.fmFb) m1 += C.fmPrev * C.fmFb / 256;
+                    let car = sinApprox(C.fmp[0] + m1);
+                    C.fmPrev = car * F;
+                    for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
+                    s = car * l0 / F;
+                } else {
+                    let l1 = C.fmL[1] * C.fmEnv[1] / F;
+                    let l0 = C.fmL[0] * C.fmEnv[0] / F;
+                    let modRaw = sinApprox(C.fmp[1]);
+                    let modOut = modRaw * (C.fmMi * l1 / 255);
+                    if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
+                    let carRaw = sinApprox(C.fmp[0] + modOut);
+                    C.fmPrev = carRaw * F;
+                    C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
+                    C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
+                    s = carRaw * l0 / F;
+                }
             }
             else if (C.w === 7) {
                 /* Karplus-Strong: read tap, write LP-filtered damped sample back. */
@@ -2684,7 +2727,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         let ch = [];
         for (let c = 0; c < this.N; c++)
             ch.push({p:0,f:0,b:0,w:0,n:0,u:this.F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
-                fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmNo:2,fmPrev:0,
+                fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmPrev:0,
                 ksBuf:new Int16Array(1024),ksLen:0,ksPos:0,ksD:0,
                 drAl:0,drAlOrig:0,drPhase2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClick:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0,
                 fmtSw:0,fmtLf:0x7FFF,fmtVa:0,fmtVb:0,fmtSp:0,fmtDir:1,fmtSS:0,fmtRc:0,
@@ -2741,14 +2784,17 @@ class BirbProcessor extends AudioWorkletProcessor {
             }
         }
         if (j.wave === 6) {
-            let fm = j.fm || {nops:2,algo:0,fb:0,mi:64,ops:[{ri:1,rf:0,lv:255},{ri:1,rf:0,lv:255},{ri:1,rf:0,lv:0},{ri:1,rf:0,lv:0}]};
+            let fm = j.fm || {nops:2,algo:0,fb:0,mi:64,ops:[{ri:1,rf:0,lv:255,a:0,d:8,s:200,r:8},{ri:1,rf:0,lv:255,a:0,d:8,s:200,r:8},{ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8},{ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}]};
             C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmPrev = 0;
+            let F = this.F;
             for (let i = 0; i < 4; i++) {
                 C.fmp[i] = 0;
-                let op = fm.ops[i] || {ri:1,rf:0,lv:255};
+                let op = fm.ops[i] || {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8};
                 C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
                 C.fmf[i] = Math.round(C.b * C.fmR[i]);
-                C.fmL[i] = Math.round(this.F * (op.lv || 0) / 255);
+                C.fmL[i] = Math.round(F * (op.lv || 0) / 255);
+                if ((op.a|0) == 0) { C.fmEnv[i] = F; C.fmStg[i] = 2; }
+                else                { C.fmEnv[i] = 0; C.fmStg[i] = 1; }
             }
         }
         if (j.wave === 7) {
@@ -2834,7 +2880,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             let itp = fx === 5, ind = fx === 7 && ((pm >> 4) & 0xF) === 0xD;
             if (ind && n >= 2) {
                 C.dn = n; C.di = ii === 255 ? C.i : ii; C.nd = pm & 15;
-            } else if (n === 1) { C.t = 4; }
+            } else if (n === 1) { C.t = 4; for (let i = 0; i < 4; i++) if (C.fmStg && C.fmStg[i]) C.fmStg[i] = 4; }
             else if (n >= 2) {
                 if (itp) { C.pt = this.nf(n - 2); }
                 else { if (ii === 255) ii = C.i; if (ii < ni) this.trigNote(C, n, ii); }
@@ -2887,17 +2933,31 @@ class BirbProcessor extends AudioWorkletProcessor {
                 let j = this.song.instruments[C.i];
                 C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
                 C.v = j.vol !== undefined ? j.vol : 255;
-                /* Live FM tweak: re-read per-op ratio/level + global fb/mi/nops
-                 * each tick. Without this, channel state is frozen at trigger
-                 * time and slider moves silently update song.json without
-                 * touching the running note. */
+                /* Live FM tweak: re-read per-op ratio/level/ADSR + global
+                 * fb/mi/nops each tick, then advance per-op envelopes. */
                 if (C.w === 6 && j.fm) {
-                    let fm = j.fm;
+                    let fm = j.fm, F = this.F;
                     C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmNo = fm.nops;
                     for (let i = 0; i < 4; i++) {
-                        let op = fm.ops[i] || {ri:1, rf:0, lv:0};
+                        let op = fm.ops[i] || {ri:1, rf:0, lv:0, a:0, d:8, s:200, r:8};
                         C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
-                        C.fmL[i] = Math.round(this.F * (op.lv || 0) / 255);
+                        C.fmL[i] = Math.round(F * (op.lv || 0) / 255);
+                        /* Per-op envelope state machine. Reads a/d/s/r live
+                         * from the instrument so slider moves are audible. */
+                        let st = C.fmStg[i], en = C.fmEnv[i];
+                        let oa = op.a|0, od = op.d|0, os = op.s|0, oR = op.r|0;
+                        if (st === 1) {
+                            en += F / (oa + 1);
+                            if (en >= F) { en = F; st = 2; }
+                        } else if (st === 2) {
+                            let g = (F * os / 255) | 0;
+                            en -= (F - g) / (od + 1);
+                            if (en <= g) { en = g; st = 3; }
+                        } else if (st === 4) {
+                            en -= en / (oR + 1);
+                            if (en < 64) { en = 0; st = 0; }
+                        }
+                        C.fmStg[i] = st; C.fmEnv[i] = en;
                     }
                 }
             }
@@ -2955,15 +3015,32 @@ class BirbProcessor extends AudioWorkletProcessor {
                     }
                 }
                 else if (C.w === 6) {
-                    let modRaw = this.sinApprox(C.fmp[1]);
-                    let scale = C.fmMi * C.fmL[1] / 255;
-                    let modOut = modRaw * scale;
-                    if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
-                    let carRaw = this.sinApprox(C.fmp[0] + modOut);
-                    C.fmPrev = carRaw * F;
-                    C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
-                    C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
-                    s = carRaw * C.fmL[0] / F;
+                    /* FM serial chain with per-op envelopes. */
+                    if (C.fmNo >= 4) {
+                        let l3 = C.fmL[3] * C.fmEnv[3] / F;
+                        let l2 = C.fmL[2] * C.fmEnv[2] / F;
+                        let l1 = C.fmL[1] * C.fmEnv[1] / F;
+                        let l0 = C.fmL[0] * C.fmEnv[0] / F;
+                        let m3 = this.sinApprox(C.fmp[3]) * l3;
+                        let m2 = this.sinApprox(C.fmp[2] + m3) * l2;
+                        let m1 = this.sinApprox(C.fmp[1] + m2) * l1 * C.fmMi / 255;
+                        if (C.fmFb) m1 += C.fmPrev * C.fmFb / 256;
+                        let car = this.sinApprox(C.fmp[0] + m1);
+                        C.fmPrev = car * F;
+                        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
+                        s = car * l0 / F;
+                    } else {
+                        let l1 = C.fmL[1] * C.fmEnv[1] / F;
+                        let l0 = C.fmL[0] * C.fmEnv[0] / F;
+                        let modRaw = this.sinApprox(C.fmp[1]);
+                        let modOut = modRaw * (C.fmMi * l1 / 255);
+                        if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
+                        let carRaw = this.sinApprox(C.fmp[0] + modOut);
+                        C.fmPrev = carRaw * F;
+                        C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
+                        C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
+                        s = carRaw * l0 / F;
+                    }
                 }
                 else if (C.w === 7) {
                     if (C.ksLen < 2) { s = 0; }
