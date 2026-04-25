@@ -35,8 +35,9 @@ web/test_song.js
 web/editor.min.html
 web/editor.min.html.br
 
-# birbc-generated headers (build artifacts)
+# birbc-generated headers + JS exports (build artifacts)
 examples/*.h
+examples/*.js
 samples_test.h
 
 # OS files
