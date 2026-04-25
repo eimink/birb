@@ -2203,68 +2203,80 @@ function renderSong(patOnly, singlePat) {
      *   6: 3→2, 1, 0    (op3 mods op2; op0/op1/op2 carriers)
      *   7: parallel     (all four ops carry, additive) */
     function fmRender4(C, F) {
+        /* Levels in [0, F]: lN = fmL[N] * fmEnv[N] / F. Used as phase-mod
+         * amounts (scaled to F = one cycle). Carrier output is sinApprox in
+         * [-1, 1], multiplied by lN/F at the end to get audio in [-1, 1].
+         * fmPrev tracks the raw sine output (carRaw) × F so feedback maths
+         * matches 2-op exactly: fb = fmPrev × fmFb / 256, ∈ [±F·fmFb/256]. */
         let l0 = C.fmL[0] * C.fmEnv[0] / F;
         let l1 = C.fmL[1] * C.fmEnv[1] / F;
         let l2 = C.fmL[2] * C.fmEnv[2] / F;
         let l3 = C.fmL[3] * C.fmEnv[3] / F;
         let mi = C.fmMi / 255;
         let fb = C.fmFb ? C.fmPrev * C.fmFb / 256 : 0;
-        let s, s3, s2, s1;
+        let s, raw, s3, s2, s1;
         switch (C.fmAlgo & 7) {
             case 0:
                 s3 = sinApprox(C.fmp[3] + fb) * l3;
                 s2 = sinApprox(C.fmp[2] + s3) * l2;
                 s1 = sinApprox(C.fmp[1] + s2) * l1;
-                s  = sinApprox(C.fmp[0] + s1 * mi) * l0;
+                raw = sinApprox(C.fmp[0] + s1 * mi);
+                s = raw * l0 / F;
                 break;
             case 1:
                 s3 = sinApprox(C.fmp[3] + fb) * l3;
                 s2 = sinApprox(C.fmp[2]) * l2;
                 s1 = sinApprox(C.fmp[1] + s3 + s2) * l1;
-                s  = sinApprox(C.fmp[0] + s1 * mi) * l0;
+                raw = sinApprox(C.fmp[0] + s1 * mi);
+                s = raw * l0 / F;
                 break;
             case 2:
                 s3 = sinApprox(C.fmp[3] + fb) * l3;
                 s2 = sinApprox(C.fmp[2] + s3) * l2;
                 s1 = sinApprox(C.fmp[1]) * l1;
-                s  = sinApprox(C.fmp[0] + (s2 + s1) * mi) * l0;
+                raw = sinApprox(C.fmp[0] + (s2 + s1) * mi);
+                s = raw * l0 / F;
                 break;
             case 3:
                 s3 = sinApprox(C.fmp[3] + fb) * l3;
                 s1 = sinApprox(C.fmp[1] + s3) * l1;
                 s2 = sinApprox(C.fmp[2]) * l2;
-                s  = sinApprox(C.fmp[0] + (s1 + s2) * mi) * l0;
+                raw = sinApprox(C.fmp[0] + (s1 + s2) * mi);
+                s = raw * l0 / F;
                 break;
             case 4:
                 s3 = sinApprox(C.fmp[3] + fb) * l3;
                 s2 = sinApprox(C.fmp[2]) * l2;
                 s1 = sinApprox(C.fmp[1]) * l1;
-                s  = sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi) * l0;
+                raw = sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi);
+                s = raw * l0 / F;
                 break;
             case 5: {
                 s3 = sinApprox(C.fmp[3] + fb) * l3;
                 s1 = sinApprox(C.fmp[1]) * l1;
-                let c2 = sinApprox(C.fmp[2] + s3 * mi) * l2;
-                let c0 = sinApprox(C.fmp[0] + s1 * mi) * l0;
-                s = (c2 + c0) * 0.5;
+                let r2 = sinApprox(C.fmp[2] + s3 * mi);
+                raw = sinApprox(C.fmp[0] + s1 * mi);
+                s = (r2 * l2 + raw * l0) / F * 0.5;
                 break;
             }
             case 6: {
                 s3 = sinApprox(C.fmp[3] + fb) * l3;
-                let c2 = sinApprox(C.fmp[2] + s3 * mi) * l2;
-                let c1 = sinApprox(C.fmp[1]) * l1;
-                let c0 = sinApprox(C.fmp[0]) * l0;
-                s = (c2 + c1 + c0) / 3;
+                let r2 = sinApprox(C.fmp[2] + s3 * mi);
+                let r1 = sinApprox(C.fmp[1]);
+                raw = sinApprox(C.fmp[0]);
+                s = (r2 * l2 + r1 * l1 + raw * l0) / F / 3;
                 break;
             }
-            case 7: default:
-                s = (sinApprox(C.fmp[3] + fb) * l3
-                    + sinApprox(C.fmp[2]) * l2
-                    + sinApprox(C.fmp[1]) * l1
-                    + sinApprox(C.fmp[0]) * l0) * 0.25;
+            case 7: default: {
+                let r3 = sinApprox(C.fmp[3] + fb);
+                let r2 = sinApprox(C.fmp[2]);
+                let r1 = sinApprox(C.fmp[1]);
+                raw = sinApprox(C.fmp[0]);
+                s = (r3 * l3 + r2 * l2 + r1 * l1 + raw * l0) / F * 0.25;
                 break;
+            }
         }
-        C.fmPrev = s * F;
+        C.fmPrev = raw * F;
         for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
         return s;
     }
@@ -2833,7 +2845,8 @@ class BirbProcessor extends AudioWorkletProcessor {
         let y = t * (F - t) / F * 4 / F;
         return negate ? -y : y;
     }
-    /* 4-op FM, 8 algorithms — mirrors fmRender4 in renderSong. */
+    /* 4-op FM, 8 algorithms — mirrors fmRender4 in renderSong. See that
+     * function's comment block for unit conventions. */
     fmRender4(C) {
         let F = this.F;
         let l0 = C.fmL[0] * C.fmEnv[0] / F;
@@ -2842,62 +2855,69 @@ class BirbProcessor extends AudioWorkletProcessor {
         let l3 = C.fmL[3] * C.fmEnv[3] / F;
         let mi = C.fmMi / 255;
         let fb = C.fmFb ? C.fmPrev * C.fmFb / 256 : 0;
-        let s, s3, s2, s1;
+        let s, raw, s3, s2, s1;
         switch (C.fmAlgo & 7) {
             case 0:
                 s3 = this.sinApprox(C.fmp[3] + fb) * l3;
                 s2 = this.sinApprox(C.fmp[2] + s3) * l2;
                 s1 = this.sinApprox(C.fmp[1] + s2) * l1;
-                s  = this.sinApprox(C.fmp[0] + s1 * mi) * l0;
+                raw = this.sinApprox(C.fmp[0] + s1 * mi);
+                s = raw * l0 / F;
                 break;
             case 1:
                 s3 = this.sinApprox(C.fmp[3] + fb) * l3;
                 s2 = this.sinApprox(C.fmp[2]) * l2;
                 s1 = this.sinApprox(C.fmp[1] + s3 + s2) * l1;
-                s  = this.sinApprox(C.fmp[0] + s1 * mi) * l0;
+                raw = this.sinApprox(C.fmp[0] + s1 * mi);
+                s = raw * l0 / F;
                 break;
             case 2:
                 s3 = this.sinApprox(C.fmp[3] + fb) * l3;
                 s2 = this.sinApprox(C.fmp[2] + s3) * l2;
                 s1 = this.sinApprox(C.fmp[1]) * l1;
-                s  = this.sinApprox(C.fmp[0] + (s2 + s1) * mi) * l0;
+                raw = this.sinApprox(C.fmp[0] + (s2 + s1) * mi);
+                s = raw * l0 / F;
                 break;
             case 3:
                 s3 = this.sinApprox(C.fmp[3] + fb) * l3;
                 s1 = this.sinApprox(C.fmp[1] + s3) * l1;
                 s2 = this.sinApprox(C.fmp[2]) * l2;
-                s  = this.sinApprox(C.fmp[0] + (s1 + s2) * mi) * l0;
+                raw = this.sinApprox(C.fmp[0] + (s1 + s2) * mi);
+                s = raw * l0 / F;
                 break;
             case 4:
                 s3 = this.sinApprox(C.fmp[3] + fb) * l3;
                 s2 = this.sinApprox(C.fmp[2]) * l2;
                 s1 = this.sinApprox(C.fmp[1]) * l1;
-                s  = this.sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi) * l0;
+                raw = this.sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi);
+                s = raw * l0 / F;
                 break;
             case 5: {
                 s3 = this.sinApprox(C.fmp[3] + fb) * l3;
                 s1 = this.sinApprox(C.fmp[1]) * l1;
-                let c2 = this.sinApprox(C.fmp[2] + s3 * mi) * l2;
-                let c0 = this.sinApprox(C.fmp[0] + s1 * mi) * l0;
-                s = (c2 + c0) * 0.5;
+                let r2 = this.sinApprox(C.fmp[2] + s3 * mi);
+                raw = this.sinApprox(C.fmp[0] + s1 * mi);
+                s = (r2 * l2 + raw * l0) / F * 0.5;
                 break;
             }
             case 6: {
                 s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                let c2 = this.sinApprox(C.fmp[2] + s3 * mi) * l2;
-                let c1 = this.sinApprox(C.fmp[1]) * l1;
-                let c0 = this.sinApprox(C.fmp[0]) * l0;
-                s = (c2 + c1 + c0) / 3;
+                let r2 = this.sinApprox(C.fmp[2] + s3 * mi);
+                let r1 = this.sinApprox(C.fmp[1]);
+                raw = this.sinApprox(C.fmp[0]);
+                s = (r2 * l2 + r1 * l1 + raw * l0) / F / 3;
                 break;
             }
-            case 7: default:
-                s = (this.sinApprox(C.fmp[3] + fb) * l3
-                    + this.sinApprox(C.fmp[2]) * l2
-                    + this.sinApprox(C.fmp[1]) * l1
-                    + this.sinApprox(C.fmp[0]) * l0) * 0.25;
+            case 7: default: {
+                let r3 = this.sinApprox(C.fmp[3] + fb);
+                let r2 = this.sinApprox(C.fmp[2]);
+                let r1 = this.sinApprox(C.fmp[1]);
+                raw = this.sinApprox(C.fmp[0]);
+                s = (r3 * l3 + r2 * l2 + r1 * l1 + raw * l0) / F * 0.25;
                 break;
+            }
         }
-        C.fmPrev = s * F;
+        C.fmPrev = raw * F;
         for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
         return s;
     }
