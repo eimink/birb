@@ -268,7 +268,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <div class="row"><label>Wave</label>
                             <select id="ie-wave" onchange="onWaveChange()"><option value="0">pulse</option><option value="1">triangle</option><option value="2">sawtooth</option><option value="3">noise</option><option value="4">sine</option><option value="5">sample</option><option value="6">fm</option><option value="7">ks</option><option value="8">drum</option><option value="9">formant</option></select>
                         </div>
-                        <div class="row"><label>Duty</label>
+                        <div class="row" id="ie-duty-row"><label>Duty</label>
                             <select id="ie-duty"><option value="0">12.5%</option><option value="1">25%</option><option value="2">50%</option><option value="3">75%</option></select>
                         </div>
                         <div class="row"><label>A</label><input type="range" id="ie-a" min="0" max="255" value="0"><span class="val" id="ie-a-v">0</span></div>
@@ -1148,11 +1148,20 @@ function onWaveChange() {
         ins.fmtRes = FORMANT_DEFAULTS.res;
     }
     saveInstFromEditor();
+    updateDutyVisibility();
     updateSamplePanelVisibility();
     updateFmPanelVisibility();
     updateKsPanelVisibility();
     updateDrumPanelVisibility();
     updateFormantPanelVisibility();
+}
+function updateDutyVisibility() {
+    /* Master Duty is only used by pulse — for every other wave the value
+     * goes nowhere (formant has its own duty in the formant panel). */
+    let ins = song.instruments[editInst];
+    let row = document.getElementById('ie-duty-row');
+    if (!row) return;
+    row.style.display = (ins && ins.wave === 0) ? '' : 'none';
 }
 
 function updateSamplePanelVisibility() {
@@ -1757,6 +1766,7 @@ function loadInstEditor() {
     document.getElementById('ie-name').value = ins.name || '';
     updateInstValues();
     drawADSR();
+    updateDutyVisibility();
     updateSamplePanelVisibility();
     updateFmPanelVisibility();
     updateKsPanelVisibility();
@@ -2173,7 +2183,7 @@ function renderSong(patOnly, singlePat) {
             fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmR:[1,1,0,0], fmEnv:[0,0,0,0], fmStg:[0,0,0,0], fmFb:0, fmMi:64, fmNo:2, fmAlgo:0, fmPrev:0,
             ksBuf:null, ksLen:0, ksPos:0, ksD:0,
             drAl:0, drAlOrig:0, drPhase2:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0, drStage:0, drStageT:0, drBurstLen:0, drBodyT:0,
-            fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtRc:0,
+            fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtR:128, fmtRc:0,
             fmtZ1:[0,0,0], fmtZ2:[0,0,0], fmtB0:[0,0,0], fmtA1:[0,0,0], fmtA2:[0,0,0]};
 
     let ct = 0, cr = 0, op = 0, tc = 0, firstRow = true;
@@ -2280,22 +2290,51 @@ function renderSong(patOnly, singlePat) {
         for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
         return s;
     }
-    /* Vowel formant coefficient table (mirrors birb_synth.c). */
-    const FMT_COEF = [
-        [[    423, -129523,  64691], [    439, -128255,  64281], [    547, -120662,  62803]], /* A */
-        [[    308, -130085,  64921], [    731, -124576,  63447], [    555, -120371,  62761]], /* E */
-        [[    157, -130661,  65222], [    901, -121719,  62962], [    664, -116183,  62216]], /* I */
-        [[    331, -129981,  64875], [    340, -129171,  64565], [    540, -120877,  62835]], /* O */
-        [[    175, -130603,  65187], [    352, -129069,  64531], [    504, -122060,  63015]]  /* U */
+    /* Vowel formant frequencies in Hz (Peterson & Barney) — F1, F2, F3 per
+     * vowel. Coefficients are computed at runtime from these so the
+     * Resonance slider can actually steer Q. */
+    const FMT_FREQS = [
+        [730, 1090, 2440],   /* A */
+        [530, 1840, 2480],   /* E */
+        [270, 2290, 3010],   /* I */
+        [570,  840, 2410],   /* O */
+        [300,  870, 2240]    /* U */
     ];
+    const FMT_GAINS = [1.0, 0.7, 0.4]; /* per-formant level baked into b0 */
+    /* Compute biquad bandpass coefficients (RBJ constant-skirt form):
+     *   ω = 2π·f / SR;   α = sin(ω) / (2Q)
+     *   b0 =  α / (1+α);   a1 = -2cos(ω) / (1+α);   a2 = (1-α) / (1+α)
+     * (b1 = 0, b2 = -b0 — both are folded into the step function.) Storing
+     * coeffs as fixed16 ints (×F) so the per-sample biquad math stays in
+     * the same int32 form the engine already uses. */
+    function fmtCalcCoeffs(vowel, q, dst) {
+        for (let i = 0; i < 3; i++) {
+            let omega = 2 * Math.PI * FMT_FREQS[vowel][i] / 44100;
+            let sn = Math.sin(omega), cs = Math.cos(omega);
+            let alpha = sn / (2 * q);
+            let inv = 1 / (1 + alpha);
+            dst[i*3+0] = ((alpha * inv * FMT_GAINS[i]) * F) | 0;     /* b0 */
+            dst[i*3+1] = ((-2 * cs * inv) * F) | 0;                  /* a1 */
+            dst[i*3+2] = (((1 - alpha) * inv) * F) | 0;              /* a2 */
+        }
+    }
     function fmtInterp(C) {
+        /* Resonance slider 0..255 → Q 2..32 (linear). Higher Q = narrower,
+         * more "vowel-like" peaks; lower Q = broader, more diffuse. */
+        let q = 2 + (C.fmtR / 255) * 30;
+        if (!C._fmtCA) { C._fmtCA = new Float64Array(9); C._fmtCB = new Float64Array(9); C._fmtQ = -1; C._fmtVAcache = -1; C._fmtVBcache = -1; }
         let va = C.fmtVa|0; if (va > 4) va = 0;
         let vb = C.fmtVb|0; if (vb > 4) vb = 0;
+        /* Recompute the per-vowel coefficient pair only if the vowel or Q
+         * has changed since last call (skip work during plain sweeps). */
+        if (C._fmtQ !== q || C._fmtVAcache !== va) { fmtCalcCoeffs(va, q, C._fmtCA); C._fmtVAcache = va; }
+        if (C._fmtQ !== q || C._fmtVBcache !== vb) { fmtCalcCoeffs(vb, q, C._fmtCB); C._fmtVBcache = vb; }
+        C._fmtQ = q;
         let t = C.fmtSp, omt = 255 - t;
         for (let i = 0; i < 3; i++) {
-            C.fmtB0[i] = ((FMT_COEF[va][i][0] * omt + FMT_COEF[vb][i][0] * t) / 255)|0;
-            C.fmtA1[i] = ((FMT_COEF[va][i][1] * omt + FMT_COEF[vb][i][1] * t) / 255)|0;
-            C.fmtA2[i] = ((FMT_COEF[va][i][2] * omt + FMT_COEF[vb][i][2] * t) / 255)|0;
+            C.fmtB0[i] = ((C._fmtCA[i*3+0] * omt + C._fmtCB[i*3+0] * t) / 255)|0;
+            C.fmtA1[i] = ((C._fmtCA[i*3+1] * omt + C._fmtCB[i*3+1] * t) / 255)|0;
+            C.fmtA2[i] = ((C._fmtCA[i*3+2] * omt + C._fmtCB[i*3+2] * t) / 255)|0;
         }
     }
 
@@ -2401,7 +2440,7 @@ function renderSong(patOnly, singlePat) {
             C.fmtLf = (0x7FFF ^ ((semi * 0x2BCD) & 0xFFFF)) & 0xFFFF; if (!C.fmtLf) C.fmtLf = 0x7FFF;
             C.fmtVa = (j.fmtVa|0) > 4 ? 0 : (j.fmtVa|0);
             C.fmtVb = (j.fmtVb|0) > 4 ? 0 : (j.fmtVb|0);
-            C.fmtSS = (j.fmtSweep|0);
+            C.fmtSS = (j.fmtSweep|0); C.fmtR = (j.fmtRes !== undefined ? j.fmtRes : 128)|0;
             C.fmtSp = 0; C.fmtDir = 1; C.fmtRc = 0;
             for (let i = 0; i < 3; i++) { C.fmtZ1[i] = 0; C.fmtZ2[i] = 0; }
             /* duty maps 0..3 → F/8, F/4, F/2, 3F/4 */
@@ -2832,7 +2871,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                 fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmPrev:0,
                 ksBuf:new Int16Array(1024),ksLen:0,ksPos:0,ksD:0,
                 drAl:0,drAlOrig:0,drPhase2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClick:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0,
-                fmtSw:0,fmtLf:0x7FFF,fmtVa:0,fmtVb:0,fmtSp:0,fmtDir:1,fmtSS:0,fmtRc:0,
+                fmtSw:0,fmtLf:0x7FFF,fmtVa:0,fmtVb:0,fmtSp:0,fmtDir:1,fmtSS:0,fmtR:128,fmtRc:0,
                 fmtZ1:[0,0,0],fmtZ2:[0,0,0],fmtB0:[0,0,0],fmtA1:[0,0,0],fmtA2:[0,0,0]});
         let spt = this.S*5/((this.song.bpm||125)*2)|0;
         return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1, jo: -1, jr: 0 };
@@ -2922,21 +2961,33 @@ class BirbProcessor extends AudioWorkletProcessor {
         return s;
     }
     nf(n) { if (n<0)n=0; if (n>95)n=95; return this.bf[n%12] << (n/12|0); }
+    fmtCalcCoeffs(vowel, q, dst) {
+        const FREQS = [[730,1090,2440],[530,1840,2480],[270,2290,3010],[570,840,2410],[300,870,2240]];
+        const GAINS = [1.0, 0.7, 0.4];
+        let F = this.F;
+        for (let i = 0; i < 3; i++) {
+            let omega = 2 * Math.PI * FREQS[vowel][i] / 44100;
+            let sn = Math.sin(omega), cs = Math.cos(omega);
+            let alpha = sn / (2 * q);
+            let inv = 1 / (1 + alpha);
+            dst[i*3+0] = ((alpha * inv * GAINS[i]) * F) | 0;
+            dst[i*3+1] = ((-2 * cs * inv) * F) | 0;
+            dst[i*3+2] = (((1 - alpha) * inv) * F) | 0;
+        }
+    }
     fmtInterp(C) {
-        const TBL = [
-            [[423,-129523,64691],[439,-128255,64281],[547,-120662,62803]],
-            [[308,-130085,64921],[731,-124576,63447],[555,-120371,62761]],
-            [[157,-130661,65222],[901,-121719,62962],[664,-116183,62216]],
-            [[331,-129981,64875],[340,-129171,64565],[540,-120877,62835]],
-            [[175,-130603,65187],[352,-129069,64531],[504,-122060,63015]]
-        ];
+        let q = 2 + (C.fmtR / 255) * 30;
+        if (!C._fmtCA) { C._fmtCA = new Float64Array(9); C._fmtCB = new Float64Array(9); C._fmtQ = -1; C._fmtVAcache = -1; C._fmtVBcache = -1; }
         let va = C.fmtVa|0; if (va > 4) va = 0;
         let vb = C.fmtVb|0; if (vb > 4) vb = 0;
+        if (C._fmtQ !== q || C._fmtVAcache !== va) { this.fmtCalcCoeffs(va, q, C._fmtCA); C._fmtVAcache = va; }
+        if (C._fmtQ !== q || C._fmtVBcache !== vb) { this.fmtCalcCoeffs(vb, q, C._fmtCB); C._fmtVBcache = vb; }
+        C._fmtQ = q;
         let t = C.fmtSp, omt = 255 - t;
         for (let i = 0; i < 3; i++) {
-            C.fmtB0[i] = ((TBL[va][i][0] * omt + TBL[vb][i][0] * t) / 255)|0;
-            C.fmtA1[i] = ((TBL[va][i][1] * omt + TBL[vb][i][1] * t) / 255)|0;
-            C.fmtA2[i] = ((TBL[va][i][2] * omt + TBL[vb][i][2] * t) / 255)|0;
+            C.fmtB0[i] = ((C._fmtCA[i*3+0] * omt + C._fmtCB[i*3+0] * t) / 255)|0;
+            C.fmtA1[i] = ((C._fmtCA[i*3+1] * omt + C._fmtCB[i*3+1] * t) / 255)|0;
+            C.fmtA2[i] = ((C._fmtCA[i*3+2] * omt + C._fmtCB[i*3+2] * t) / 255)|0;
         }
     }
     trigNote(C, n, ii) {
@@ -3037,7 +3088,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             C.fmtLf = (0x7FFF ^ ((semi * 0x2BCD) & 0xFFFF)) & 0xFFFF; if (!C.fmtLf) C.fmtLf = 0x7FFF;
             C.fmtVa = (j.fmtVa|0) > 4 ? 0 : (j.fmtVa|0);
             C.fmtVb = (j.fmtVb|0) > 4 ? 0 : (j.fmtVb|0);
-            C.fmtSS = (j.fmtSweep|0);
+            C.fmtSS = (j.fmtSweep|0); C.fmtR = (j.fmtRes !== undefined ? j.fmtRes : 128)|0;
             C.fmtSp = 0; C.fmtDir = 1; C.fmtRc = 0;
             for (let i = 0; i < 3; i++) { C.fmtZ1[i] = 0; C.fmtZ2[i] = 0; }
             let dcode = (j.fmtDuty|0) & 3;
@@ -3113,6 +3164,44 @@ class BirbProcessor extends AudioWorkletProcessor {
                 C.v = j.vol !== undefined ? j.vol : 255;
                 /* Live FM tweak: re-read per-op ratio/level/ADSR + global
                  * fb/mi/nops each tick, then advance per-op envelopes. */
+                /* Live tweaks: refresh per-instrument synth params each tick
+                 * so slider moves are audible on already-ringing notes. */
+                if (C.w === 7 && j.ksDamp !== undefined) {
+                    C.ksD = j.ksDamp;
+                }
+                else if (C.w === 8) {
+                    /* Drums: snap (click amp / mix), tone (HP cutoff for hat,
+                     * pitch decay rate for kick), and decay (mid-flight TTL
+                     * extension) are the cheap re-derivations. Pitch sweep
+                     * targets re-bind on next trigger. */
+                    if (j.drumSnap !== undefined) C.drSnap = j.drumSnap;
+                    if (j.drumSnap !== undefined) C.drMix = j.drumSnap;     /* SNARE noise/body mix */
+                    if (j.drumTone !== undefined) C.drRate = Math.max(16, j.drumTone * 256); /* KICK pitch rate */
+                    /* HAT HP cutoff: snap → drPet at runtime */
+                    if (C.drAl === 2 && j.drumSnap !== undefined) {
+                        let F = this.F;
+                        let hp = (j.drumSnap * (F * 15 / 16 / 255))|0;
+                        if (hp < F >> 4) hp = F >> 4;
+                        C.drPet = hp;
+                    }
+                }
+                else if (C.w === 9) {
+                    /* Formant: vowels, sweep speed, source, duty, resonance.
+                     * Coefficients re-interpolate next sweep tick (32 samples). */
+                    if (j.fmtVa !== undefined) C.fmtVa = (j.fmtVa|0) > 4 ? 0 : (j.fmtVa|0);
+                    if (j.fmtVb !== undefined) C.fmtVb = (j.fmtVb|0) > 4 ? 0 : (j.fmtVb|0);
+                    if (j.fmtSweep !== undefined) C.fmtSS = j.fmtSweep|0;
+                    if (j.fmtRes !== undefined) C.fmtR = j.fmtRes|0;
+                    if (j.fmtSrc !== undefined) {
+                        let sw = j.fmtSrc|0;
+                        if (sw !== 0 && sw !== 2 && sw !== 3) sw = 2;
+                        C.fmtSw = sw;
+                    }
+                    if (j.fmtDuty !== undefined) {
+                        let F = this.F;
+                        C.u = [F/8, F/4, F/2, F*3/4][(j.fmtDuty|0) & 3];
+                    }
+                }
                 if (C.w === 6 && j.fm) {
                     let fm = j.fm, F = this.F;
                     C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmNo = fm.nops; C.fmAlgo = fm.algo|0;
