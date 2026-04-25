@@ -2170,7 +2170,7 @@ function renderSong(patOnly, singlePat) {
     let ch = [];
     for (let c = 0; c < N; c++)
         ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
-            fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmR:[1,1,0,0], fmEnv:[0,0,0,0], fmStg:[0,0,0,0], fmFb:0, fmMi:64, fmNo:2, fmPrev:0,
+            fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmR:[1,1,0,0], fmEnv:[0,0,0,0], fmStg:[0,0,0,0], fmFb:0, fmMi:64, fmNo:2, fmAlgo:0, fmPrev:0,
             ksBuf:null, ksLen:0, ksPos:0, ksD:0,
             drAl:0, drAlOrig:0, drPhase2:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0, drStage:0, drStageT:0, drBurstLen:0, drBodyT:0,
             fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtRc:0,
@@ -2187,6 +2187,86 @@ function renderSong(patOnly, singlePat) {
         if (t > F) t = F;
         let y = t * (F - t) / F * 4 / F;
         return negate ? -y : y;
+    }
+    /* 4-op FM render. 8 algorithms. Conventions:
+     *   op0 = output (in linear chain), op3 = deepest mod
+     *   each op's effective level = fmL[i]/F * fmEnv[i]/F  (in [0..1])
+     *   fmMi scales modulation entering any carrier
+     *   feedback wraps fmPrev (last output) into op3's phase input
+     * Algos:
+     *   0: 3→2→1→0      (single linear stack)
+     *   1: 3+2→1→0      (two mods sum into op1, op1 mods op0)
+     *   2: 3→2→0, 1→0   (two paths into carrier op0)
+     *   3: 3→1→0, 2→0   (alt two paths)
+     *   4: 3→0,2→0,1→0  (three modulators on one carrier)
+     *   5: 3→2, 1→0     (two pairs, two carriers op2 + op0)
+     *   6: 3→2, 1, 0    (op3 mods op2; op0/op1/op2 carriers)
+     *   7: parallel     (all four ops carry, additive) */
+    function fmRender4(C, F) {
+        let l0 = C.fmL[0] * C.fmEnv[0] / F;
+        let l1 = C.fmL[1] * C.fmEnv[1] / F;
+        let l2 = C.fmL[2] * C.fmEnv[2] / F;
+        let l3 = C.fmL[3] * C.fmEnv[3] / F;
+        let mi = C.fmMi / 255;
+        let fb = C.fmFb ? C.fmPrev * C.fmFb / 256 : 0;
+        let s, s3, s2, s1;
+        switch (C.fmAlgo & 7) {
+            case 0:
+                s3 = sinApprox(C.fmp[3] + fb) * l3;
+                s2 = sinApprox(C.fmp[2] + s3) * l2;
+                s1 = sinApprox(C.fmp[1] + s2) * l1;
+                s  = sinApprox(C.fmp[0] + s1 * mi) * l0;
+                break;
+            case 1:
+                s3 = sinApprox(C.fmp[3] + fb) * l3;
+                s2 = sinApprox(C.fmp[2]) * l2;
+                s1 = sinApprox(C.fmp[1] + s3 + s2) * l1;
+                s  = sinApprox(C.fmp[0] + s1 * mi) * l0;
+                break;
+            case 2:
+                s3 = sinApprox(C.fmp[3] + fb) * l3;
+                s2 = sinApprox(C.fmp[2] + s3) * l2;
+                s1 = sinApprox(C.fmp[1]) * l1;
+                s  = sinApprox(C.fmp[0] + (s2 + s1) * mi) * l0;
+                break;
+            case 3:
+                s3 = sinApprox(C.fmp[3] + fb) * l3;
+                s1 = sinApprox(C.fmp[1] + s3) * l1;
+                s2 = sinApprox(C.fmp[2]) * l2;
+                s  = sinApprox(C.fmp[0] + (s1 + s2) * mi) * l0;
+                break;
+            case 4:
+                s3 = sinApprox(C.fmp[3] + fb) * l3;
+                s2 = sinApprox(C.fmp[2]) * l2;
+                s1 = sinApprox(C.fmp[1]) * l1;
+                s  = sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi) * l0;
+                break;
+            case 5: {
+                s3 = sinApprox(C.fmp[3] + fb) * l3;
+                s1 = sinApprox(C.fmp[1]) * l1;
+                let c2 = sinApprox(C.fmp[2] + s3 * mi) * l2;
+                let c0 = sinApprox(C.fmp[0] + s1 * mi) * l0;
+                s = (c2 + c0) * 0.5;
+                break;
+            }
+            case 6: {
+                s3 = sinApprox(C.fmp[3] + fb) * l3;
+                let c2 = sinApprox(C.fmp[2] + s3 * mi) * l2;
+                let c1 = sinApprox(C.fmp[1]) * l1;
+                let c0 = sinApprox(C.fmp[0]) * l0;
+                s = (c2 + c1 + c0) / 3;
+                break;
+            }
+            case 7: default:
+                s = (sinApprox(C.fmp[3] + fb) * l3
+                    + sinApprox(C.fmp[2]) * l2
+                    + sinApprox(C.fmp[1]) * l1
+                    + sinApprox(C.fmp[0]) * l0) * 0.25;
+                break;
+        }
+        C.fmPrev = s * F;
+        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
+        return s;
     }
     /* Vowel formant coefficient table (mirrors birb_synth.c). */
     const FMT_COEF = [
@@ -2228,7 +2308,7 @@ function renderSong(patOnly, singlePat) {
         }
         if (j.wave === 6) {
             let fm = j.fm || FM_DEFAULTS;
-            C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmPrev = 0;
+            C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmAlgo = fm.algo|0; C.fmPrev = 0;
             if (!C.fmR) C.fmR = [0,0,0,0];
             if (!C.fmEnv) C.fmEnv = [0,0,0,0];
             if (!C.fmStg) C.fmStg = [0,0,0,0];
@@ -2392,6 +2472,7 @@ function renderSong(patOnly, singlePat) {
                 for (let i = 0; i < 4; i++) C.fmf[i] = Math.round(C.f * C.fmR[i]);
                 let inst = song.instruments[C.i];
                 if (inst && inst.fm) {
+                    C.fmAlgo = inst.fm.algo|0;
                     for (let i = 0; i < 4; i++) {
                         let op = inst.fm.ops[i] || {a:0,d:8,s:200,r:8};
                         let st = C.fmStg[i], en = C.fmEnv[i];
@@ -2454,27 +2535,15 @@ function renderSong(patOnly, singlePat) {
                 }
             }
             else if (C.w===6) {
-                /* FM: serial chain. nops=2 → op1→op0; nops=4 → op3→op2→op1→op0.
-                 * Each op's level scales by its own envelope. fmMi scales the
-                 * modulator immediately driving the carrier (op1→op0 boundary). */
+                /* FM. 2-op = op1→op0 (one algo). 4-op = 8 topologies, see
+                 * fmRender4. fmMi scales any modulation entering a carrier;
+                 * feedback wraps from prev output back into op3's phase. */
                 if (C.fmNo >= 4) {
-                    let l3 = C.fmL[3] * C.fmEnv[3] / F;
-                    let l2 = C.fmL[2] * C.fmEnv[2] / F;
-                    let l1 = C.fmL[1] * C.fmEnv[1] / F;
-                    let l0 = C.fmL[0] * C.fmEnv[0] / F;
-                    let m3 = sinApprox(C.fmp[3]) * l3;
-                    let m2 = sinApprox(C.fmp[2] + m3) * l2;
-                    let m1 = sinApprox(C.fmp[1] + m2) * l1 * C.fmMi / 255;
-                    if (C.fmFb) m1 += C.fmPrev * C.fmFb / 256;
-                    let car = sinApprox(C.fmp[0] + m1);
-                    C.fmPrev = car * F;
-                    for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
-                    s = car * l0 / F;
+                    s = fmRender4(C, F);
                 } else {
                     let l1 = C.fmL[1] * C.fmEnv[1] / F;
                     let l0 = C.fmL[0] * C.fmEnv[0] / F;
-                    let modRaw = sinApprox(C.fmp[1]);
-                    let modOut = modRaw * (C.fmMi * l1 / 255);
+                    let modOut = sinApprox(C.fmp[1]) * (C.fmMi * l1 / 255);
                     if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
                     let carRaw = sinApprox(C.fmp[0] + modOut);
                     C.fmPrev = carRaw * F;
@@ -2764,6 +2833,74 @@ class BirbProcessor extends AudioWorkletProcessor {
         let y = t * (F - t) / F * 4 / F;
         return negate ? -y : y;
     }
+    /* 4-op FM, 8 algorithms — mirrors fmRender4 in renderSong. */
+    fmRender4(C) {
+        let F = this.F;
+        let l0 = C.fmL[0] * C.fmEnv[0] / F;
+        let l1 = C.fmL[1] * C.fmEnv[1] / F;
+        let l2 = C.fmL[2] * C.fmEnv[2] / F;
+        let l3 = C.fmL[3] * C.fmEnv[3] / F;
+        let mi = C.fmMi / 255;
+        let fb = C.fmFb ? C.fmPrev * C.fmFb / 256 : 0;
+        let s, s3, s2, s1;
+        switch (C.fmAlgo & 7) {
+            case 0:
+                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
+                s2 = this.sinApprox(C.fmp[2] + s3) * l2;
+                s1 = this.sinApprox(C.fmp[1] + s2) * l1;
+                s  = this.sinApprox(C.fmp[0] + s1 * mi) * l0;
+                break;
+            case 1:
+                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
+                s2 = this.sinApprox(C.fmp[2]) * l2;
+                s1 = this.sinApprox(C.fmp[1] + s3 + s2) * l1;
+                s  = this.sinApprox(C.fmp[0] + s1 * mi) * l0;
+                break;
+            case 2:
+                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
+                s2 = this.sinApprox(C.fmp[2] + s3) * l2;
+                s1 = this.sinApprox(C.fmp[1]) * l1;
+                s  = this.sinApprox(C.fmp[0] + (s2 + s1) * mi) * l0;
+                break;
+            case 3:
+                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
+                s1 = this.sinApprox(C.fmp[1] + s3) * l1;
+                s2 = this.sinApprox(C.fmp[2]) * l2;
+                s  = this.sinApprox(C.fmp[0] + (s1 + s2) * mi) * l0;
+                break;
+            case 4:
+                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
+                s2 = this.sinApprox(C.fmp[2]) * l2;
+                s1 = this.sinApprox(C.fmp[1]) * l1;
+                s  = this.sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi) * l0;
+                break;
+            case 5: {
+                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
+                s1 = this.sinApprox(C.fmp[1]) * l1;
+                let c2 = this.sinApprox(C.fmp[2] + s3 * mi) * l2;
+                let c0 = this.sinApprox(C.fmp[0] + s1 * mi) * l0;
+                s = (c2 + c0) * 0.5;
+                break;
+            }
+            case 6: {
+                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
+                let c2 = this.sinApprox(C.fmp[2] + s3 * mi) * l2;
+                let c1 = this.sinApprox(C.fmp[1]) * l1;
+                let c0 = this.sinApprox(C.fmp[0]) * l0;
+                s = (c2 + c1 + c0) / 3;
+                break;
+            }
+            case 7: default:
+                s = (this.sinApprox(C.fmp[3] + fb) * l3
+                    + this.sinApprox(C.fmp[2]) * l2
+                    + this.sinApprox(C.fmp[1]) * l1
+                    + this.sinApprox(C.fmp[0]) * l0) * 0.25;
+                break;
+        }
+        C.fmPrev = s * F;
+        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
+        return s;
+    }
     nf(n) { if (n<0)n=0; if (n>95)n=95; return this.bf[n%12] << (n/12|0); }
     fmtInterp(C) {
         const TBL = [
@@ -2806,7 +2943,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         }
         if (j.wave === 6) {
             let fm = j.fm || {nops:2,algo:0,fb:0,mi:64,ops:[{ri:1,rf:0,lv:255,a:0,d:8,s:200,r:8},{ri:1,rf:0,lv:255,a:0,d:8,s:200,r:8},{ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8},{ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}]};
-            C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmPrev = 0;
+            C.fmNo = fm.nops; C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmAlgo = fm.algo|0; C.fmPrev = 0;
             let F = this.F;
             for (let i = 0; i < 4; i++) {
                 C.fmp[i] = 0;
@@ -2958,7 +3095,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                  * fb/mi/nops each tick, then advance per-op envelopes. */
                 if (C.w === 6 && j.fm) {
                     let fm = j.fm, F = this.F;
-                    C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmNo = fm.nops;
+                    C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmNo = fm.nops; C.fmAlgo = fm.algo|0;
                     for (let i = 0; i < 4; i++) {
                         let op = fm.ops[i] || {ri:1, rf:0, lv:0, a:0, d:8, s:200, r:8};
                         C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
@@ -3036,25 +3173,12 @@ class BirbProcessor extends AudioWorkletProcessor {
                     }
                 }
                 else if (C.w === 6) {
-                    /* FM serial chain with per-op envelopes. */
                     if (C.fmNo >= 4) {
-                        let l3 = C.fmL[3] * C.fmEnv[3] / F;
-                        let l2 = C.fmL[2] * C.fmEnv[2] / F;
-                        let l1 = C.fmL[1] * C.fmEnv[1] / F;
-                        let l0 = C.fmL[0] * C.fmEnv[0] / F;
-                        let m3 = this.sinApprox(C.fmp[3]) * l3;
-                        let m2 = this.sinApprox(C.fmp[2] + m3) * l2;
-                        let m1 = this.sinApprox(C.fmp[1] + m2) * l1 * C.fmMi / 255;
-                        if (C.fmFb) m1 += C.fmPrev * C.fmFb / 256;
-                        let car = this.sinApprox(C.fmp[0] + m1);
-                        C.fmPrev = car * F;
-                        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
-                        s = car * l0 / F;
+                        s = this.fmRender4(C);
                     } else {
                         let l1 = C.fmL[1] * C.fmEnv[1] / F;
                         let l0 = C.fmL[0] * C.fmEnv[0] / F;
-                        let modRaw = this.sinApprox(C.fmp[1]);
-                        let modOut = modRaw * (C.fmMi * l1 / 255);
+                        let modOut = this.sinApprox(C.fmp[1]) * (C.fmMi * l1 / 255);
                         if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
                         let carRaw = this.sinApprox(C.fmp[0] + modOut);
                         C.fmPrev = carRaw * F;
