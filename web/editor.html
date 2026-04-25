@@ -114,6 +114,20 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
 .ie-body .inst-edit select { font-size: 11px; padding: 2px 6px; }
 .ie-body .adsr-canvas { height: 72px; }
 .ie-empty { grid-column: 1 / -1; text-align: center; color: var(--dim); padding: 40px; font-style: italic; }
+/* FM per-operator block: header row (name + ratio + level slider), then a
+ * 3-column grid (label | slider | value) for A/D/S/R. */
+.fm-op { margin-top: 8px; padding-top: 6px; border-top: 1px dotted var(--bg3); }
+.fm-op:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.fm-op-head { display: grid; grid-template-columns: 36px auto 56px auto 1fr 36px; align-items: center; gap: 6px; margin-bottom: 4px; }
+.fm-op-head .fm-op-name { color: var(--acc); font-weight: bold; font-size: 11px; }
+.fm-op-head label { font-size: 10px; color: var(--dim); }
+.fm-op-head input[type=text] { width: 56px; }
+.fm-op-head input[type=range] { width: 100%; }
+.fm-op-head .val { font-size: 11px; color: var(--acc); text-align: right; }
+.fm-op-adsr { display: grid; grid-template-columns: 16px 1fr 36px 16px 1fr 36px; column-gap: 6px; row-gap: 4px; align-items: center; }
+.fm-op-adsr label { font-size: 11px; color: var(--dim); text-align: right; }
+.fm-op-adsr .val { font-size: 11px; color: var(--acc); text-align: right; }
+.fm-op-adsr input[type=range] { width: 100%; }
 .order-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .pat-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .order-bar .lbl, .pat-bar .lbl { color: var(--acc); font-size: 11px; font-weight: bold; margin-right: 4px; }
@@ -1307,28 +1321,31 @@ function renderFmPanel() {
     document.getElementById('ie-fm-algo').value = ins.fm.algo;
     document.getElementById('ie-fm-mi-v').textContent = ins.fm.mi;
     document.getElementById('ie-fm-fb-v').textContent = ins.fm.fb;
-    /* Render per-op rows */
+    /* Render per-op blocks: ratio + level on a header line, then A/D/S/R sliders
+     * in a uniform 3-column grid (label | slider | value). */
     let html = '';
     for (let i = 0; i < ins.fm.nops; i++) {
         let o = ins.fm.ops[i];
         let ratio = (o.ri + o.rf/16).toFixed(4).replace(/0+$/,'').replace(/\.$/,'');
-        html += `<div class="row" style="font-size:10px;gap:3px"><label style="width:18px">OP${i+1}</label>
-            <label style="width:auto">ratio</label><input type="text" value="${ratio}" data-op="${i}" data-f="ratio" style="width:40px">
-            <label style="width:auto">lv</label><input type="number" min="0" max="255" value="${o.lv}" data-op="${i}" data-f="lv" style="width:42px">
-        </div>
-        <div class="row" style="font-size:10px;gap:2px"><label style="width:18px"></label>
-            <label style="width:auto">A</label><input type="number" min="0" max="255" value="${o.a}" data-op="${i}" data-f="a" style="width:40px">
-            <label style="width:auto">D</label><input type="number" min="0" max="255" value="${o.d}" data-op="${i}" data-f="d" style="width:40px">
-            <label style="width:auto">S</label><input type="number" min="0" max="255" value="${o.s}" data-op="${i}" data-f="s" style="width:40px">
-            <label style="width:auto">R</label><input type="number" min="0" max="255" value="${o.r}" data-op="${i}" data-f="r" style="width:40px">
+        html += `<div class="fm-op">
+            <div class="fm-op-head">
+                <span class="fm-op-name">OP${i+1}</span>
+                <label>ratio</label><input type="text" value="${ratio}" data-op="${i}" data-f="ratio">
+                <label>lv</label><input type="range" min="0" max="255" value="${o.lv}" data-op="${i}" data-f="lv"><span class="val" data-vv="${i}-lv">${o.lv}</span>
+            </div>
+            <div class="fm-op-adsr">
+                <label>A</label><input type="range" min="0" max="255" value="${o.a}" data-op="${i}" data-f="a"><span class="val" data-vv="${i}-a">${o.a}</span>
+                <label>D</label><input type="range" min="0" max="255" value="${o.d}" data-op="${i}" data-f="d"><span class="val" data-vv="${i}-d">${o.d}</span>
+                <label>S</label><input type="range" min="0" max="255" value="${o.s}" data-op="${i}" data-f="s"><span class="val" data-vv="${i}-s">${o.s}</span>
+                <label>R</label><input type="range" min="0" max="255" value="${o.r}" data-op="${i}" data-f="r"><span class="val" data-vv="${i}-r">${o.r}</span>
+            </div>
         </div>`;
     }
     document.getElementById('ie-fm-ops').innerHTML = html;
-    /* Re-bind so edits on per-op inputs flush to the model */
+    /* Bind: parse ratio text, clamp numeric ranges, mirror slider value to its <span class="val"> */
     for (let inp of document.querySelectorAll('#ie-fm-ops input')) {
         inp.addEventListener('input', function() {
-            let op = +this.dataset.op, f = this.dataset.f;
-            let val = this.value;
+            let op = +this.dataset.op, f = this.dataset.f, val = this.value;
             if (f === 'ratio') {
                 let r = parseFloat(val);
                 if (!isNaN(r) && r >= 0) {
@@ -1339,6 +1356,8 @@ function renderFmPanel() {
                 let v = +val; if (isNaN(v)) v = 0;
                 if (v < 0) v = 0; if (v > 255) v = 255;
                 ins.fm.ops[op][f] = v;
+                let vv = document.querySelector(`#ie-fm-ops .val[data-vv="${op}-${f}"]`);
+                if (vv) vv.textContent = v;
             }
             markDirty();
         });
