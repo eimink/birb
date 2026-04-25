@@ -2887,6 +2887,19 @@ class BirbProcessor extends AudioWorkletProcessor {
                 let j = this.song.instruments[C.i];
                 C.a = j.a; C.d = j.d; C.s = j.s; C.r = j.r;
                 C.v = j.vol !== undefined ? j.vol : 255;
+                /* Live FM tweak: re-read per-op ratio/level + global fb/mi/nops
+                 * each tick. Without this, channel state is frozen at trigger
+                 * time and slider moves silently update song.json without
+                 * touching the running note. */
+                if (C.w === 6 && j.fm) {
+                    let fm = j.fm;
+                    C.fmFb = fm.fb; C.fmMi = fm.mi; C.fmNo = fm.nops;
+                    for (let i = 0; i < 4; i++) {
+                        let op = fm.ops[i] || {ri:1, rf:0, lv:0};
+                        C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
+                        C.fmL[i] = Math.round(this.F * (op.lv || 0) / 255);
+                    }
+                }
             }
             if (C.nd && st.ct === C.nd) { if (C.di < ni) this.trigNote(C, C.dn, C.di); C.nd = 0; }
             if (C.nc && st.ct === C.nc) { C.e = 0; C.t = 0; }
