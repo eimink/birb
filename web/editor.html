@@ -198,6 +198,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
     <div class="sep"></div>
     <label>BPM</label><input type="number" id="bpm" value="140" min="30" max="255">
     <label>TPR</label><input type="number" id="tpr" value="6" min="1" max="16">
+    <label>Ch</label><input type="number" id="nch" value="4" min="4" max="16" step="2" onchange="setChannelCount(+this.value)" title="Channel count (4..16, even)">
     <label>Oct</label><input type="number" id="octave" value="4" min="0" max="7">
     <div class="sep"></div>
     <button id="btn-play" onclick="togglePlay()">&#9654; Play</button>
@@ -633,6 +634,64 @@ function ensureCurChVisible() {
     let target = Math.floor(curCh / BANK_WIDTH);
     if (target !== currentBank) { currentBank = target; }
 }
+/* Resize the song to a new channel count. The .bsb format stores N in the
+ * high 3 bits of the tpr byte (encoding 4..16 in steps of 2), so values
+ * are clamped to the allowed even range. Growing pads each pattern row
+ * with empty cells and each order entry with 0xFF (no pattern). Shrinking
+ * drops the trailing channels — confirms first if any of those carry
+ * non-empty data so the user doesn't silently lose work. */
+function setChannelCount(n) {
+    n = +n | 0;
+    if (n < 4) n = 4; if (n > 16) n = 16;
+    if (n & 1) n -= 1;          /* round to even — format encodes N=4+2k */
+    if (n === NCH) {
+        document.getElementById('nch').value = NCH;
+        return;
+    }
+    if (n < NCH) {
+        /* Check for any non-default data in the channels we're about to drop. */
+        let hasData = false;
+        for (let p = 0; p < song.patterns.length && !hasData; p++) {
+            let pat = song.patterns[p];
+            for (let r = 0; r < pat.length && !hasData; r++) {
+                for (let c = n; c < NCH && !hasData; c++) {
+                    let cell = pat[r][c];
+                    if (cell && (cell.note || cell.inst !== 255 || cell.vol || cell.fx)) hasData = true;
+                }
+            }
+        }
+        for (let o = 0; o < song.order.length && !hasData; o++) {
+            for (let c = n; c < NCH; c++) if (song.order[o] && song.order[o][c] !== undefined && song.order[o][c] !== 0xFF) { hasData = true; break; }
+        }
+        if (hasData && !confirm(`Shrinking to ${n} channels will discard data on channels ${n+1}..${NCH}. Continue?`)) {
+            document.getElementById('nch').value = NCH;
+            return;
+        }
+        for (let p = 0; p < song.patterns.length; p++) {
+            let pat = song.patterns[p];
+            for (let r = 0; r < pat.length; r++) pat[r].length = n;
+        }
+        for (let o = 0; o < song.order.length; o++) song.order[o].length = n;
+        channelMuted.length = n;
+    } else {
+        for (let p = 0; p < song.patterns.length; p++) {
+            let pat = song.patterns[p];
+            for (let r = 0; r < pat.length; r++)
+                while (pat[r].length < n) pat[r].push({note:0,inst:255,vol:0,fx:0,prm:0});
+        }
+        for (let o = 0; o < song.order.length; o++)
+            while (song.order[o].length < n) song.order[o].push(0xFF);
+        while (channelMuted.length < n) channelMuted.push(false);
+    }
+    NCH = n;
+    document.getElementById('nch').value = NCH;
+    /* Cursor + bank fix-up. */
+    if (curCh >= NCH) curCh = NCH - 1;
+    if (currentBank * BANK_WIDTH >= NCH) currentBank = Math.max(0, banksTotal() - 1);
+    markDirty();
+    renderOrder();
+    renderGrid();
+}
 function makePattern(rows) {
     let p = [];
     for (let r = 0; r < rows; r++) p.push(makeRow());
@@ -689,6 +748,7 @@ function loadSongFromStorage() {
         song.tpr = data.tpr || 6;
         if (typeof data.N === 'number' && data.N >= 4 && data.N <= NCH_MAX) NCH = data.N;
         else NCH = 4;
+        let nchEl = document.getElementById('nch'); if (nchEl) nchEl.value = NCH;
         channelMuted = new Array(NCH).fill(false);
         song.instruments = data.instruments || [];
         song.patterns = data.patterns || [];
@@ -4090,6 +4150,7 @@ function parseBin(d) {
     let nchSong = 4 + 2 * ((tprByte >> 5) & 0x7);
     if (nchSong > NCH_MAX) { alert('Song has more channels than editor supports'); return; }
     NCH = nchSong;
+    let nchEl = document.getElementById('nch'); if (nchEl) nchEl.value = NCH;
     // resize mute array to match
     channelMuted = new Array(NCH).fill(false);
     currentBank = 0;
