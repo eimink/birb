@@ -294,6 +294,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <option value="organ">Organ</option>
                         <option value="brass">Brass</option>
                         <option value="violin">Violin</option>
+                        <option value="braaam">BRAAAAM</option>
                     </select>
                 </div>
                 <div class="row"><label>ModIdx</label><input type="range" id="ie-fm-mi" min="0" max="255" value="64"><span class="val" id="ie-fm-mi-v">64</span></div>
@@ -583,6 +584,25 @@ const FM_PRESETS = {
               {ri:3,rf:0,lv:180,a:20,d:12,s:200,r:32},  /* op1 main mod into carrier */
               {ri:1,rf:0,lv:90, a:24,d:12,s:200,r:32},  /* op2 sums into op1 (thickening) */
               {ri:5,rf:0,lv:120,a:28,d:16,s:180,r:32}]  /* op3 sums into op1 (upper harmonics, with feedback) */ },
+    /* Inception BRAAAAM. Algo 4 (3,2,1 → 0): three independent modulators
+     * all driving the carrier, inharmonic ratios for the torn-brass timbre.
+     * Maxed feedback (220) wraps op3's output back into its own phase for
+     * the saturated/clipped edge. Slow attack + long release shape the
+     * cinematic swell. Designed to be layered across 2-3 channels for the
+     * full effect — single voice is the foundation, not the finished sound.
+     *
+     * Recommended channel layout:
+     *   Ch A: braaam @ note (e.g. C3) — main body
+     *   Ch B: braaam @ same note, with 4XY vibrato effect — chorus shimmer
+     *   Ch C: triangle wave @ note - 12 (one octave lower), full vol — sub
+     *
+     * For extra menace add 3XX (pitch-down slide) on the trigger row to
+     * make the horn "fall" into the sustain. */
+    braaam: { nops:4, algo:4, fb:220, mi:180,
+        ops: [{ri:1, rf:0,lv:255,a:40,d:0, s:255,r:96},  /* op0 carrier — slow swell, full sustain */
+              {ri:5, rf:0,lv:200,a:32,d:8, s:240,r:80},  /* op1 → 0 (mid harmonics) */
+              {ri:3, rf:0,lv:180,a:32,d:8, s:240,r:80},  /* op2 → 0 (low harmonics for body) */
+              {ri:11,rf:0,lv:140,a:32,d:12,s:200,r:80}]  /* op3 → 0 (inharmonic shimmer, hosts feedback) */ },
 };
 function cloneFmDefault() { return JSON.parse(JSON.stringify(FM_DEFAULTS)); }
 
