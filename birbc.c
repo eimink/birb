@@ -931,7 +931,7 @@ static int write_js(const char *filename, birb_song *song) {
     fprintf(f, "],\n");
 
     /* Detect which synth types we emit. */
-    int uses_fm = 0, uses_ks = 0, uses_drum = 0, uses_formant = 0;
+    int uses_fm = 0, uses_ks = 0, uses_drum = 0, uses_formant = 0, uses_sine = 0;
     int drum_algos = 0;  /* bitmask: bit 0=KICK/TOM, 1=SNARE, 2=HAT/CRASH, 3=CLAP */
     for (int i = 0; i < song->num_instruments; i++) {
         if (song->instruments[i].synth_type == SYNTH_FM) uses_fm = 1;
@@ -943,6 +943,8 @@ static int write_js(const char *filename, birb_song *song) {
             drum_algos |= (1 << (algo & 3));
         }
         if (song->instruments[i].synth_type == SYNTH_FORMANT) uses_formant = 1;
+        if (song->instruments[i].synth_type == SYNTH_BASIC
+            && song->instruments[i].waveform == WAVE_SINE) uses_sine = 1;
     }
 
     /* Instruments. Base 11 fields (wave duty a d s r pe pel arp1 arp2 vol).
@@ -1100,9 +1102,9 @@ static int write_js(const char *filename, birb_song *song) {
         uses_ks ? ",kb:new Int16Array(1024),kl:0,kp:0,kd:0" : "",
         uses_drum ? ",drAl:0,drAlOrig:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0" : "",
         uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "");
-    if (uses_fm || uses_drum) {
+    if (uses_fm || uses_drum || uses_sine) {
         fprintf(f,
-            "function SA_(ph){var p=((ph%%F)+F)%%F;var ng=p>=F/2,t=ng?(p-F/2)*2:p*2;if(t>F)t=F;var y=t*(F-t)/F*4/F;return ng?-y:y}\n");
+            "function SA_(ph){var p=((ph%%F)+F)%%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n");
     }
     if (uses_formant) {
         /* Runtime RBJ bandpass coefficient computation. Vowel frequencies
@@ -1286,7 +1288,7 @@ static int write_js(const char *filename, birb_song *song) {
         "if(!C.w)s=h<C.u?.5:-.5\n"
         "else if(C.w==1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F\n"
         "else if(C.w<3)s=(h*2-F)/F\n"
-        "else if(C.w==4){var p4=((h%%F)+F)%%F,n4=p4>=F/2,t4=n4?(p4-F/2)*2:p4*2;if(t4>F)t4=F;var y4=t4*(F-t4)/F*4/F;s=n4?-y4:y4}\n"
+        "else if(C.w==4)s=SA_(h)\n"
         "else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}\n"
         "var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F\n"
         "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=v>1?1:v<-1?-1:v}\n"

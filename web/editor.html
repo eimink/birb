@@ -2280,15 +2280,21 @@ function renderSong(patOnly, singlePat) {
 
     let ct = 0, cr = 0, op = 0, tc = 0, firstRow = true;
 
-    /* Parabolic sine approximation: peak at phase=F/4 (true sine max).
-     * Input phase 0..F, returns -1..1. */
+    /* 5th-order minimax sine approximation. Peak error ~0.05% vs ~5% for
+     * the previous parabolic. Input phase 0..F (= 0..2π), returns -1..1.
+     * See birb_sin_approx() in birb_synth.c for derivation. */
     function sinApprox(phase) {
         let p = ((phase % F) + F) % F;
-        let negate = p >= F/2;
-        let t = negate ? (p - F/2) * 2 : p * 2;
-        if (t > F) t = F;
-        let y = t * (F - t) / F * 4 / F;
-        return negate ? -y : y;
+        let neg = p >= F/2;
+        let t = neg ? p - F/2 : p;
+        if (t > F/4) t = F/2 - t;
+        let x = t / F * 4;
+        if (x > 1) x = 1;
+        let x2 = x * x;
+        /* Horner: y = x · (c1 - x² · (c3 - x² · c5)), Remez coefficients */
+        let y = x * (1.5707288 - x2 * (0.6432292 - x2 * 0.0727778));
+        if (y > 1) y = 1;
+        return neg ? -y : y;
     }
     /* 4-op FM render. 8 algorithms. Conventions:
      *   op0 = output (in linear chain), op3 = deepest mod
@@ -2969,12 +2975,16 @@ class BirbProcessor extends AudioWorkletProcessor {
         return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1, jo: -1, jr: 0 };
     }
     sinApprox(ph) {
-        let F=this.F, p=((ph%F)+F)%F;
-        let negate = p >= F/2;
-        let t = negate ? (p - F/2) * 2 : p * 2;
-        if (t > F) t = F;
-        let y = t * (F - t) / F * 4 / F;
-        return negate ? -y : y;
+        let F = this.F, p = ((ph % F) + F) % F;
+        let neg = p >= F/2;
+        let t = neg ? p - F/2 : p;
+        if (t > F/4) t = F/2 - t;
+        let x = t / F * 4;
+        if (x > 1) x = 1;
+        let x2 = x * x;
+        let y = x * (1.5707288 - x2 * (0.6432292 - x2 * 0.0727778));
+        if (y > 1) y = 1;
+        return neg ? -y : y;
     }
     /* 4-op FM, 8 algorithms — mirrors fmRender4 in renderSong. See that
      * function's comment block for unit conventions. */
