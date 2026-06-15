@@ -293,6 +293,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <option value="bell">Bell</option>
                         <option value="organ">Organ</option>
                         <option value="brass">Brass</option>
+                        <option value="violin">Violin</option>
                     </select>
                 </div>
                 <div class="row"><label>ModIdx</label><input type="range" id="ie-fm-mi" min="0" max="255" value="64"><span class="val" id="ie-fm-mi-v">64</span></div>
@@ -571,6 +572,17 @@ const FM_PRESETS = {
     brass: { nops:2, algo:0, fb:32, mi:80,
         ops: [{ri:1,rf:0,lv:255,a:4,d:12,s:200,r:12}, {ri:1,rf:0,lv:220,a:6,d:12,s:180,r:12},
               {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}, {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}] },
+    /* Algo 1 (3+2 → 1 → 0): op2 and op3 both modulate op1, which then drives
+     * carrier op0. Two parallel modulators give a denser harmonic spectrum
+     * than a single mod stack — the recipe behind a believable bowed-string
+     * timbre. op2 at unity ratio adds octave-doubling thickness; op3 at
+     * ratio 5 adds the rosin-edge upper harmonics. Pair with vibrato 4XY
+     * effect in patterns — without the wobble it's a buzzy organ. */
+    violin: { nops:4, algo:1, fb:8, mi:64,
+        ops: [{ri:1,rf:0,lv:255,a:24,d:12,s:240,r:32},  /* op0 carrier */
+              {ri:3,rf:0,lv:180,a:20,d:12,s:200,r:32},  /* op1 main mod into carrier */
+              {ri:1,rf:0,lv:90, a:24,d:12,s:200,r:32},  /* op2 sums into op1 (thickening) */
+              {ri:5,rf:0,lv:120,a:28,d:16,s:180,r:32}]  /* op3 sums into op1 (upper harmonics, with feedback) */ },
 };
 function cloneFmDefault() { return JSON.parse(JSON.stringify(FM_DEFAULTS)); }
 
