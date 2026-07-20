@@ -5,14 +5,16 @@
 #include "birb_synth.h"
 
 /* ---------- note frequency lookup ---------- *
- * Phase increment per sample at BIRB_SAMPLE_RATE=44100:
- *   freq[n] = (note_hz / SAMPLE_RATE) * FX_ONE
- * C0 (16.35 Hz) to B7 (7902.13 Hz), 96 semitones.
+ * Phase increment per sample at BIRB_SAMPLE_RATE=44100, as a 12-entry
+ * octave-base table shifted by octave: freq = base[n%12] << (n/12).
  *
- * Default: 96-entry static table, single load per trigger.
- * BIRB_TINY_NOTE_TABLE: 12-entry octave-base table + shift, saves ~336 B.
+ * This is the ONE canonical table. The editor (nf()), the birbc/editor JS
+ * emit, and the 4K players all compute pitch exactly this way, so the full
+ * and 4K engines are bit-identical. A precise 96-entry table was tried here
+ * once; it disagreed with the editor's tuning by ~0.26%/note, which drifts
+ * oscillators to opposite phase within a second. Do NOT reintroduce a
+ * per-build note table — parity depends on there being only this one.
  */
-#ifdef BIRB_TINY_NOTE_TABLE
 static const fixed16 octave_base[12] = {
     24, 26, 27, 29, 31, 32, 34, 36, 38, 41, 43, 46,
 };
@@ -21,23 +23,6 @@ fixed16 birb_note_to_freq(int note) {
     if (note > 95) note = 95;
     return octave_base[note % 12] << (note / 12);
 }
-#else
-const fixed16 birb_note_freq[96] = {
-    /* C0  */ 24,    26,    27,    29,    31,    32,    34,    36,    38,    41,    43,    46,
-    /* C1  */ 48,    51,    54,    57,    61,    64,    68,    72,    76,    81,    86,    91,
-    /* C2  */ 96,    102,   108,   115,   121,   129,   136,   144,   153,   162,   172,   182,
-    /* C3  */ 193,   204,   216,   229,   243,   257,   272,   289,   306,   324,   343,   364,
-    /* C4  */ 385,   408,   433,   458,   486,   515,   545,   578,   612,   649,   687,   728,
-    /* C5  */ 771,   817,   866,   917,   972,  1030,  1091,  1156,  1225,  1297,  1374,  1456,
-    /* C6  */ 1542,  1634,  1731,  1834,  1943,  2059,  2182,  2312,  2449,  2595,  2749,  2912,
-    /* C7  */ 3084,  3268,  3462,  3668,  3886,  4118,  4363,  4624,  4899,  5191,  5498,  5825,
-};
-fixed16 birb_note_to_freq(int note) {
-    if (note < 0) note = 0;
-    if (note > 95) note = 95;
-    return birb_note_freq[note];
-}
-#endif
 
 /* ---------- sine approximation ---------- *
  * 5th-order minimax polynomial — Horner form:

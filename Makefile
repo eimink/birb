@@ -24,7 +24,7 @@ WASM_4K_FLAGS = --target=wasm32-unknown-unknown -nostdlib -Oz \
     -DBIRB_MAX_PATTERNS=16 -DBIRB_MAX_ROWS=32 \
     -DBIRB_MAX_INSTRUMENTS=8 -DBIRB_MAX_ORDER=32 \
     -DBIRB_MAX_SAMPLES=4 -DBIRB_SAMPLE_POOL=65536 \
-    -DBIRB_KS_BUF_SIZE=256 -DBIRB_TINY_NOTE_TABLE \
+    -DBIRB_KS_BUF_SIZE=256 \
     -DBIRB_NO_REVERB
 
 # Reverb-enabled 4K flags: same as the lean 4K set but with the reverb bus.
