@@ -783,6 +783,12 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
     ch->vibrato_depth = 0;
     ch->pitch_slide = 0;
     ch->duty_sweep = 0;
+    /* Clear tone-portamento speed on a normal trigger — the editor/emit do
+     * this (TR resets C.ps=0). Without it, once any note used 3xx the stale
+     * porta keeps sliding every following note toward the old target, which
+     * is the kick/bass "rubberbanding". Porta notes skip trigger_note, so
+     * this never clobbers a real slide. */
+    ch->porta_speed = 0;
 
     if (inst->synth_type == SYNTH_BASIC) {
         ch->u.basic.waveform = inst->waveform;
@@ -811,7 +817,10 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             uint32_t ri = inst->fm.ops[i].ratio_i;
             uint32_t rf = inst->fm.ops[i].ratio_f;
             if (i < nops && (ri | rf) == 0) { ri = 1; rf = 0; }
-            ch->u.fm.op_freq[i] = (fixed16)(((uint64_t)ch->base_freq * ((ri << 4) | (rf & 0xF))) >> 4);
+            /* Round (+8 before >>4), NOT floor — the editor/emit use
+             * Math.round(base*ratio); a floor here is 1 unit low for non-integer
+             * ratios and drifts the FM operators out of phase over time. */
+            ch->u.fm.op_freq[i] = (fixed16)((((uint64_t)ch->base_freq * ((ri << 4) | (rf & 0xF))) + 8) >> 4);
             /* Static per-op level (refreshed live in fm_op_envelope_tick). */
             ch->u.fm.op_lvl[i] = (fixed16)(FX_ONE * (int32_t)inst->fm.ops[i].level / 255);
             /* Per-op ADSR start: a==0 jumps to DECAY at peak so the first
