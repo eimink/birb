@@ -787,6 +787,7 @@ function saveSongToStorage() {
         });
         localStorage.setItem('birb_song', JSON.stringify({
             bpm: song.bpm, tpr: song.tpr, N: NCH,
+            rev: song.rev,
             instruments: song.instruments,
             patterns: song.patterns,
             order: song.order,
@@ -797,8 +798,18 @@ function saveSongToStorage() {
             curPat, curRow, curCh, curCol, curOrderPos, curInst, curOctave, editInst, songName,
             channelMuted, currentBank
         }));
-    } catch(e) {}
+    } catch(e) {
+        // Was silently swallowed before — a quota/serialization failure here means
+        // autosave stopped and a reload WOULD lose work. Surface it loudly.
+        console.error('AUTOSAVE FAILED — reload will lose changes:', e);
+    }
 }
+
+// Safety net against losing a song on accidental reload/close while there are
+// unsaved edits (autosave may have failed, e.g. localStorage quota).
+window.addEventListener('beforeunload', (e) => {
+    if (dirty) { e.preventDefault(); e.returnValue = ''; }
+});
 
 function loadSongFromStorage() {
     try {
@@ -3873,7 +3884,11 @@ function updateStatus() {
 /* ================================================================
    EXPORT .birb
    ================================================================ */
-function exportBin() {
+// Kept across saves so re-saving overwrites the same file instead of getting
+// browser " (1)/(2)" suffixes (File System Access API, Chromium).
+let bsbFileHandle = null, bsbFileName = '';
+
+async function exportBin() {
     // Build binary in the same planar format as birb_format.h
     let buf = [];
     let push = v => buf.push(v & 0xFF);
@@ -4048,10 +4063,36 @@ function exportBin() {
     }
 
     let arr = new Uint8Array(buf);
+    let songName = document.getElementById('song-name').value || 'song';
+
+    // Preferred path: File System Access API. First save picks the file; later
+    // saves write straight back to the same handle (true overwrite, no suffix).
+    if (window.showSaveFilePicker) {
+        try {
+            if (!bsbFileHandle || bsbFileName !== songName) {
+                bsbFileHandle = await window.showSaveFilePicker({
+                    suggestedName: songName + '.bsb',
+                    types: [{ description: 'birb song', accept: { 'application/octet-stream': ['.bsb'] } }]
+                });
+                bsbFileName = songName;
+            }
+            let w = await bsbFileHandle.createWritable();
+            await w.write(arr);
+            await w.close();
+            dirty = false;
+            console.log('Saved ' + arr.length + ' bytes (overwrite: ' + songName + '.bsb)');
+            return;
+        } catch (e) {
+            if (e && e.name === 'AbortError') return; // user cancelled the picker
+            console.warn('File System Access save failed, falling back to download:', e);
+            bsbFileHandle = null;
+        }
+    }
+
+    // Fallback (Firefox/Safari): normal download — browser may add " (1)" suffixes.
     let blob = new Blob([arr], {type:'application/octet-stream'});
     let a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    let songName = document.getElementById('song-name').value || 'song';
     a.download = songName + '.bsb';
     a.click();
     dirty = false;
