@@ -422,6 +422,10 @@ static int parse_instrument(const char *line, birb_song *song) {
             inst->arp_note2 = (uint8_t)a2;
         } else if (s[0] == 'V' && s[1] == ':') {
             inst->volume = (uint8_t)atoi(s + 2);
+#ifndef BIRB_NO_REVERB
+        } else if (strncmp(s, "rev=", 4) == 0) {
+            inst->reverb_send = (uint8_t)atoi(s + 4);
+#endif
         }
 
         /* advance to next token */
@@ -476,6 +480,15 @@ static int parse_birb_file(const char *filename, birb_song *song) {
                 song->bpm = (uint8_t)atoi(s + 4);
             } else if (strncmp(s, "ticks ", 6) == 0) {
                 song->ticks_per_row = (uint8_t)atoi(s + 6);
+#ifndef BIRB_NO_REVERB
+            } else if (strncmp(s, "rev ", 4) == 0) {
+                /* @rev <size> <damp> <wet>  — global reverb bus, each 0-255 */
+                int rs = 0, rd = 0, rw = 0;
+                sscanf(s + 4, "%d %d %d", &rs, &rd, &rw);
+                song->rev_size = (uint8_t)rs;
+                song->rev_damp = (uint8_t)rd;
+                song->rev_wet  = (uint8_t)rw;
+#endif
             } else if (strncmp(s, "inst ", 5) == 0) {
                 if (parse_instrument(s + 5, song) < 0) {
                     fprintf(stderr, "Error on line %d: bad instrument\n", line_num);
@@ -822,6 +835,29 @@ static int write_binary(const char *filename, birb_song *song) {
         }
     }
 
+    /* REVB section — global reverb bus params + per-instrument sends. Written
+     * only when reverb is audible (wet > 0 or some instrument sends). Must sit
+     * after FRIN and before NAME to match the positional loader order. */
+#ifndef BIRB_NO_REVERB
+    {
+        int send_count = 0;
+        for (int i = 0; i < song->num_instruments; i++)
+            if (song->instruments[i].reverb_send) send_count++;
+        if (song->rev_wet > 0 || send_count > 0) {
+            fwrite("REVB", 1, 4, f);
+            uint8_t g[3] = { song->rev_size, song->rev_damp, song->rev_wet };
+            fwrite(g, 1, 3, f);
+            uint8_t cnt = (uint8_t)send_count;
+            fwrite(&cnt, 1, 1, f);
+            for (int i = 0; i < song->num_instruments; i++) {
+                if (!song->instruments[i].reverb_send) continue;
+                uint8_t rec[2] = { (uint8_t)i, song->instruments[i].reverb_send };
+                fwrite(rec, 1, 2, f);
+            }
+        }
+    }
+#endif
+
     /* NAME section — instrument names */
     int has_names = 0;
     for (int i = 0; i < song->num_instruments; i++)
@@ -947,6 +983,20 @@ static int write_js(const char *filename, birb_song *song) {
             && song->instruments[i].waveform == WAVE_SINE) uses_sine = 1;
     }
 
+    /* Reverb is emitted only when the song actually uses it (wet > 0 or some
+     * instrument sends) — same emit-only-if-used pattern as FM/KS/drum. This
+     * is how the exported player gets its "with / without reverb" variants. */
+    int uses_reverb = 0;
+#ifndef BIRB_NO_REVERB
+    double rv_fb = 0, rv_dc = 0, rv_wet = 0;
+    if (song->rev_wet > 0) uses_reverb = 1;
+    for (int i = 0; i < song->num_instruments; i++)
+        if (song->instruments[i].reverb_send) uses_reverb = 1;
+    rv_fb  = 0.7 + 0.28 * (song->rev_size / 255.0);  /* baked: params are static in an export */
+    rv_dc  = 0.4 * (song->rev_damp / 255.0);
+    rv_wet = song->rev_wet / 255.0;
+#endif
+
     /* Instruments. Base 11 fields (wave duty a d s r pe pel arp1 arp2 vol).
      * When the song uses FM, append `nops, algo, fb, mi, [[ri,rf,lv,a,d,s,r]×4]`
      * at indices 11-15. When the song uses KS, append the damping value at the
@@ -1025,6 +1075,18 @@ static int write_js(const char *filename, birb_song *song) {
     }
     fprintf(f, "],\n");
 
+#ifndef BIRB_NO_REVERB
+    /* per-instrument reverb sends (0-255), indexed like I[] */
+    if (uses_reverb) {
+        fprintf(f, "RS=[");
+        for (int i = 0; i < song->num_instruments; i++) {
+            if (i) fprintf(f, ",");
+            fprintf(f, "%d", song->instruments[i].reverb_send);
+        }
+        fprintf(f, "],\n");
+    }
+#endif
+
     /* pattern lengths */
     fprintf(f, "pl=[");
     for (int p = 0; p < song->num_patterns; p++) {
@@ -1095,13 +1157,22 @@ static int write_js(const char *filename, birb_song *song) {
         "nf=n=>(n=n<0?0:n>95?95:n,bf[n%%12]<<(n/12)),\n"
         "spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,\n"
         "out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0\n");
+#ifndef BIRB_NO_REVERB
+    /* reverb send bus (mirror of the editor's makeReverb; coefficients baked). */
+    if (uses_reverb)
+        fprintf(f,
+            "var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]\n"
+            "function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*%.6f+RCL[k]*%.6f;b[p]=x+RCL[k]*%.6f;RCP[k]=p+1<b.length?p+1:0;o+=y}o*=%.6f;for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*%.6f}\n",
+            1.0 - rv_dc, rv_dc, rv_fb, (1.0 - rv_fb) * 5.5, rv_wet);
+#endif
     fprintf(f,
-        "for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,tp:0,ts:0,td:0,tm:0%s%s%s%s}\n"
+        "for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,tp:0,ts:0,td:0,tm:0%s%s%s%s%s}\n"
         "var jo=-1,jr=0\n",
         uses_fm ? ",fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmAlgo:0,fmMi:64,fmFb:0,fmNo:2,fmPrev:0" : "",
         uses_ks ? ",kb:new Int16Array(1024),kl:0,kp:0,kd:0" : "",
         uses_drum ? ",drAl:0,drAlOrig:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0" : "",
-        uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "");
+        uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "",
+        uses_reverb ? ",rs:0" : "");
     if (uses_fm || uses_drum || uses_sine) {
         fprintf(f,
             "function SA_(ph){var p=((ph%%F)+F)%%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n");
@@ -1149,8 +1220,9 @@ static int write_js(const char *filename, birb_song *song) {
         "C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]\n"
         "C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];\n"
         "if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}\n"
-        "C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0\n"
+        "C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0%s\n"
         "if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}%s%s%s%s}\n",
+        uses_reverb ? ";C.rs=RS[ii]||0" : "",
         uses_fm
             ? "\nif(j[0]===6){var fm=j[15];C.fmNo=j[11];C.fmAlgo=j[12]|0;C.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}"
             : "",
@@ -1241,8 +1313,9 @@ static int write_js(const char *filename, birb_song *song) {
     fprintf(f, "}}\n");
     fprintf(f,
         "for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--\n"
-        "var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e%s)continue\n"
+        "var v=0%s;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e%s)continue\n"
         "var h=C.p,s;\n",
+        uses_reverb ? ",rI=0" : "",
         uses_drum ? "&&!C.drTtl" : "");
     if (uses_fm) {
         /* nops=4 → FM4 (8 algos); nops=2 → simpler op1→op0 with feedback. */
@@ -1290,10 +1363,20 @@ static int write_js(const char *filename, birb_song *song) {
         "else if(C.w<3)s=(h*2-F)/F\n"
         "else if(C.w==4)s=SA_(h)\n"
         "else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}\n"
-        "var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F\n"
-        "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=v>1?1:v<-1?-1:v}\n"
-        "return{o:out,spt:spt,T:T}}\n",
-        uses_drum ? "if(C.w!==8)" : "");
+        "var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F\n");
+    {
+        const char *padv = uses_drum ? "if(C.w!==8)" : "";
+#ifndef BIRB_NO_REVERB
+        if (uses_reverb)
+            fprintf(f,
+                "var cv=s*en*C.v*C.rv/F/255/255;v+=cv;if(C.rs)rI+=cv*C.rs/255;%sC.p=(C.p+C.f)%%F}v+=RV(rI);out[i]=Math.tanh(v)}\n"
+                "return{o:out,spt:spt,T:T}}\n", padv);
+        else
+#endif
+            fprintf(f,
+                "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=v>1?1:v<-1?-1:v}\n"
+                "return{o:out,spt:spt,T:T}}\n", padv);
+    }
 
     fclose(f);
 

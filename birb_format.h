@@ -510,6 +510,39 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
 #endif
     }
 
+    /* optional REVB section — global reverb bus params + per-instrument sends.
+     * 3 global bytes (size, damp, wet; each 0-255) then a count-prefixed
+     * [inst_idx, send] table (same attach-by-index shape as KSIN). Absent
+     * section → struct stays zeroed → reverb off (wet 0). */
+    if (pos + 4 <= len && data[pos] == 'R' && data[pos+1] == 'E' &&
+        data[pos+2] == 'V' && data[pos+3] == 'B') {
+        pos += 4;
+#ifdef BIRB_NO_REVERB
+        if (pos + 3 > len) return -1;
+        pos += 3;                        /* skip 3 global bytes */
+        if (pos >= len) return -1;
+        int rcount = data[pos++];
+        if (pos + 2 * rcount > len) return -1;
+        pos += 2 * rcount;               /* skip the [idx,send] table */
+#else
+        if (pos + 3 > len) return -1;
+        song->rev_size = data[pos];
+        song->rev_damp = data[pos + 1];
+        song->rev_wet  = data[pos + 2];
+        pos += 3;
+        if (pos >= len) return -1;
+        int rcount = data[pos++];
+        for (int k = 0; k < rcount; k++) {
+            if (pos + 2 > len) return -1;
+            uint8_t idx = data[pos];
+            uint8_t send = data[pos + 1];
+            if (idx < BIRB_MAX_INSTRUMENTS)
+                song->instruments[idx].reverb_send = send;
+            pos += 2;
+        }
+#endif
+    }
+
     /* optional NAME section */
     if (pos + 4 <= len && data[pos] == 'N' && data[pos+1] == 'A' &&
         data[pos+2] == 'M' && data[pos+3] == 'E') {

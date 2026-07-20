@@ -24,7 +24,14 @@ WASM_4K_FLAGS = --target=wasm32-unknown-unknown -nostdlib -Oz \
     -DBIRB_MAX_PATTERNS=16 -DBIRB_MAX_ROWS=32 \
     -DBIRB_MAX_INSTRUMENTS=8 -DBIRB_MAX_ORDER=32 \
     -DBIRB_MAX_SAMPLES=4 -DBIRB_SAMPLE_POOL=65536 \
-    -DBIRB_KS_BUF_SIZE=256 -DBIRB_TINY_NOTE_TABLE
+    -DBIRB_KS_BUF_SIZE=256 -DBIRB_TINY_NOTE_TABLE \
+    -DBIRB_NO_REVERB
+
+# Reverb-enabled 4K flags: same as the lean 4K set but with the reverb bus.
+# The reverb build pays float + ~26KB of comb/allpass buffers; the default 4K
+# targets stay lean (BIRB_NO_REVERB above). Drop BIRB_NO_REVERB for a "with
+# reverb" build of any 4K variant.
+WASM_4K_REV_FLAGS = $(filter-out -DBIRB_NO_REVERB,$(WASM_4K_FLAGS))
 
 .PHONY: all clean test test-compiled web serve sizes tiers
 
@@ -62,6 +69,22 @@ test_song.bin test_song.h test_song.js: test_song.birb birbc
 	./birbc test_song.birb --js
 
 # 4K WASM build without KS (for size measurement vs KS-enabled build)
+# birb_4k.c — standalone 4K WASM player, in both variants: lean (no reverb)
+# and reverb-enabled. This is the "both versions" delivery for this player.
+web/birb_4k.wasm: birb_4k.c
+	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang (brew install llvm)"; exit 1; fi
+	$(WASM_CC) $(WASM_4K_FLAGS) birb_4k.c -o web/birb_4k.wasm
+	@command -v wasm-opt >/dev/null 2>&1 && wasm-opt -Oz web/birb_4k.wasm -o web/birb_4k.wasm || true
+	@ls -la web/birb_4k.wasm
+	@command -v brotli >/dev/null 2>&1 && { brotli --best -f web/birb_4k.wasm -o web/birb_4k.wasm.br; echo "lean brotli: $$(wc -c < web/birb_4k.wasm.br | tr -d ' ')b"; } || true
+
+web/birb_4k_rev.wasm: birb_4k.c
+	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang (brew install llvm)"; exit 1; fi
+	$(WASM_CC) $(WASM_4K_REV_FLAGS) birb_4k.c -o web/birb_4k_rev.wasm
+	@command -v wasm-opt >/dev/null 2>&1 && wasm-opt -Oz web/birb_4k_rev.wasm -o web/birb_4k_rev.wasm || true
+	@ls -la web/birb_4k_rev.wasm
+	@command -v brotli >/dev/null 2>&1 && { brotli --best -f web/birb_4k_rev.wasm -o web/birb_4k_rev.wasm.br; echo "reverb brotli: $$(wc -c < web/birb_4k_rev.wasm.br | tr -d ' ')b"; } || true
+
 web/birb4k_noks.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 	@if [ -z "$(WASM_CC)" ]; then \
 		echo "Error: No wasm-capable clang found. Install with: brew install llvm"; \

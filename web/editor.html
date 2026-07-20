@@ -29,14 +29,20 @@ input[type=range]:hover::-webkit-slider-thumb { background: var(--acc2); }
 input[type=range]::-moz-range-track { height: 3px; background: var(--bg3); border-radius: 2px; border: none; }
 input[type=range]::-moz-range-thumb { width: 10px; height: 10px; background: var(--acc); border-radius: 50%; border: none; }
 input[type=range]:hover::-moz-range-thumb { background: var(--acc2); }
+/* Hide native spinners — enhanceSpinners() renders always-visible custom ones instead. */
 input[type=number]::-webkit-inner-spin-button,
-input[type=number]::-webkit-outer-spin-button {
-    opacity: 0.35; filter: invert(0.8);
-}
-input[type=number]:hover::-webkit-inner-spin-button,
-input[type=number]:hover::-webkit-outer-spin-button { opacity: 0.9; }
-input[type=number] { -moz-appearance: textfield; }
-input[type=number]:focus { -moz-appearance: auto; }
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+/* Custom always-on inc/dec spinner buttons (do not steal focus from the grid). */
+.spin-wrap { display: inline-flex; align-items: stretch; vertical-align: middle; }
+.spin-wrap > input[type=number] { border-right: none; }
+.spin-btns { display: flex; flex-direction: column; width: 13px; flex-shrink: 0; }
+.spin-btn { flex: 1 1 0; min-height: 8px; display: flex; align-items: center; justify-content: center;
+    background: var(--bg3); color: var(--dim); border: 1px solid var(--bg3); border-left-color: var(--bg2);
+    font-size: 7px; line-height: 1; cursor: pointer; padding: 0; user-select: none; font-family: inherit; }
+.spin-btn:first-child { border-bottom: none; }
+.spin-btn:hover { background: var(--acc); color: var(--bg); }
+.spin-btn:active { background: var(--acc2); color: var(--bg); }
 body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','Consolas',monospace; font-size: 12px; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
 .toolbar { display: flex; align-items: center; gap: 8px 12px; padding: 6px 12px; background: var(--bg1); border-bottom: 1px solid var(--bg3); flex-shrink: 0; flex-wrap: wrap; }
 .toolbar .title { color: var(--acc); font-weight: bold; font-size: 14px; }
@@ -204,7 +210,9 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
     <button id="btn-play" onclick="togglePlay()">&#9654; Play</button>
     <button id="btn-play-pat" onclick="togglePlayPat()">&#9654; Pat</button>
     <button id="btn-stop" onclick="stopPlay()">&#9632; Stop</button>
+    <button id="btn-rec" onclick="toggleRecord()" title="Record mode — cursor follows the playhead; type notes to record them live while playing">&#9679; Rec</button>
     <div class="sep"></div>
+    <button onclick="toggleFx()" id="btn-fx" title="Reverb / FX send bus">&#9835; FX</button>
     <button onclick="toggleInfo()" id="btn-info">? Info</button>
 </div>
 <div class="toolbar">
@@ -277,6 +285,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <div class="row"><label>S</label><input type="range" id="ie-s" min="0" max="255" value="0"><span class="val" id="ie-s-v">0</span></div>
                         <div class="row"><label>R</label><input type="range" id="ie-r" min="0" max="255" value="0"><span class="val" id="ie-r-v">0</span></div>
                         <div class="row"><label>Vol</label><input type="range" id="ie-vol" min="0" max="255" value="255"><span class="val" id="ie-vol-v">255</span></div>
+                        <div class="row"><label>Rev</label><input type="range" id="ie-rev" min="0" max="255" value="0"><span class="val" id="ie-rev-v">0</span></div>
                         <div class="row"><label>PE</label><input type="number" id="ie-pe" value="0" min="-128" max="127" style="width:44px"><label>Len</label><input type="number" id="ie-pel" value="0" min="0" max="255" style="width:44px"></div>
                         <div class="row"><label>Arp</label><input type="number" id="ie-arp1" value="0" min="0" max="15" style="width:36px"><input type="number" id="ie-arp2" value="0" min="0" max="15" style="width:36px"></div>
                         <div class="row"><label>Name</label><input type="text" id="ie-name" value="" placeholder="unnamed" style="width:140px" oninput="saveInstName()"></div>
@@ -399,6 +408,19 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
         </div>
     </div>
 
+    <div class="info-panel" id="fx-panel">
+        <h3>Reverb <span style="color:var(--dim);font-weight:normal">· global send bus</span></h3>
+        <div class="inst-edit" style="border-top:none;padding:0">
+            <div class="row"><label>Wet</label><input type="range" id="rev-wet" min="0" max="100" value="35"><span class="val" id="rev-wet-v">35</span></div>
+            <div class="row"><label>Size</label><input type="range" id="rev-size" min="0" max="100" value="70"><span class="val" id="rev-size-v">70</span></div>
+            <div class="row"><label>Damp</label><input type="range" id="rev-damp" min="0" max="100" value="50"><span class="val" id="rev-damp-v">50</span></div>
+        </div>
+        <p class="desc" style="font-size:10px;line-height:1.5;margin-top:10px">
+            Each instrument's <b style="color:var(--acc2)">Rev</b> send (instrument editor, under Vol) feeds this bus.<br>
+            <b style="color:var(--acc)">Wet</b> 0 = off &middot; <b style="color:var(--acc)">Size</b> = tail length &middot; <b style="color:var(--acc)">Damp</b> = darker tail.
+        </p>
+    </div>
+
     <div class="info-panel" id="info-panel">
         <h3>Effects</h3>
         <table>
@@ -445,16 +467,20 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
         <table>
             <tr><td class="key">Z-M</td><td>Notes C..B (lower octave)</td></tr>
             <tr><td class="key">Q-P</td><td>Notes C..B (upper octave)</td></tr>
-            <tr><td class="key">`/§</td><td>Note off</td></tr>
-            <tr><td class="key">Del</td><td>Clear cell / selection</td></tr>
+            <tr><td class="key">`/§</td><td>Note off (REC only)</td></tr>
+            <tr><td class="key">Del</td><td>Clear cell / selection (REC only)</td></tr>
             <tr><td class="key">Shift+↑↓</td><td>Select rows</td></tr>
             <tr><td class="key">Ctrl+C</td><td>Copy selection</td></tr>
-            <tr><td class="key">Ctrl+X</td><td>Cut selection</td></tr>
-            <tr><td class="key">Ctrl+V</td><td>Paste at cursor</td></tr>
+            <tr><td class="key">Ctrl+X</td><td>Cut selection (REC only)</td></tr>
+            <tr><td class="key">Ctrl+V</td><td>Paste at cursor (REC only)</td></tr>
             <tr><td class="key">Tab</td><td>Next channel</td></tr>
+            <tr><td class="key">F1&ndash;F7</td><td>Select octave 1&ndash;7</td></tr>
+            <tr><td class="key">+ &minus;</td><td>Instrument prev / next (numpad or main row)</td></tr>
+            <tr><td class="key">F9</td><td>Toggle instrument editor</td></tr>
             <tr><td class="key">Space</td><td>Play / stop pattern</td></tr>
             <tr><td class="key">Enter</td><td>Play / stop song</td></tr>
         </table>
+        <p class="desc"><strong style="color:var(--fg)">Rec</strong> (toolbar) gates all pattern editing. <strong style="color:var(--fg)">Off</strong> = free play: the pattern is read-only — note keys only audition the current instrument, and note/hex entry, clear, cut and paste do nothing. Navigation, selection and copy still work. <strong style="color:var(--fg)">On</strong> = record: notes write at the cursor when stopped, or onto the playing row (cursor follows the playhead) while playing. In the instrument editor, note keys always audition the instrument being tweaked.</p>
 
         <h3>Volume column</h3>
         <table>
@@ -517,7 +543,8 @@ s.start();</pre>
     Pat <span id="st-pat">0</span> &nbsp; Row <span id="st-row">0</span> &nbsp;
     Ch <span id="st-ch">1</span> &nbsp; Col <span id="st-col">note</span> &nbsp;
     Inst <span id="st-inst">0</span> &nbsp;
-    Oct <span id="st-oct">4</span>
+    Oct <span id="st-oct">4</span> &nbsp;
+    <span id="st-rec">&#9679; FREE PLAY</span>
     <span style="margin-left:auto">&copy; 2026 eimink / Wide Load ^ KVG</span>
 </div>
 
@@ -625,6 +652,7 @@ let song = {
     patterns: [], // patterns[p][r][c] = {note,inst,fx,prm}
     order: [],    // order[i] = [p0,p1,p2,p3]
     samples: [],  // [{name, data:Int16Array, baseNote, loopStart, loopEnd}]
+    rev: {size:0.7, damp:0.5, wet:0.35}, // PROTOTYPE global reverb send bus params
 };
 
 // Channel count is compile-time capped at NCH_MAX=16 in the engine.
@@ -642,6 +670,7 @@ let selStart = -1, selEnd = -1; // row selection range (-1 = no selection)
 let clipboard = null; // [{note,inst,vol,fx,prm}, ...] per row for one channel
 let editInst = 0; // which instrument is selected for editing
 let playingRow = -1;
+let recordMode = false;      // when on: cursor follows the playhead & note keys record live
 
 function makeRow() {
     let r = [];
@@ -778,6 +807,7 @@ function loadSongFromStorage() {
         let data = JSON.parse(s);
         song.bpm = data.bpm || 140;
         song.tpr = data.tpr || 6;
+        song.rev = data.rev || {size:0.7, damp:0.5, wet:0.35};
         if (typeof data.N === 'number' && data.N >= 4 && data.N <= NCH_MAX) NCH = data.N;
         else NCH = 4;
         let nchEl = document.getElementById('nch'); if (nchEl) nchEl.value = NCH;
@@ -838,6 +868,8 @@ function newSong() {
     song.order = [[0,0,0,0]];
     song.samples = [];
     song.bpm = 140; song.tpr = 6;
+    song.rev = {size:0.7, damp:0.5, wet:0.35};
+    syncRevUI();
     curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
     editInst = 0; curInst = 0;
     document.getElementById('bpm').value = 140;
@@ -984,6 +1016,7 @@ function renderOrder() {
     phtml += '</span>';
     document.getElementById('pat-bar').innerHTML = phtml;
     bindPatDrag();
+    if (typeof enhanceSpinners === 'function') enhanceSpinners(document.getElementById('pat-bar'));
 }
 
 function toggleMute(c) {
@@ -1695,21 +1728,52 @@ function newInstFromSample(sampleIdx) {
 }
 
 /* Play a sample preview at its base note */
-let samplePreviewCtx = null, samplePreviewSrc = null;
+/* ================================================================
+   SHARED AUDIO CONTEXT
+   One persistent AudioContext for the whole session. Creating a new
+   context (and closing it on stop) makes the browser re-open the OS
+   audio device every time, which drops the first few ms of output
+   (silent first note) and adds startup latency. Instead we lazily make
+   one context, keep it running with a silent keep-alive source so the
+   device stays warm, and reuse it for every preview and for playback.
+   ================================================================ */
+let sharedCtx = null, sharedKeepAlive = null;
+function getAudioCtx() {
+    if (!sharedCtx) {
+        sharedCtx = new AudioContext({sampleRate: 44100});
+        // Silent keep-alive: a constant source at zero through a zero gain.
+        // Keeps the render thread + audio device active so later playback
+        // starts instantly instead of paying device warm-up latency.
+        sharedKeepAlive = sharedCtx.createConstantSource();
+        sharedKeepAlive.offset.value = 0;
+        let g = sharedCtx.createGain();
+        g.gain.value = 0;
+        sharedKeepAlive.connect(g).connect(sharedCtx.destination);
+        sharedKeepAlive.start();
+    }
+    if (sharedCtx.state === 'suspended') sharedCtx.resume();
+    return sharedCtx;
+}
+// Warm (and re-resume) the context on any user gesture, so it's already
+// running before the first play/note. Browsers require a gesture to start
+// an AudioContext, and some (Safari) auto-suspend it when idle.
+['pointerdown', 'keydown'].forEach(ev =>
+    window.addEventListener(ev, getAudioCtx));
+
+let samplePreviewSrc = null;
 function previewSample(idx) {
     let s = song.samples[idx];
     if (!s || !s.data) return;
     if (samplePreviewSrc) try { samplePreviewSrc.stop(); } catch(e) {}
-    if (samplePreviewCtx) samplePreviewCtx.close();
-    samplePreviewCtx = new AudioContext({sampleRate: 44100});
-    let buf = samplePreviewCtx.createBuffer(1, s.data.length, 44100);
+    let ctx = getAudioCtx();
+    let buf = ctx.createBuffer(1, s.data.length, 44100);
     let f = buf.getChannelData(0);
     for (let i = 0; i < s.data.length; i++) f[i] = s.data[i] / 32768;
-    samplePreviewSrc = samplePreviewCtx.createBufferSource();
+    samplePreviewSrc = ctx.createBufferSource();
     samplePreviewSrc.buffer = buf;
-    samplePreviewSrc.connect(samplePreviewCtx.destination);
+    samplePreviewSrc.connect(ctx.destination);
     samplePreviewSrc.start();
-    samplePreviewSrc.onended = () => { if (samplePreviewCtx) { samplePreviewCtx.close(); samplePreviewCtx = null; } };
+    samplePreviewSrc.onended = () => { samplePreviewSrc = null; };
 }
 
 function renameSample(idx) {
@@ -1855,6 +1919,7 @@ function loadInstEditor() {
     document.getElementById('ie-arp1').value = ins.arp1;
     document.getElementById('ie-arp2').value = ins.arp2;
     document.getElementById('ie-vol').value = ins.vol !== undefined ? ins.vol : 255;
+    document.getElementById('ie-rev').value = ins.rev || 0;
     document.getElementById('ie-name').value = ins.name || '';
     updateInstValues();
     drawADSR();
@@ -1923,7 +1988,7 @@ function editNextInstrument() {
     loadInstEditor();
 }
 function updateInstValues() {
-    for (let k of ['a','d','s','r','vol']) {
+    for (let k of ['a','d','s','r','vol','rev']) {
         let el = document.getElementById('ie-'+k);
         document.getElementById('ie-'+k+'-v').textContent = el.value;
     }
@@ -1949,6 +2014,7 @@ function saveInstFromEditor() {
     ins.arp1 = +document.getElementById('ie-arp1').value;
     ins.arp2 = +document.getElementById('ie-arp2').value;
     ins.vol = +document.getElementById('ie-vol').value;
+    ins.rev = +document.getElementById('ie-rev').value; // reverb send (prototype)
     /* FM params — only persist when FM panel is visible */
     if (ins.wave === 6) {
         if (!ins.fm) ins.fm = cloneFmDefault();
@@ -2051,7 +2117,9 @@ function handleKey(e) {
     let pat = song.patterns[curPat];
     if (!pat) return;
     let maxRow = pat.length;
-    let step = 1; // rows to advance after note entry
+    // Rows to advance after entry. While live-recording, the playhead drives the
+    // cursor, so don't auto-advance — the next note lands wherever playback is.
+    let step = (recordMode && liveNode) ? 0 : 1;
     let handled = true;
 
     if (e.key === 'ArrowDown' && e.shiftKey) {
@@ -2076,6 +2144,10 @@ function handleKey(e) {
         if (curCol < 0) { curCol = 4; curCh = (curCh - 1 + NCH) % NCH; }
         selStart = selEnd = -1;
     }
+    // Change current instrument on the fly: +/- (numpad or main row).
+    // (Octave is on F1-F7 — see the global handler.)
+    else if (e.code === 'NumpadAdd' || e.key === '+') { changeInstrument(1); e.preventDefault(); return; }
+    else if (e.code === 'NumpadSubtract' || e.key === '-') { changeInstrument(-1); e.preventDefault(); return; }
     else if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         // Copy selected rows (current channel)
         let r0 = selStart >= 0 ? Math.min(selStart, selEnd) : curRow;
@@ -2085,7 +2157,8 @@ function handleKey(e) {
         e.preventDefault(); return;
     }
     else if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
-        // Cut selected rows (current channel)
+        // Cut selected rows (current channel) — REC only (mutates the pattern)
+        if (!recordMode) { e.preventDefault(); return; }
         let r0 = selStart >= 0 ? Math.min(selStart, selEnd) : curRow;
         let r1 = selStart >= 0 ? Math.max(selStart, selEnd) : curRow;
         clipboard = [];
@@ -2098,7 +2171,8 @@ function handleKey(e) {
         e.preventDefault();
     }
     else if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-        // Paste at cursor (current channel)
+        // Paste at cursor (current channel) — REC only (mutates the pattern)
+        if (!recordMode) { e.preventDefault(); return; }
         if (clipboard && clipboard.length) {
             for (let i = 0; i < clipboard.length && curRow + i < maxRow; i++)
                 pat[curRow + i][curCh] = Object.assign({}, clipboard[i]);
@@ -2113,6 +2187,8 @@ function handleKey(e) {
         else curCh = (curCh + 1) % NCH;
     }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Clearing mutates the pattern — REC only
+        if (!recordMode) { e.preventDefault(); return; }
         if (selStart >= 0) {
             // Delete selection (current channel)
             let r0 = Math.min(selStart, selEnd), r1 = Math.max(selStart, selEnd);
@@ -2129,11 +2205,11 @@ function handleKey(e) {
         }
     }
     else if (e.key === '`' || e.key === '§') {
-        // note off
-        if (curCol === 0) {
+        // note off — a track write, so REC-gated like note entry
+        if (curCol === 0 && recordMode) {
             pat[curRow][curCh].note = 1;
             curRow = (curRow + step) % maxRow;
-        }
+        } else handled = false;
     }
     else if (e.key === ' ') {
         e.preventDefault();
@@ -2146,47 +2222,49 @@ function handleKey(e) {
         return;
     }
     else if (curCol === 0 && KEY_NOTE_MAP[e.key] !== undefined) {
-        // note entry
+        // note entry — always audition; only WRITE to the track when REC is on.
+        // REC off = free play (jam the current instrument, nothing recorded).
         let semi = KEY_NOTE_MAP[e.key] + curOctave * 12;
         if (semi >= 0 && semi < 96) {
+            previewNote(semi + 2, curInst);
+            if (!recordMode) { e.preventDefault(); return; }
             let cell = pat[curRow][curCh];
             cell.note = semi + 2;
             cell.inst = curInst;
             let ins = song.instruments[curInst];
             cell.vol = ins && ins.vol !== undefined ? ins.vol : 255;
             curRow = (curRow + step) % maxRow;
-            previewNote(semi + 2, curInst);
         }
     }
     else if (curCol === 1) {
-        // instrument entry (hex)
+        // instrument entry (hex) — REC only
         let hv = parseInt(e.key, 16);
-        if (!isNaN(hv) && hv < song.instruments.length) {
+        if (recordMode && !isNaN(hv) && hv < song.instruments.length) {
             pat[curRow][curCh].inst = hv;
             curInst = hv;
             curRow = (curRow + step) % maxRow;
         } else handled = false;
     }
     else if (curCol === 2) {
-        // volume entry (hex, two digits)
+        // volume entry (hex, two digits) — REC only
         let hv = parseInt(e.key, 16);
-        if (!isNaN(hv)) {
+        if (recordMode && !isNaN(hv)) {
             let cur = pat[curRow][curCh].vol;
             if (cur === 0) cur = 0; // no change → start fresh
             pat[curRow][curCh].vol = ((cur & 0x0F) << 4) | hv;
         } else handled = false;
     }
     else if (curCol === 3) {
-        // effect type (hex digit 0-F)
+        // effect type (hex digit 0-F) — REC only
         let hv = parseInt(e.key, 16);
-        if (!isNaN(hv)) {
+        if (recordMode && !isNaN(hv)) {
             pat[curRow][curCh].fx = hv;
         } else handled = false;
     }
     else if (curCol === 4) {
-        // effect param (hex, two digits)
+        // effect param (hex, two digits) — REC only
         let hv = parseInt(e.key, 16);
-        if (!isNaN(hv)) {
+        if (recordMode && !isNaN(hv)) {
             pat[curRow][curCh].prm = ((pat[curRow][curCh].prm & 0x0F) << 4) | hv;
         } else handled = false;
     }
@@ -2202,21 +2280,27 @@ function handleKey(e) {
 
 document.getElementById('grid').addEventListener('keydown', handleKey);
 
-// Global: F2 switches to instrument editor, Esc returns to pattern view.
-// Skip when user is typing in an input/textarea/contenteditable.
+// Global: F1-F7 select octave 1-7 (FT2-style), F9 toggles the instrument editor,
+// Esc returns to pattern view. In the instrument editor, note keys audition the
+// instrument being tweaked. Skip when typing in an input/textarea/contenteditable.
 document.addEventListener('keydown', function(e) {
     let t = e.target;
     let typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
-    if (e.key === 'F2' && !typing) {
+    if (typing) return;
+    let vi = document.getElementById('view-instrument');
+    let inInstEditor = vi && vi.style.display !== 'none';
+    if (/^F[1-7]$/.test(e.key)) {
         e.preventDefault();
-        let vi = document.getElementById('view-instrument');
-        setMainTab(vi && vi.style.display !== 'none' ? 'pattern' : 'instrument');
-    } else if (e.key === 'Escape' && !typing) {
-        let vi = document.getElementById('view-instrument');
-        if (vi && vi.style.display !== 'none') {
-            e.preventDefault();
-            setMainTab('pattern');
-        }
+        setOctave(+e.key.slice(1));
+    } else if (e.key === 'F9') {
+        e.preventDefault();
+        setMainTab(inInstEditor ? 'pattern' : 'instrument');
+    } else if (e.key === 'Escape') {
+        if (inInstEditor) { e.preventDefault(); setMainTab('pattern'); }
+    } else if (inInstEditor && !e.ctrlKey && !e.metaKey && !e.altKey && KEY_NOTE_MAP[e.key] !== undefined) {
+        // Audition the instrument being edited — no pattern writing.
+        let semi = KEY_NOTE_MAP[e.key] + curOctave * 12;
+        if (semi >= 0 && semi < 96) { e.preventDefault(); previewNote(semi + 2, editInst); }
     }
 });
 
@@ -2236,6 +2320,37 @@ document.getElementById('grid').addEventListener('click', function(e) {
 /* ================================================================
    INLINE SYNTH (from birb_4k.js pattern, for audio preview)
    ================================================================ */
+/* --- PROTOTYPE reverb send bus: mono Schroeder-lite (4 damped combs -> 2
+   allpass diffusers). One global bus fed by each instrument's `rev` send
+   amount (0..255). tick() takes live size/damp/wet so toolbar tweaks apply
+   instantly. Same code is mirrored into the worklet in getWorkletCode(). --- */
+function makeReverb() {
+    return {
+        cb: [new Float32Array(1116), new Float32Array(1188), new Float32Array(1277), new Float32Array(1356)],
+        cp: [0,0,0,0], cl: [0,0,0,0],
+        ab: [new Float32Array(556), new Float32Array(441)], ap: [0,0],
+        tick: function(x, size, damp, wet) {
+            let fb = 0.7 + 0.28*size, dc = 0.4*damp, o = 0;
+            for (let k = 0; k < 4; k++) {
+                let b = this.cb[k], p = this.cp[k], y = b[p];
+                this.cl[k] = y*(1-dc) + this.cl[k]*dc;
+                b[p] = x + this.cl[k]*fb;
+                this.cp[k] = p+1 < b.length ? p+1 : 0;
+                o += y;
+            }
+            o *= (1 - fb) * 5.5; /* normalize level off feedback (Size = decay only) + makeup gain */
+            for (let k = 0; k < 2; k++) {
+                let b = this.ab[k], p = this.ap[k], y = b[p];
+                let out = -o + y;
+                b[p] = o + y*0.5;
+                this.ap[k] = p+1 < b.length ? p+1 : 0;
+                o = out;
+            }
+            return o * wet;
+        }
+    };
+}
+
 function renderSong(patOnly, singlePat) {
     let S = 44100, N = NCH, F = 65536;
     let bpm = song.bpm, tpr = song.tpr;
@@ -2268,6 +2383,8 @@ function renderSong(patOnly, singlePat) {
     }
     let out = new Float32Array(T);
     let rowMarkers = []; // sample positions of row boundaries
+    let revS = song.rev || {size:0.7, damp:0.5, wet:0.35}; // prototype reverb send bus
+    let rev = makeReverb();
 
     let ch = [];
     for (let c = 0; c < N; c++)
@@ -2444,6 +2561,7 @@ function renderSong(patOnly, singlePat) {
         if (C.a == 0) { C.e = F; C.t = 2; } else { C.e = 0; C.t = 1; }
         C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2;
         C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255; C.k = 0; C.l = 0; C.ps = 0;
+        C.rs = j.rev || 0; // reverb send amount (0..255)
         if (j.wave === 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
         C.sa = 0;
         if (j.wave === 5) {
@@ -2656,7 +2774,7 @@ function renderSong(patOnly, singlePat) {
             }
         }
         tc--;
-        let v = 0;
+        let v = 0, revIn = 0;
         for (let c = 0; c < N; c++) {
             let C = ch[c]; if (!C.t && !C.e && !C.sa && !C.drTtl) continue;
             if (channelMuted[c]) { C.p = (C.p + C.f) % F; continue; }
@@ -2826,22 +2944,24 @@ function renderSong(patOnly, singlePat) {
             else { C.m++; if (C.m>=C.j){C.m=0;let z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)} s=(C.h&1)?.5:-.5; }
             let en = C.e + (C.tm ? C.e * C.tm / F : 0);
             if (en < 0) en = 0; if (en > F) en = F;
-            v += s * en * (C.v || 255) * C.rv / F / 255 / 255;
+            let cv = s * en * (C.v || 255) * C.rv / F / 255 / 255;
+            v += cv;
+            if (C.rs) revIn += cv * C.rs / 255;
             if (C.w !== 5 && C.w !== 8) C.p = (C.p + C.f) % F;
         }
-        out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
+        if (revS.wet > 0) v += rev.tick(revIn, revS.size, revS.damp, revS.wet);
+        out[i] = Math.tanh(v); /* gentle master saturation — no hard clip when reverb is drenched */
     }
     if (actualLen) { out = out.slice(0, actualLen); T = actualLen; }
     return {out, T, spt, rowMarkers};
 }
 
 /* Note preview: render a short note with enough time for ADSR to be heard */
-let previewCtx = null, previewSrc = null;
+let previewSrc = null;
 function previewNote(note, instIdx) {
     if (instIdx >= song.instruments.length) return;
     // Stop previous preview
     if (previewSrc) try { previewSrc.stop(); } catch(e) {}
-    if (previewCtx) previewCtx.close();
 
     // Render a short pattern: note on for 6 rows, note off, 8 rows of release tail
     let saved = {patterns: song.patterns, order: song.order};
@@ -2854,13 +2974,12 @@ function previewNote(note, instIdx) {
     song.patterns = saved.patterns;
     song.order = saved.order;
 
-    previewCtx = new AudioContext({sampleRate: 44100});
-    let ab = previewCtx.createBuffer(1, m.T, 44100);
+    let ctx = getAudioCtx();
+    let ab = ctx.createBuffer(1, m.T, 44100);
     ab.getChannelData(0).set(m.out);
-    previewSrc = previewCtx.createBufferSource();
-    previewSrc.buffer = ab; previewSrc.connect(previewCtx.destination); previewSrc.start();
-    // Clean up after playback
-    previewSrc.onended = () => { if (previewCtx) { previewCtx.close(); previewCtx = null; } };
+    previewSrc = ctx.createBufferSource();
+    previewSrc.buffer = ab; previewSrc.connect(ctx.destination); previewSrc.start();
+    previewSrc.onended = () => { previewSrc = null; };
 }
 
 /* ================================================================
@@ -2870,14 +2989,14 @@ function previewNote(note, instIdx) {
 /* Synthesizes in small chunks, re-reading song state each tick so instrument
  * tweaks take effect immediately during playback. */
 
-let liveCtx = null, liveNode = null, liveState = null, liveRowUpdatePending = false;
+let liveNode = null, liveState = null, liveRowUpdatePending = false, workletLoaded = false;
 
 function togglePlay() {
-    if (liveCtx) { stopPlay(); return; }
+    if (liveNode) { stopPlay(); return; }
     startLive(false);
 }
 function togglePlayPat() {
-    if (liveCtx) { stopPlay(); return; }
+    if (liveNode) { stopPlay(); return; }
     startLive(true);
 }
 
@@ -2909,6 +3028,7 @@ function snapshotSongForWorklet() {
         patterns,
         order: song.order.map(o => o.slice()),
         samples,
+        rev: song.rev || {size:0.7, damp:0.5, wet:0.35},
         channelMuted: channelMuted.slice()
     };
 }
@@ -2918,6 +3038,33 @@ function getWorkletCode() {
     // song state, updated via MessagePort. Each `process()` call renders
     // one quantum (128 samples) using the latest state.
     return `
+/* PROTOTYPE reverb send bus — mirror of makeReverb() in the main script. */
+function makeReverb() {
+    return {
+        cb: [new Float32Array(1116), new Float32Array(1188), new Float32Array(1277), new Float32Array(1356)],
+        cp: [0,0,0,0], cl: [0,0,0,0],
+        ab: [new Float32Array(556), new Float32Array(441)], ap: [0,0],
+        tick: function(x, size, damp, wet) {
+            let fb = 0.7 + 0.28*size, dc = 0.4*damp, o = 0;
+            for (let k = 0; k < 4; k++) {
+                let b = this.cb[k], p = this.cp[k], y = b[p];
+                this.cl[k] = y*(1-dc) + this.cl[k]*dc;
+                b[p] = x + this.cl[k]*fb;
+                this.cp[k] = p+1 < b.length ? p+1 : 0;
+                o += y;
+            }
+            o *= (1 - fb) * 5.5; /* normalize level off feedback (Size = decay only) + makeup gain */
+            for (let k = 0; k < 2; k++) {
+                let b = this.ab[k], p = this.ap[k], y = b[p];
+                let out = -o + y;
+                b[p] = o + y*0.5;
+                this.ap[k] = p+1 < b.length ? p+1 : 0;
+                o = out;
+            }
+            return o * wet;
+        }
+    };
+}
 class BirbProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
@@ -2956,6 +3103,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             patterns: s.patterns,
             order: s.order,
             samples,
+            rev: s.rev || {size:0.7, damp:0.5, wet:0.35},
             channelMuted: s.channelMuted || new Array(this.N).fill(false)
         };
     }
@@ -2972,7 +3120,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                 fmtSw:0,fmtLf:0x7FFF,fmtVa:0,fmtVb:0,fmtSp:0,fmtDir:1,fmtSS:0,fmtR:128,fmtRc:0,
                 fmtZ1:[0,0,0],fmtZ2:[0,0,0],fmtB0:[0,0,0],fmtA1:[0,0,0],fmtA2:[0,0,0]});
         let spt = this.S*5/((this.song.bpm||125)*2)|0;
-        return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1, jo: -1, jr: 0 };
+        return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1, jo: -1, jr: 0, rev: makeReverb() };
     }
     sinApprox(ph) {
         let F = this.F, p = ((ph % F) + F) % F;
@@ -3103,6 +3251,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2;
         C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255;
         C.k = 0; C.l = 0; C.ps = 0;
+        C.rs = j.rev || 0; // reverb send amount (0..255)
         if (j.wave === 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
         C.sa = 0;
         if (j.wave === 5) {
@@ -3360,7 +3509,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         for (let i = 0; i < out.length; i++) {
             if (st.tc <= 0) { this.doTick(st); st.tc = st.spt; }
             st.tc--;
-            let v = 0;
+            let v = 0, revIn = 0;
             for (let c = 0; c < N; c++) {
                 let C = st.ch[c];
                 if (!C.t && !C.e && !C.sa && !C.drTtl) continue;
@@ -3522,10 +3671,14 @@ class BirbProcessor extends AudioWorkletProcessor {
                 }
                 let en = C.e + (C.tm ? C.e * C.tm / F : 0);
                 if (en < 0) en = 0; if (en > F) en = F;
-                v += s * en * C.v * C.rv / F / 255 / 255;
+                let cv = s * en * C.v * C.rv / F / 255 / 255;
+                v += cv;
+                if (C.rs) revIn += cv * C.rs / 255;
                 if (C.w !== 5 && C.w !== 8) C.p = (C.p + C.f) % F;
             }
-            out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
+            let rv = this.song.rev;
+            if (rv && rv.wet > 0) v += st.rev.tick(revIn, rv.size, rv.damp, rv.wet);
+            out[i] = Math.tanh(v); /* gentle master saturation — no hard clip when reverb is drenched */
         }
         // Emit sync info when row/op changes
         if (st.cr !== st.lastRow || st.op !== st.lastOp) {
@@ -3540,17 +3693,20 @@ registerProcessor('birb-processor', BirbProcessor);
 }
 
 async function startLive(patOnly) {
-    if (liveCtx) return;
-    liveCtx = new AudioContext({sampleRate: 44100});
-    // addModule must be called on each new AudioContext
-    let code = getWorkletCode();
-    let url = URL.createObjectURL(new Blob([code], {type: 'application/javascript'}));
-    try {
-        await liveCtx.audioWorklet.addModule(url);
-    } finally {
-        URL.revokeObjectURL(url);
+    if (liveNode) return;
+    let ctx = getAudioCtx();
+    // addModule need only run once per context; cache it so replays start instantly.
+    if (!workletLoaded) {
+        let code = getWorkletCode();
+        let url = URL.createObjectURL(new Blob([code], {type: 'application/javascript'}));
+        try {
+            await ctx.audioWorklet.addModule(url);
+            workletLoaded = true;
+        } finally {
+            URL.revokeObjectURL(url);
+        }
     }
-    liveNode = new AudioWorkletNode(liveCtx, 'birb-processor', {outputChannelCount: [1]});
+    liveNode = new AudioWorkletNode(ctx, 'birb-processor', {outputChannelCount: [1]});
     liveNode.port.onmessage = (e) => {
         if (e.data.type !== 'pos') return;
         let row = e.data.row, op = e.data.op;
@@ -3561,19 +3717,21 @@ async function startLive(patOnly) {
             let newPat = song.order[curOrderPos] ? song.order[curOrderPos][0] : 0;
             if (curPat !== newPat) { curPat = newPat; renderOrder(); }
         }
+        // Record mode: cursor tracks the playhead so typed notes land on the playing row.
+        if (recordMode) curRow = row;
         renderGrid();
     };
     // Send initial state
     let snap = snapshotSongForWorklet();
     let transfer = snap.samples.map(s => s.buf);
     liveNode.port.postMessage({type: 'init', song: snap, patOnly, curPat}, transfer);
-    liveNode.connect(liveCtx.destination);
+    liveNode.connect(ctx.destination);
     document.getElementById('btn-play').classList.add('active');
 }
 
 function stopPlay() {
+    // Disconnect the worklet but keep the shared context alive (warm) for instant replay.
     if (liveNode) { try { liveNode.port.postMessage({type:'stop'}); } catch(e){} liveNode.disconnect(); liveNode = null; }
-    if (liveCtx) { liveCtx.close(); liveCtx = null; }
     playingRow = -1;
     document.getElementById('btn-play').classList.remove('active');
     renderGrid();
@@ -3648,12 +3806,58 @@ function deletePattern() {
    ================================================================ */
 document.getElementById('bpm').addEventListener('change', function() { song.bpm = +this.value; markDirty(); });
 document.getElementById('tpr').addEventListener('change', function() { song.tpr = +this.value; markDirty(); });
-document.getElementById('octave').addEventListener('change', function() { curOctave = +this.value; saveSongToStorage(); });
+/* PROTOTYPE reverb toolbar wiring: sliders 0..100 -> song.rev 0..1, push live. */
+function syncRevUI() {
+    if (!song.rev) song.rev = {size:0.7, damp:0.5, wet:0.35};
+    for (let k of ['wet','size','damp']) {
+        let pct = Math.round(song.rev[k] * 100);
+        document.getElementById('rev-'+k).value = pct;
+        document.getElementById('rev-'+k+'-v').textContent = pct;
+    }
+}
+for (let k of ['wet','size','damp']) {
+    document.getElementById('rev-'+k).addEventListener('input', function() {
+        if (!song.rev) song.rev = {size:0.7, damp:0.5, wet:0.35};
+        song.rev[k] = +this.value / 100;
+        document.getElementById('rev-'+k+'-v').textContent = this.value;
+        markDirty();
+    });
+}
+syncRevUI();
+document.getElementById('octave').addEventListener('change', function() { curOctave = +this.value; saveSongToStorage(); updateStatus(); });
 document.getElementById('song-name').addEventListener('input', function() { saveSongToStorage(); });
 
 /* ================================================================
    STATUS BAR
    ================================================================ */
+/* ---- FT2-style octave (F1-F7) / instrument (+/-) change ---- */
+function setOctave(o) {
+    o = Math.max(0, Math.min(7, o));
+    if (o === curOctave) return;
+    curOctave = o;
+    document.getElementById('octave').value = curOctave;
+    saveSongToStorage();
+    updateStatus();
+}
+function changeInstrument(delta) {
+    let n = song.instruments.length;
+    if (!n) return;
+    let i = Math.max(0, Math.min(n - 1, curInst + delta));
+    if (i === curInst) return;
+    selectInst(i);  // syncs curInst + editInst, inst list highlight and editor
+    updateStatus();
+}
+
+/* ---- Record mode: gates note writing; also makes the cursor track the playhead ---- */
+function toggleRecord() {
+    recordMode = !recordMode;
+    document.getElementById('btn-rec').classList.toggle('active', recordMode);
+    // Snap the cursor onto the playhead immediately so recording starts in sync.
+    if (recordMode && liveNode && playingRow >= 0) { curRow = playingRow; renderGrid(); }
+    updateStatus();
+    document.getElementById('grid').focus();
+}
+
 function updateStatus() {
     document.getElementById('st-pat').textContent = curPat;
     document.getElementById('st-row').textContent = ('0'+curRow.toString(16).toUpperCase()).slice(-2);
@@ -3661,6 +3865,9 @@ function updateStatus() {
     document.getElementById('st-col').textContent = COL_TYPES[curCol];
     document.getElementById('st-inst').textContent = hexStr(curInst);
     document.getElementById('st-oct').textContent = curOctave;
+    let rec = document.getElementById('st-rec');
+    rec.innerHTML = recordMode ? '&#9679; REC' : '&#9679; FREE PLAY';
+    rec.style.color = recordMode ? 'var(--note-off)' : 'var(--dim)';
 }
 
 /* ================================================================
@@ -3815,6 +4022,19 @@ function exportBin() {
         }
     }
 
+    // REVB section — global reverb bus params + per-instrument sends. Written
+    // only when reverb is audible; must sit after FRIN and before NAME.
+    let revSends = song.instruments.map((ins, idx) => ({idx, send: ins.rev || 0})).filter(x => x.send);
+    if ((song.rev && song.rev.wet > 0) || revSends.length > 0) {
+        let rv = song.rev || {size:0, damp:0, wet:0};
+        push(82); push(69); push(86); push(66); // 'REVB'
+        push(Math.round(rv.size * 255) & 0xFF);
+        push(Math.round(rv.damp * 255) & 0xFF);
+        push(Math.round(rv.wet * 255) & 0xFF);
+        push(revSends.length & 0xFF);
+        for (let {idx, send} of revSends) { push(idx); push(send & 0xFF); }
+    }
+
     // NAME section — instrument names
     let hasNames = song.instruments.some(i => i.name);
     if (hasNames) {
@@ -3852,6 +4072,11 @@ function buildJS() {
     let usesKS = song.instruments.some(i => i.wave === 7);
     let usesDrum = song.instruments.some(i => i.wave === 8);
     let usesFormant = song.instruments.some(i => i.wave === 9);
+    /* Reverb emitted only when used (wet>0 or some instrument sends) — gives the
+     * export its with/without-reverb variants. Coefficients baked (static export). */
+    let rev = song.rev || {size:0, damp:0, wet:0};
+    let usesReverb = rev.wet > 0 || song.instruments.some(i => i.rev);
+    let rvFb = 0.7 + 0.28 * rev.size, rvDc = 0.4 * rev.damp, rvWet = rev.wet;
     /* Track which drum algorithms are used — unused ones are skipped in output. */
     let drumAlgos = new Set();
     if (usesDrum) {
@@ -3887,6 +4112,8 @@ function buildJS() {
         }
         return base + ']';
     }).join(',') + '],\n';
+
+    if (usesReverb) o += 'RS=[' + song.instruments.map(i => i.rev || 0).join(',') + '],\n';
 
     o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
 
@@ -3954,11 +4181,13 @@ dv=[8192,16384,32768,49152],
 nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
 spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,
 out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
-for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0':''}${usesDrum?',drAl:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]':''}}
+${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
+function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RCP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*${rvWet.toFixed(6)}}
+` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmMi:64,fmFb:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0':''}${usesDrum?',drAl:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]':''}}
 ${(usesFM || usesDrum) ? `function SA_(ph){var p=((ph%F)+F)%F;var ng=p>=F/2,t=ng?(p-F/2)*2:p*2;if(t>F)t=F;var y=t*(F-t)/F*4/F;return ng?-y:y}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];C.t=1;C.e=0
-C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0
+C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0${usesReverb?';C.rs=RS[ii]||0':''}
 if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}
 C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}${usesFM ? `
 if(j[0]===6){var fm=j[15];C.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255)}}` : ''}${usesKS ? `
@@ -4011,7 +4240,7 @@ else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
 else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}${usesFM ? `
 if(C.w===6){for(var k=0;k<4;k++)C.fmf[k]=Math.round(C.f*C.fmR[k])}` : ''}}}
 for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
-var v=0;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa${usesDrum ? '&&!C.drTtl' : ''})continue
+var v=0${usesReverb?',rI=0':''};for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa${usesDrum ? '&&!C.drTtl' : ''})continue
 var h=C.p,s=0
 if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
@@ -4031,7 +4260,7 @@ else if(C.w===2)s=(h*2-F)/F
 else if(C.w===4){var p4=((h%F)+F)%F,n4=p4>=F/2,t4=n4?(p4-F/2)*2:p4*2;if(t4>F)t4=F;var y4=t4*(F-t4)/F*4/F;s=n4?-y4:y4}
 else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
 var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F
-v+=s*en*C.v*C.rv/F/255/255;if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}out[i]=v>1?1:v<-1?-1:v}
+${usesReverb ? 'var cv=s*en*C.v*C.rv/F/255/255;v+=cv;if(C.rs)rI+=cv*C.rs/255' : 'v+=s*en*C.v*C.rv/F/255/255'};if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}${usesReverb?'v+=RV(rI);out[i]=Math.tanh(v)':'out[i]=v>1?1:v<-1?-1:v'}}
 return{o:out,spt:spt,T:T}}`;
     return o;
 }
@@ -4346,6 +4575,24 @@ function parseBin(d) {
         }
     }
 
+    // optional REVB section (global reverb bus + per-instrument sends). Absent
+    // → reverb off (wet 0) with sensible defaults for when it's dialed in.
+    song.rev = {size:0.7, damp:0.5, wet:0};
+    if (p + 4 <= d.length && d[p]===82 && d[p+1]===69 && d[p+2]===86 && d[p+3]===66) {
+        p += 4;
+        if (p + 3 <= d.length) {
+            song.rev = {size: d[p]/255, damp: d[p+1]/255, wet: d[p+2]/255};
+            p += 3;
+            let rcount = d[p++];
+            for (let k = 0; k < rcount; k++) {
+                if (p + 2 > d.length) break;
+                let idx = d[p], send = d[p+1];
+                p += 2;
+                if (idx < song.instruments.length) song.instruments[idx].rev = send;
+            }
+        }
+    }
+
     // optional NAME section
     if (p + 4 <= d.length && d[p]===78 && d[p+1]===65 && d[p+2]===77 && d[p+3]===69) {
         p += 4;
@@ -4464,13 +4711,81 @@ function toggleInfo() {
     let panel = document.getElementById('info-panel');
     panel.classList.toggle('show');
     document.getElementById('btn-info').classList.toggle('active');
+    // Only one right-hand flyout at a time.
+    document.getElementById('fx-panel').classList.remove('show');
+    document.getElementById('btn-fx').classList.remove('active');
+    document.getElementById('grid').focus();
+}
+function toggleFx() {
+    let panel = document.getElementById('fx-panel');
+    panel.classList.toggle('show');
+    document.getElementById('btn-fx').classList.toggle('active');
+    document.getElementById('info-panel').classList.remove('show');
+    document.getElementById('btn-info').classList.remove('active');
     document.getElementById('grid').focus();
 }
 
 function renderAll() {
     renderInstList(); loadInstEditor(); renderOrder(); renderGrid(); renderSamplesList();
+    if (typeof syncRevUI === 'function') syncRevUI();
 }
+
+/* ================================================================
+   NUMBER SPINNERS
+   Wrap every <input type=number> with always-visible up/down buttons that
+   adjust the value WITHOUT stealing focus, so you can bump Oct/BPM/etc.
+   while the pattern grid keeps keyboard focus (no click-in/click-out).
+   Idempotent; supports press-and-hold auto-repeat.
+   ================================================================ */
+function spinStep(inp, dir) {
+    if (inp.disabled) return;
+    let step = parseFloat(inp.step) || 1;
+    let v = parseFloat(inp.value); if (isNaN(v)) v = 0;
+    v += dir * step;
+    if (inp.min !== '' && v < parseFloat(inp.min)) v = parseFloat(inp.min);
+    if (inp.max !== '' && v > parseFloat(inp.max)) v = parseFloat(inp.max);
+    if (String(v) === inp.value) return;
+    inp.value = v;
+    // Fire both so 'input'-bound (inst editor) and 'change'-bound (toolbar,
+    // inline onchange) handlers all react, exactly as manual editing would.
+    inp.dispatchEvent(new Event('input', {bubbles: true}));
+    inp.dispatchEvent(new Event('change', {bubbles: true}));
+}
+function bindSpinButton(btn, inp, dir) {
+    let delay = null, timer = null;
+    let stop = () => { if (delay) clearTimeout(delay); if (timer) clearInterval(timer); delay = timer = null; };
+    btn.addEventListener('mousedown', function(e) {
+        e.preventDefault(); // keep focus where it is (the grid), don't focus the button
+        spinStep(inp, dir);
+        delay = setTimeout(() => { timer = setInterval(() => spinStep(inp, dir), 60); }, 350);
+    });
+    ['mouseup', 'mouseleave'].forEach(ev => btn.addEventListener(ev, stop));
+    window.addEventListener('mouseup', stop);
+}
+function enhanceSpinners(root) {
+    let inputs = (root || document).querySelectorAll('input[type=number]');
+    for (let inp of inputs) {
+        if (inp.parentElement && inp.parentElement.classList.contains('spin-wrap')) continue;
+        let wrap = document.createElement('span');
+        wrap.className = 'spin-wrap';
+        inp.parentNode.insertBefore(wrap, inp);
+        wrap.appendChild(inp);
+        let btns = document.createElement('span');
+        btns.className = 'spin-btns';
+        let up = document.createElement('button'), dn = document.createElement('button');
+        up.type = dn.type = 'button';
+        up.className = dn.className = 'spin-btn';
+        up.tabIndex = dn.tabIndex = -1;
+        up.textContent = '▲'; dn.textContent = '▼';
+        btns.appendChild(up); btns.appendChild(dn);
+        wrap.appendChild(btns);
+        bindSpinButton(up, inp, 1);
+        bindSpinButton(dn, inp, -1);
+    }
+}
+
 renderAll();
+enhanceSpinners();
 document.getElementById('grid').focus();
 
 window.addEventListener('beforeunload', function(e) {

@@ -169,6 +169,9 @@ typedef struct {
     uint8_t   arp_note2;     /* arpeggio semitone offset 2 */
     uint8_t   volume;        /* instrument volume 0-255, scales envelope output */
     uint8_t   sample_idx;    /* index into song sample bank (when synth_type == SYNTH_SAMPLE) */
+#ifndef BIRB_NO_REVERB
+    uint8_t   reverb_send;   /* reverb send amount 0-255 (0 = fully dry) */
+#endif
 #ifndef BIRB_NO_FM
     birb_fm_inst fm;         /* FM params (only meaningful when synth_type == SYNTH_FM) */
 #endif
@@ -267,6 +270,9 @@ typedef struct {
     uint8_t       note_delay_tick; /* delay note trigger by N ticks */
     uint8_t       delayed_note;    /* note to trigger after delay */
     uint8_t       delayed_inst;    /* instrument for delayed note */
+#ifndef BIRB_NO_REVERB
+    uint8_t       reverb_send;     /* per-channel reverb send 0-255, copied from instrument */
+#endif
 
     /* ---- type-specific state (tagged by synth_type) ---- */
     union {
@@ -426,6 +432,11 @@ typedef struct {
     uint8_t  num_instruments;
     uint8_t  order_length;
     uint8_t  num_samples;
+#ifndef BIRB_NO_REVERB
+    uint8_t  rev_size;   /* global reverb bus: tail length   0-255 */
+    uint8_t  rev_damp;   /* global reverb bus: HF damping     0-255 */
+    uint8_t  rev_wet;    /* global reverb bus: wet mix        0-255 (0 = off) */
+#endif
 
     birb_instrument instruments[BIRB_MAX_INSTRUMENTS];
     uint8_t         order[BIRB_MAX_ORDER][BIRB_NUM_CHANNELS]; /* pattern index per channel per position */
@@ -439,11 +450,32 @@ typedef struct {
 #endif
 } birb_song;
 
+/* ---------- reverb send bus (mono Schroeder-lite: 4 damped combs + 2 allpass) ----------
+ * Matches the web editor's makeReverb() exactly: same delay lengths, same
+ * normalized-by-(1-fb) level so Size sets decay only, same 5.5 makeup, same
+ * tanh master saturation. Float math in the ±1 domain for bit-parity with JS. */
+#ifndef BIRB_NO_REVERB
+#define BIRB_REV_NCOMB 4
+#define BIRB_REV_NAP   2
+#define BIRB_REV_CMAX  1356   /* longest comb; all comb lines allocated at this size */
+#define BIRB_REV_AMAX  556    /* longest allpass */
+#endif
+
 /* ---------- player state ---------- */
 
 typedef struct {
     birb_song    *song;
     birb_channel  channels[BIRB_NUM_CHANNELS];
+
+#ifndef BIRB_NO_REVERB
+    /* reverb send bus state (see comment above); buffers are the dominant
+     * cost (~26 KB) but this engine is not size-constrained. */
+    float rev_comb[BIRB_REV_NCOMB][BIRB_REV_CMAX];
+    float rev_comb_lp[BIRB_REV_NCOMB];   /* per-comb damping lowpass memory */
+    int   rev_comb_pos[BIRB_REV_NCOMB];
+    float rev_ap[BIRB_REV_NAP][BIRB_REV_AMAX];
+    int   rev_ap_pos[BIRB_REV_NAP];
+#endif
 
     /* sequencer */
     int           order_pos;     /* current position in order list */

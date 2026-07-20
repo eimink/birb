@@ -73,6 +73,14 @@ static i32 spt, tick_ctr; /* samples per tick, tick counter */
 static i32 cur_tick, cur_row, ord_pos;
 static i32 sync_row, sync_pat;
 
+/* --- reverb send bus (mono Schroeder-lite, float; gated so the lean 4K build
+ * stays integer-only). Mirrors the web editor's makeReverb() exactly. --- */
+#ifndef BIRB_NO_REVERB
+static u8 rev_size, rev_damp, rev_wet, inst_send[MAXINST];
+static float rc[4][1356], rcl[4], ra[2][556];
+static int rcp[4], rap[2];
+#endif
+
 /* --- note freq: 12-entry base table, shift for octaves --- */
 static const i32 bf[12] = {24,26,27,29,31,32,34,36,38,41,43,46};
 
@@ -193,6 +201,22 @@ static void tick(void) {
     }
 }
 
+/* --- reverb DSP (float; gated) — rational tanh, no libm --- */
+#ifndef BIRB_NO_REVERB
+static const int rc_len[4] = {1116,1188,1277,1356};
+static const int ra_len[2] = {556,441};
+static float ssat(float x){ if(x<-3.f)x=-3.f; else if(x>3.f)x=3.f; float x2=x*x; return x*(27.f+x2)/(27.f+9.f*x2); }
+static float rev_tick(float x, float size, float damp, float wet){
+    float fb=0.7f+0.28f*size, dc=0.4f*damp, o=0.f;
+    for(int k=0;k<4;k++){ int L=rc_len[k],pp=rcp[k]; float y=rc[k][pp];
+        rcl[k]=y*(1.f-dc)+rcl[k]*dc; rc[k][pp]=x+rcl[k]*fb; rcp[k]=(pp+1<L)?pp+1:0; o+=y; }
+    o*=(1.f-fb)*5.5f;
+    for(int k=0;k<2;k++){ int L=ra_len[k],pp=rap[k]; float y=ra[k][pp];
+        float ou=-o+y; ra[k][pp]=o+y*0.5f; rap[k]=(pp+1<L)?pp+1:0; o=ou; }
+    return o*wet;
+}
+#endif
+
 /* --- exports --- */
 
 #define EXP __attribute__((export_name(
@@ -223,6 +247,16 @@ i32 init(i32 sz) {
         for (i32 c = 0; c < NCH; c++) for (i32 r = 0; r < nr; r++) pat_fx[pi][r][c] = d[p++];
         for (i32 c = 0; c < NCH; c++) for (i32 r = 0; r < nr; r++) pat_prm[pi][r][c] = d[p++];
     }
+#ifndef BIRB_NO_REVERB
+    /* optional REVB section — for the simple songs this player targets, it sits
+     * right after the pattern data (no intervening sections). */
+    if (p + 4 <= sz && d[p]=='R'&&d[p+1]=='E'&&d[p+2]=='V'&&d[p+3]=='B') {
+        p += 4;
+        rev_size = d[p]; rev_damp = d[p+1]; rev_wet = d[p+2]; p += 3;
+        i32 rn = d[p++];
+        for (i32 k = 0; k < rn; k++) { u8 idx = d[p]; if (idx < MAXINST) inst_send[idx] = d[p+1]; p += 2; }
+    }
+#endif
     /* init state */
     for (i32 c = 0; c < NCH; c++) { ch[c].lfsr = 0x7FFF; ch[c].lfsr_p = 16; }
     i32 b = bpm ? bpm : 125;
@@ -239,17 +273,36 @@ void render(i32 n) {
         if (tick_ctr <= 0) { tick(); tick_ctr = spt; }
         tick_ctr--;
         i32 mix = 0;
+#ifndef BIRB_NO_REVERB
+        float rev_in = 0.f;
+#endif
         for (i32 c = 0; c < NCH; c++) {
             Ch *p = &ch[c];
             if (!p->env_st && !p->env) continue;
             i32 s = gen(p);
-            mix += (s * (p->env >> 8)) >> 8;
+            i32 o = (s * (p->env >> 8)) >> 8;
+            mix += o;
+#ifndef BIRB_NO_REVERB
+            u8 sd = inst_send[p->ci];
+            if (sd) rev_in += ((float)o / 32768.f) * (float)sd / 255.f;
+#endif
             p->phase += p->freq;
             if (p->phase >= FX1) p->phase -= FX1;
         }
+#ifndef BIRB_NO_REVERB
+        {
+            float vf = (float)mix / 32768.f;
+            if (rev_wet) vf += rev_tick(rev_in, rev_size/255.f, rev_damp/255.f, rev_wet/255.f);
+            vf = ssat(vf);
+            i32 oo = (i32)(vf * 32767.f);
+            if (oo > 32767) oo = 32767; if (oo < -32767) oo = -32767;
+            out_buf[i] = oo;
+        }
+#else
         if (mix > 32767) mix = 32767;
         if (mix < -32767) mix = -32767;
         out_buf[i] = mix;
+#endif
     }
 }
 

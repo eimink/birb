@@ -11,6 +11,13 @@
  * This avoids AudioWorklet entirely (no extra file, no COOP/COEP).
  * For a 3-min song at 44100Hz mono 32bit: ~10MB RAM. Fine for a demo.
  */
+//<REV>
+// Reverb-send code is fenced in //<REV> … //</REV> markers (an optional
+// //<REV-else> supplies the lean alternative). This checked-in file IS the
+// with-reverb source and runs as-is; strip_reverb.py deletes the REV blocks
+// (and uncomments any REV-else) to emit birb4k.norev.js, a lean no-reverb
+// build. Marker lines must be exactly //<REV>, //<REV-else>, //</REV>.
+//</REV>
 function birb4k(buf) {
     let d = new Uint8Array(buf), p = 8,
         bpm = d[4], tpr = d[5], ni = d[6], np = d[7],
@@ -35,6 +42,44 @@ function birb4k(buf) {
         for (let c = 0; c < NCH; c++) { pf[i][c] = []; for (let r = 0; r < nr; r++) pf[i][c][r] = d[p++]; }
         for (let c = 0; c < NCH; c++) { pp[i][c] = []; for (let r = 0; r < nr; r++) pp[i][c][r] = d[p++]; }
     }
+
+    //<REV>
+    // optional REVB section (sits right after pattern data):
+    // 'R','E','V','B', size, damp, wet, count, count×[inst, send]
+    let rSize = 0, rDamp = 0, rWet = 0, IS = [], RV = mkRev();
+    if (d[p] == 82 && d[p + 1] == 69 && d[p + 2] == 86 && d[p + 3] == 66) {
+        p += 4;
+        rSize = d[p++] / 255; rDamp = d[p++] / 255; rWet = d[p++] / 255;
+        for (let rn = d[p++], k = 0; k < rn; k++) { IS[d[p]] = d[p + 1]; p += 2; }
+    }
+    // mono Schroeder-lite reverb — mirror of editor.html makeReverb()
+    function mkRev() {
+        return {
+            cb: [new Float32Array(1116), new Float32Array(1188), new Float32Array(1277), new Float32Array(1356)],
+            cp: [0, 0, 0, 0], cl: [0, 0, 0, 0],
+            ab: [new Float32Array(556), new Float32Array(441)], ap: [0, 0],
+            tick: function (x, size, damp, wet) {
+                let fb = 0.7 + 0.28 * size, dc = 0.4 * damp, o = 0;
+                for (let k = 0; k < 4; k++) {
+                    let b = this.cb[k], q = this.cp[k], y = b[q];
+                    this.cl[k] = y * (1 - dc) + this.cl[k] * dc;
+                    b[q] = x + this.cl[k] * fb;
+                    this.cp[k] = q + 1 < b.length ? q + 1 : 0;
+                    o += y;
+                }
+                o *= (1 - fb) * 5.5;
+                for (let k = 0; k < 2; k++) {
+                    let b = this.ab[k], q = this.ap[k], y = b[q];
+                    let ot = -o + y;
+                    b[q] = o + y * 0.5;
+                    this.ap[k] = q + 1 < b.length ? q + 1 : 0;
+                    o = ot;
+                }
+                return o * wet;
+            }
+        };
+    }
+    //</REV>
 
     // note freq: base octave, shift for higher
     let bf = [24, 26, 27, 29, 31, 32, 34, 36, 38, 41, 43, 46];
@@ -71,6 +116,9 @@ function birb4k(buf) {
                     ch[c].es = 1; ch[c].en = 0;
                     ch[c].pe = ins.pe; ch[c].pt = ins.pl;
                     ch[c].a1 = ins.a1; ch[c].a2 = ins.a2; ch[c].at = 0; ch[c].sl = 0;
+                    //<REV>
+                    ch[c].rs = IS[ii] || 0; // reverb send for this channel's instrument
+                    //</REV>
                     if (ins.w >= 3) { ch[c].lf = 0x7FFF; ch[c].lc = 0; ch[c].lp = 256 >> (semi / 12) || 1; }
                 }
             }
@@ -111,6 +159,9 @@ function birb4k(buf) {
         if (tCtr <= 0) { doTick(); tCtr = spt; }
         tCtr--;
         let mix = 0;
+        //<REV>
+        let revIn = 0;
+        //</REV>
         for (let c = 0; c < NCH; c++) {
             let C = ch[c];
             if (!C.es && !C.en) continue;
@@ -123,10 +174,19 @@ function birb4k(buf) {
                 if (C.lc >= C.lp) { C.lc = 0; let b = (C.lf ^ (C.lf >> 1)) & 1; C.lf = (C.lf >> 1) | (b << 14); }
                 s = (C.lf & 1) ? .5 : -.5;
             }
-            mix += s * C.en / FX;
+            let cv = s * C.en / FX;
+            mix += cv;
+            //<REV>
+            if (C.rs) revIn += cv * C.rs / 255;
+            //</REV>
             C.ph = (C.ph + C.fr) % FX;
         }
-        out[i] = mix > 1 ? 1 : mix < -1 ? -1 : mix;
+        //<REV>
+        mix += RV.tick(revIn, rSize, rDamp, rWet);
+        out[i] = Math.tanh(mix);
+        //<REV-else>
+        //out[i] = mix > 1 ? 1 : mix < -1 ? -1 : mix;
+        //</REV>
 
         // store sync data at row boundaries
         if (i % spt == 0) syncData[i / spt | 0] = { r: cRow, p: oPos };

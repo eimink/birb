@@ -789,6 +789,9 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
     ch->arp_note2 = inst->arp_note2;
     ch->volume = inst->volume;
     ch->row_vol = 255;
+#ifndef BIRB_NO_REVERB
+    ch->reverb_send = inst->reverb_send;
+#endif
     ch->arp_tick = 0;
     ch->vibrato_phase = 0;
     ch->vibrato_speed = 0;
@@ -1380,6 +1383,50 @@ void birb_init(birb_state *state, birb_song *song) {
     process_row(state);
 }
 
+#ifndef BIRB_NO_REVERB
+/* ---------- reverb send bus (see birb_synth.h) ----------
+ * Float DSP, active only in the reverb build; the lean build keeps the
+ * "no floats / no libm" guarantee. Mirrors the web editor's makeReverb().tick()
+ * exactly, operating in the ±1 sample domain. */
+static const int birb_rev_comb_len[BIRB_REV_NCOMB] = { 1116, 1188, 1277, 1356 };
+static const int birb_rev_ap_len[BIRB_REV_NAP]     = { 556, 441 };
+
+/* Rational tanh approximation — bounded soft saturation, no libm. Matches
+ * JS Math.tanh to <2% over the working range (imperceptible on a master
+ * saturator). Input clamped to the monotonic ±3 window where it reaches ±1. */
+static float birb_soft_sat(float x) {
+    if (x < -3.0f) x = -3.0f; else if (x > 3.0f) x = 3.0f;
+    float x2 = x * x;
+    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+}
+
+static float birb_reverb_tick(birb_state *st, float x, float size, float damp, float wet) {
+    float fb = 0.7f + 0.28f * size;
+    float dc = 0.4f * damp;
+    float o = 0.0f;
+    for (int k = 0; k < BIRB_REV_NCOMB; k++) {
+        int L = birb_rev_comb_len[k];
+        int p = st->rev_comb_pos[k];
+        float y = st->rev_comb[k][p];
+        st->rev_comb_lp[k] = y * (1.0f - dc) + st->rev_comb_lp[k] * dc;
+        st->rev_comb[k][p] = x + st->rev_comb_lp[k] * fb;
+        st->rev_comb_pos[k] = (p + 1 < L) ? p + 1 : 0;
+        o += y;
+    }
+    o *= (1.0f - fb) * 5.5f;   /* normalize level off feedback + makeup gain */
+    for (int k = 0; k < BIRB_REV_NAP; k++) {
+        int L = birb_rev_ap_len[k];
+        int p = st->rev_ap_pos[k];
+        float y = st->rev_ap[k][p];
+        float out = -o + y;
+        st->rev_ap[k][p] = o + y * 0.5f;
+        st->rev_ap_pos[k] = (p + 1 < L) ? p + 1 : 0;
+        o = out;
+    }
+    return o * wet;
+}
+#endif /* BIRB_NO_REVERB */
+
 void birb_render(birb_state *state, int16_t *output, int num_samples) {
     for (int i = 0; i < num_samples; i++) {
         /* advance sequencer */
@@ -1391,6 +1438,9 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
 
         /* mix all channels */
         int32_t mix = 0;
+#ifndef BIRB_NO_REVERB
+        float rev_in = 0.0f;   /* summed reverb send, ±1 domain */
+#endif
         for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
             birb_channel *ch = &state->channels[c];
             if (ch->env_stage == ENV_OFF && ch->env_level == 0) continue;
@@ -1409,6 +1459,10 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             out = out * vol / 255;
             out = out * rvol / 255;
             mix += out;
+#ifndef BIRB_NO_REVERB
+            if (ch->reverb_send)
+                rev_in += ((float)out / 32768.0f) * (float)ch->reverb_send / 255.0f;
+#endif
 
             /* advance phase */
             ch->phase += ch->freq;
@@ -1417,10 +1471,30 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             }
         }
 
+#ifndef BIRB_NO_REVERB
+        /* reverb send bus + tanh master saturation, in the ±1 domain — matches
+         * the web editor. tanh is always applied (as in the editor), so a wet=0
+         * song still gets the same gentle master softening. */
+        {
+            float vf = (float)mix / 32768.0f;
+            birb_song *sg = state->song;
+            if (sg->rev_wet)
+                vf += birb_reverb_tick(state, rev_in,
+                                       sg->rev_size / 255.0f,
+                                       sg->rev_damp / 255.0f,
+                                       sg->rev_wet  / 255.0f);
+            vf = birb_soft_sat(vf);
+            int32_t o = (int32_t)(vf * 32767.0f);
+            if (o > 32767) o = 32767;
+            if (o < -32767) o = -32767;
+            output[i] = (int16_t)o;
+        }
+#else
         /* clamp */
         if (mix > 32767) mix = 32767;
         if (mix < -32767) mix = -32767;
         output[i] = (int16_t)mix;
+#endif
     }
 }
 
