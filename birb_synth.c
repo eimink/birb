@@ -125,146 +125,131 @@ static int16_t gen_basic(birb_channel *ch) {
  *
  * raw is the carrier op0's pre-level sine ×FX_ONE; it goes into prev_out for
  * feedback. The 2-op path (num_ops < 4) is the simpler op1→op0 with feedback. */
+/* Float sine matching the editor's sinApprox() bit-for-bit (same Remez
+ * coefficients, same first-quadrant folds). One cycle = FX_ONE (== editor F).
+ * Returns [-1, 1]. Range-reduces any real phase to [0, FX_ONE) without libm:
+ * p = phase - FX_ONE*floor(phase/FX_ONE), floor done via int cast + adjust. */
+static double fm_sin(double phase) {
+    double q = phase * (1.0 / (double)FX_ONE);
+    int fq = (int)q;
+    if (q < 0.0) fq -= 1;                   /* floor for negative q */
+    double p = phase - (double)fq * (double)FX_ONE;
+    int neg = p >= (double)FX_ONE * 0.5;
+    double t = neg ? p - (double)FX_ONE * 0.5 : p;
+    if (t > (double)FX_ONE * 0.25) t = (double)FX_ONE * 0.5 - t;
+    double x = t * (4.0 / (double)FX_ONE);
+    if (x > 1.0) x = 1.0;
+    double x2 = x * x;
+    double y = x * (1.5707288 - x2 * (0.6432292 - x2 * 0.0727778));
+    if (y > 1.0) y = 1.0;
+    return neg ? -y : y;
+}
+
+/* FM is computed in float, not fixed-point. High-feedback 4-op timbres (the
+ * braaams) form a nonlinear feedback loop that a fixed16 rounding budget pushes
+ * into a Nyquist limit-cycle the editor's float math never enters — so the C
+ * engine sounded audibly different. Floats keep the loop bit-close to the
+ * editor. Levels lN are in [0, FX_ONE] (== editor fmL*fmEnv/F); carrier sine is
+ * [-1,1], scaled by lN/FX_ONE for audio. prev_out holds raw*FX_ONE for feedback. */
 static int16_t gen_fm(birb_channel *ch) {
-    /* Cache effective per-op levels (lvl × env), all in [0, FX_ONE]. */
-    fixed16 lvl[4];
-    for (int i = 0; i < 4; i++)
-        lvl[i] = (fixed16)(((int64_t)ch->u.fm.op_lvl[i] * ch->u.fm.op_env[i]) >> FX_SHIFT);
+    double l0 = (double)ch->u.fm.op_lvl[0] * (double)ch->u.fm.op_env[0] / (double)FX_ONE;
+    double l1 = (double)ch->u.fm.op_lvl[1] * (double)ch->u.fm.op_env[1] / (double)FX_ONE;
+    double l2 = (double)ch->u.fm.op_lvl[2] * (double)ch->u.fm.op_env[2] / (double)FX_ONE;
+    double l3 = (double)ch->u.fm.op_lvl[3] * (double)ch->u.fm.op_env[3] / (double)FX_ONE;
+    double mi = (double)ch->u.fm.mod_index / 255.0;
+    double fb = ch->u.fm.feedback
+        ? ch->u.fm.prev_out * (double)ch->u.fm.feedback / 256.0
+        : 0.0;
 
-    /* mi in [0, 1] fixed-point: numerator = mod_index, denominator = 255.
-     * We keep the divide explicit at use sites (mirrors JS `mi = fmMi/255`). */
-    int32_t mi = ch->u.fm.mod_index;
+    double ph0 = (double)ch->u.fm.op_phase[0];
+    double ph1 = (double)ch->u.fm.op_phase[1];
+    double ph2 = (double)ch->u.fm.op_phase[2];
+    double ph3 = (double)ch->u.fm.op_phase[3];
 
-    /* fb is in raw modulator units (×FX_ONE). prev_out is car_raw × FX_ONE. */
-    fixed16 fb = ch->u.fm.feedback
-        ? (fixed16)((int32_t)ch->u.fm.prev_out * ch->u.fm.feedback / 256)
-        : 0;
-
-    fixed16 raw, s;
+    double raw, s;
     int nops = ch->u.fm.num_ops < 4 ? 2 : 4;
 
     if (nops == 4) {
-        fixed16 ph0 = ch->u.fm.op_phase[0];
-        fixed16 ph1 = ch->u.fm.op_phase[1];
-        fixed16 ph2 = ch->u.fm.op_phase[2];
-        fixed16 ph3 = ch->u.fm.op_phase[3];
+        double s1, s2, s3, r1, r2, r3;
         switch (ch->u.fm.algorithm & 7) {
-            case 0: {
-                /* 3→2→1→0 */
-                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
-                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2 + s3) * lvl[2]) >> FX_SHIFT);
-                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s2) * lvl[1]) >> FX_SHIFT);
-                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
-                raw = birb_sin_approx(ph0 + s1m);
-                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+            case 0: /* 3->2->1->0 */
+                s3 = fm_sin(ph3 + fb) * l3;
+                s2 = fm_sin(ph2 + s3) * l2;
+                s1 = fm_sin(ph1 + s2) * l1;
+                raw = fm_sin(ph0 + s1 * mi);
+                s = raw * l0 / (double)FX_ONE;
                 break;
-            }
-            case 1: {
-                /* 3+2 → 1 → 0 */
-                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
-                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
-                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s3 + s2) * lvl[1]) >> FX_SHIFT);
-                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
-                raw = birb_sin_approx(ph0 + s1m);
-                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+            case 1: /* 3+2 -> 1 -> 0 */
+                s3 = fm_sin(ph3 + fb) * l3;
+                s2 = fm_sin(ph2) * l2;
+                s1 = fm_sin(ph1 + s3 + s2) * l1;
+                raw = fm_sin(ph0 + s1 * mi);
+                s = raw * l0 / (double)FX_ONE;
                 break;
-            }
-            case 2: {
-                /* 3→2→0, 1→0 */
-                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
-                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2 + s3) * lvl[2]) >> FX_SHIFT);
-                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
-                fixed16 mod = (fixed16)((((int64_t)s2 + s1) * mi) / 255);
-                raw = birb_sin_approx(ph0 + mod);
-                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+            case 2: /* 3->2->0, 1->0 */
+                s3 = fm_sin(ph3 + fb) * l3;
+                s2 = fm_sin(ph2 + s3) * l2;
+                s1 = fm_sin(ph1) * l1;
+                raw = fm_sin(ph0 + (s2 + s1) * mi);
+                s = raw * l0 / (double)FX_ONE;
                 break;
-            }
-            case 3: {
-                /* 3→1→0, 2→0 */
-                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
-                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1 + s3) * lvl[1]) >> FX_SHIFT);
-                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
-                fixed16 mod = (fixed16)((((int64_t)s1 + s2) * mi) / 255);
-                raw = birb_sin_approx(ph0 + mod);
-                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+            case 3: /* 3->1->0, 2->0 */
+                s3 = fm_sin(ph3 + fb) * l3;
+                s1 = fm_sin(ph1 + s3) * l1;
+                s2 = fm_sin(ph2) * l2;
+                raw = fm_sin(ph0 + (s1 + s2) * mi);
+                s = raw * l0 / (double)FX_ONE;
                 break;
-            }
-            case 4: {
-                /* 3,2,1 → 0 (three modulators on one carrier) */
-                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
-                fixed16 s2 = (fixed16)(((int64_t)birb_sin_approx(ph2)      * lvl[2]) >> FX_SHIFT);
-                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
-                fixed16 mod = (fixed16)((((int64_t)s3 + s2 + s1) * mi) / 255);
-                raw = birb_sin_approx(ph0 + mod);
-                s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+            case 4: /* 3,2,1 -> 0 (three modulators on one carrier) */
+                s3 = fm_sin(ph3 + fb) * l3;
+                s2 = fm_sin(ph2) * l2;
+                s1 = fm_sin(ph1) * l1;
+                raw = fm_sin(ph0 + (s3 + s2 + s1) * mi);
+                s = raw * l0 / (double)FX_ONE;
                 break;
-            }
-            case 5: {
-                /* 3→2 (carrier), 1→0 (carrier). Sum then ÷ 2. */
-                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
-                fixed16 s1 = (fixed16)(((int64_t)birb_sin_approx(ph1)      * lvl[1]) >> FX_SHIFT);
-                fixed16 s3m = (fixed16)(((int64_t)s3 * mi) / 255);
-                fixed16 s1m = (fixed16)(((int64_t)s1 * mi) / 255);
-                fixed16 r2 = birb_sin_approx(ph2 + s3m);
-                raw = birb_sin_approx(ph0 + s1m);
-                /* (r2*l2 + raw*l0) / FX_ONE / 2 */
-                int64_t sum = (int64_t)r2 * lvl[2] + (int64_t)raw * lvl[0];
-                s = (fixed16)((sum >> FX_SHIFT) >> 1);
+            case 5: /* 3->2 (carrier), 1->0 (carrier). Sum then / 2. */
+                s3 = fm_sin(ph3 + fb) * l3;
+                s1 = fm_sin(ph1) * l1;
+                r2 = fm_sin(ph2 + s3 * mi);
+                raw = fm_sin(ph0 + s1 * mi);
+                s = (r2 * l2 + raw * l0) / (double)FX_ONE * 0.5;
                 break;
-            }
-            case 6: {
-                /* 3→2 (carrier), 1, 0 (3 carriers). Sum ÷ 3. */
-                fixed16 s3 = (fixed16)(((int64_t)birb_sin_approx(ph3 + fb) * lvl[3]) >> FX_SHIFT);
-                fixed16 s3m = (fixed16)(((int64_t)s3 * mi) / 255);
-                fixed16 r2 = birb_sin_approx(ph2 + s3m);
-                fixed16 r1 = birb_sin_approx(ph1);
-                raw = birb_sin_approx(ph0);
-                int64_t sum = (int64_t)r2 * lvl[2] + (int64_t)r1 * lvl[1] + (int64_t)raw * lvl[0];
-                s = (fixed16)((sum >> FX_SHIFT) / 3);
+            case 6: /* 3->2 (carrier), 1, 0 (3 carriers). Sum / 3. */
+                s3 = fm_sin(ph3 + fb) * l3;
+                r2 = fm_sin(ph2 + s3 * mi);
+                r1 = fm_sin(ph1);
+                raw = fm_sin(ph0);
+                s = (r2 * l2 + r1 * l1 + raw * l0) / (double)FX_ONE / 3.0;
                 break;
-            }
             case 7:
-            default: {
-                /* All 4 parallel carriers. Sum ÷ 4. */
-                fixed16 r3 = birb_sin_approx(ph3 + fb);
-                fixed16 r2 = birb_sin_approx(ph2);
-                fixed16 r1 = birb_sin_approx(ph1);
-                raw = birb_sin_approx(ph0);
-                int64_t sum = (int64_t)r3 * lvl[3] + (int64_t)r2 * lvl[2]
-                            + (int64_t)r1 * lvl[1] + (int64_t)raw * lvl[0];
-                s = (fixed16)((sum >> FX_SHIFT) >> 2);
+            default: /* all 4 parallel carriers. Sum / 4. */
+                r3 = fm_sin(ph3 + fb);
+                r2 = fm_sin(ph2);
+                r1 = fm_sin(ph1);
+                raw = fm_sin(ph0);
+                s = (r3 * l3 + r2 * l2 + r1 * l1 + raw * l0) / (double)FX_ONE * 0.25;
                 break;
-            }
         }
     } else {
-        /* 2-op: op1 → op0 with feedback. Match JS:
-         *   modOut = sin(ph1) * (mi * l1 / 255);   if (fb) modOut += prev*fb/256
-         *   carRaw = sin(ph0 + modOut);   prev = carRaw * FX_ONE
-         *   s      = carRaw * l0 / FX_ONE */
-        fixed16 mod_raw = birb_sin_approx(ch->u.fm.op_phase[1]);
-        /* mod_raw is in [-FX_ONE, FX_ONE]; the JS does sin(...) (in [-1,1])
-         * times (mi * l1 / 255) where l1 is in [0,1]. In fixed: l1=lvl[1]/FX_ONE,
-         * so the JS amount is mod_raw_unit * mi/255 * l1/FX_ONE ; in fixed16
-         * units we want (mod_raw * mi / 255) * lvl[1] / FX_ONE. */
-        int64_t mod = ((int64_t)mod_raw * mi) / 255;
-        mod = (mod * lvl[1]) >> FX_SHIFT;
-        if (ch->u.fm.feedback) mod += fb;
-        raw = birb_sin_approx(ch->u.fm.op_phase[0] + (fixed16)mod);
-        s = (fixed16)(((int64_t)raw * lvl[0]) >> FX_SHIFT);
+        /* 2-op: op1 -> op0 with feedback. Matches editor's 2-op path:
+         *   mo = sin(ph1) * (mod_index * l1 / 255);  if (fb) mo += prev*fb/256
+         *   raw = sin(ph0 + mo);   prev = raw*FX_ONE;   s = raw*l0/FX_ONE */
+        double mo = fm_sin(ph1) * ((double)ch->u.fm.mod_index * l1 / 255.0);
+        if (ch->u.fm.feedback) mo += fb;
+        raw = fm_sin(ph0 + mo);
+        s = raw * l0 / (double)FX_ONE;
     }
 
-    /* prev_out tracks the raw carrier sine × FX_ONE so feedback maths matches
-     * across 2-op and 4-op (raw is already in [-FX_ONE, FX_ONE], so multiply
-     * by FX_ONE to match the JS `C.fmPrev = raw * F`). */
-    ch->u.fm.prev_out = raw;
+    /* feedback memory: raw carrier sine * FX_ONE (editor `C.fmPrev = raw * F`) */
+    ch->u.fm.prev_out = raw * (double)FX_ONE;
 
-    /* advance phases for all four ops (cheap for 2-op since op2/op3 freqs are
-     * either 0 or unused; mirrors the editor's unconditional 4-iter loop) */
+    /* advance integer phase accumulators for all four ops (mirrors the editor's
+     * unconditional 4-iter loop; op2/op3 freqs are 0 or unused in 2-op) */
     for (int i = 0; i < 4; i++)
         ch->u.fm.op_phase[i] = (ch->u.fm.op_phase[i] + ch->u.fm.op_freq[i]) & FX_MASK;
 
-    /* Convert s (∈ [-FX_ONE, FX_ONE]) to int16 range. */
-    int32_t out = ((int32_t)s * 32767) >> FX_SHIFT;
+    /* quantise s (in [-1, 1]) to int16; the mixer applies envelope/volume */
+    int32_t out = (int32_t)(s * 32767.0 + (s >= 0.0 ? 0.5 : -0.5));
     if (out > 32767) out = 32767;
     if (out < -32767) out = -32767;
     return (int16_t)out;
@@ -326,6 +311,16 @@ static inline uint16_t drum_noise(birb_channel *ch) {
     return v;
 }
 
+/* Replicate JavaScript's `(prod) >> sh`: the editor computes drum filter/sweep
+ * steps in JS, where `>>` first coerces its operand to a 32-bit signed int
+ * (ToInt32 — wraps mod 2^32). For large products (e.g. the hat HP filter's
+ * y*coeff can exceed 2^31) that wrap is audible, and it IS the benchmark
+ * sound. An int64 shift would not wrap, so drums drifted from the editor —
+ * match the wrap exactly. */
+static inline int32_t js_shr(int64_t prod, int sh) {
+    return (int32_t)(uint32_t)prod >> sh;
+}
+
 /* Algorithmic drums. Six flavours, four unique generators (TOM uses KICK code
  * with different trigger-time params; CRASH uses HAT code similarly).
  *
@@ -364,7 +359,7 @@ static int16_t generate_drum(birb_channel *ch) {
         int32_t gap = p - t;
         fixed16 rate = ch->base_duty;
         if (rate < 16) rate = 16;
-        p -= (fixed16)(((int64_t)gap * rate) >> 20);
+        p -= js_shr((int64_t)gap * rate, 20);   /* JS >> semantics (see js_shr) */
         ch->u.drum.pitch_env = p;
         ch->phase += p;
         ch->phase &= FX_MASK;
@@ -418,7 +413,7 @@ static int16_t generate_drum(birb_channel *ch) {
         /* One-pole HP: y = x - state, state += coeff*y */
         fixed16 hp = ch->u.drum.pitch_env_target;
         int32_t y = src - ch->u.drum.bq_z1[0];
-        ch->u.drum.bq_z1[0] += (int32_t)(((int64_t)y * hp) >> FX_SHIFT);
+        ch->u.drum.bq_z1[0] += js_shr((int64_t)y * hp, FX_SHIFT);   /* JS >> wrap */
         out = y;
         if (dt == 5) {
             /* CRASH amp shimmer via slow LFO. Uses ttl as phase. */
@@ -821,15 +816,17 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
              * Math.round(base*ratio); a floor here is 1 unit low for non-integer
              * ratios and drifts the FM operators out of phase over time. */
             ch->u.fm.op_freq[i] = (fixed16)((((uint64_t)ch->base_freq * ((ri << 4) | (rf & 0xF))) + 8) >> 4);
-            /* Static per-op level (refreshed live in fm_op_envelope_tick). */
-            ch->u.fm.op_lvl[i] = (fixed16)(FX_ONE * (int32_t)inst->fm.ops[i].level / 255);
+            /* Static per-op level (refreshed live in fm_op_envelope_tick).
+             * Round (+127 before /255) to match the editor's Math.round(F*lv/255);
+             * a floor here is 1 unit low and desyncs high-feedback FM. */
+            ch->u.fm.op_lvl[i] = (fixed16)((FX_ONE * (int32_t)inst->fm.ops[i].level + 127) / 255);
             /* Per-op ADSR start: a==0 jumps to DECAY at peak so the first
              * tick isn't silent (mirrors fmRender4 trigger in editor). */
             if (inst->fm.ops[i].adsr.attack == 0) {
-                ch->u.fm.op_env[i]   = FX_ONE;
+                ch->u.fm.op_env[i]   = (float)FX_ONE;
                 ch->u.fm.op_stage[i] = ENV_DECAY;
             } else {
-                ch->u.fm.op_env[i]   = 0;
+                ch->u.fm.op_env[i]   = 0.0f;
                 ch->u.fm.op_stage[i] = ENV_ATTACK;
             }
         }
@@ -1083,23 +1080,31 @@ static void fm_op_envelope_tick(birb_channel *ch, birb_instrument *inst) {
      * them set at trigger time so existing songs don't change pitch.) */
     for (int i = 0; i < 4; i++) {
         birb_fm_op *op = &inst->fm.ops[i];
-        ch->u.fm.op_lvl[i] = (fixed16)(FX_ONE * (int32_t)op->level / 255);
+        /* round (not floor) to match editor Math.round(F*level/255) */
+        ch->u.fm.op_lvl[i] = (fixed16)((FX_ONE * (int32_t)op->level + 127) / 255);
         birb_env_stage st = ch->u.fm.op_stage[i];
-        fixed16 en = ch->u.fm.op_env[i];
+        /* double en, double increments — the editor accumulates F/(a+1) etc. as
+         * float64; a floored integer ramp (or even float32 here) drifts op
+         * levels by ~1 ULP that high-feedback FM amplifies into an audible spike
+         * on the lowest notes. Keep every step in double to match the editor. */
+        double en = ch->u.fm.op_env[i];
         switch (st) {
             case ENV_ATTACK:
-                en += FX_ONE / (op->adsr.attack + 1);
-                if (en >= FX_ONE) { en = FX_ONE; st = ENV_DECAY; }
+                en += (double)FX_ONE / (op->adsr.attack + 1);
+                if (en >= (double)FX_ONE) { en = (double)FX_ONE; st = ENV_DECAY; }
                 break;
             case ENV_DECAY: {
-                fixed16 target = FX_ONE * op->adsr.sustain / 255;
-                en -= (FX_ONE - target) / (op->adsr.decay + 1);
+                /* decay target is floored (editor `(F*os/255)|0`), then approached
+                 * with a double step */
+                int32_t tgt = FX_ONE * (int32_t)op->adsr.sustain / 255;
+                double target = (double)tgt;
+                en -= ((double)FX_ONE - target) / (op->adsr.decay + 1);
                 if (en <= target) { en = target; st = ENV_SUSTAIN; }
                 break;
             }
             case ENV_RELEASE:
                 en -= en / (op->adsr.release + 1);
-                if (en < 64) { en = 0; st = ENV_OFF; }
+                if (en < 64.0) { en = 0.0; st = ENV_OFF; }
                 break;
             case ENV_SUSTAIN:
             case ENV_OFF:
@@ -1142,6 +1147,20 @@ static void tick_effects(birb_channel *ch, birb_song *song) {
         if (ch->base_freq < 1) ch->base_freq = 1;
     }
 
+    /* tone portamento — slide base toward target. MUST run before arp/vibrato:
+     * the editor updates C.b here, then derives C.f (and the FM op freqs) from
+     * it. Doing arp/vibrato first and then re-assigning freq from the slid base
+     * (the old order) discarded vibrato and desynced porta+vibrato FM notes. */
+    if (ch->porta_target > 0 && ch->porta_speed > 0) {
+        if (ch->base_freq < ch->porta_target) {
+            ch->base_freq += ch->porta_speed;
+            if (ch->base_freq > ch->porta_target) ch->base_freq = ch->porta_target;
+        } else if (ch->base_freq > ch->porta_target) {
+            ch->base_freq -= ch->porta_speed;
+            if (ch->base_freq < ch->porta_target) ch->base_freq = ch->porta_target;
+        }
+    }
+
     /* arpeggio */
     if (ch->arp_note1 != 0 || ch->arp_note2 != 0) {
         int note = ch->base_note;
@@ -1156,32 +1175,31 @@ static void tick_effects(birb_channel *ch, birb_song *song) {
         ch->freq = ch->base_freq;
     }
 
-    /* vibrato */
+    /* vibrato — small sawtooth LFO, matching the editor exactly:
+     *   C.f += ((C.vp & 0xFFFF)*4 - 2*F  >> 8) * depth / F
+     * The LFO spans only [-512, 511] before the depth scale (the >>8), so the
+     * pitch wobble is subtle (< ~2 units). The old code used a full-scale
+     * birb_sin_approx (~128x too deep, wrong shape), which turned vibratoed FM
+     * notes into audible "wubwub". freq_f keeps the fractional result so the FM
+     * op-freq round matches the editor's round(C.f * ratio); basic-wave phase
+     * takes the integer part. */
+    double freq_f = (double)ch->freq;
     if (ch->vibrato_depth > 0) {
-        fixed16 vib = birb_sin_approx(ch->vibrato_phase);
-        ch->freq += FX_MUL(vib, ch->vibrato_depth);
+        int32_t lfo = (((int32_t)(ch->vibrato_phase & 0xFFFF) * 4) - (FX_ONE * 2)) >> 8;
+        double vib = (double)lfo * (double)ch->vibrato_depth / (double)FX_ONE;
+        freq_f += vib;
+        ch->freq += (fixed16)vib;
         ch->vibrato_phase += ch->vibrato_speed;
     }
 
-    /* tremolo — cache modulation amount for mixer */
+    /* tremolo — same small sawtooth LFO into the mixer's amplitude mod (editor:
+     * C.tm = LFO, then en = C.e*(1 + C.tm/F)). Tiny by construction. */
     if (ch->tremolo_depth > 0) {
-        fixed16 tr = birb_sin_approx(ch->tremolo_phase);
-        ch->tremolo_mod = FX_MUL(tr, ch->tremolo_depth);
+        int32_t lfo = (((int32_t)(ch->tremolo_phase & 0xFFFF) * 4) - (FX_ONE * 2)) >> 8;
+        ch->tremolo_mod = (fixed16)((int64_t)lfo * ch->tremolo_depth / FX_ONE);
         ch->tremolo_phase += ch->tremolo_speed;
     } else {
         ch->tremolo_mod = 0;
-    }
-
-    /* tone portamento — slide toward target */
-    if (ch->porta_target > 0 && ch->porta_speed > 0) {
-        if (ch->base_freq < ch->porta_target) {
-            ch->base_freq += ch->porta_speed;
-            if (ch->base_freq > ch->porta_target) ch->base_freq = ch->porta_target;
-        } else if (ch->base_freq > ch->porta_target) {
-            ch->base_freq -= ch->porta_speed;
-            if (ch->base_freq < ch->porta_target) ch->base_freq = ch->porta_target;
-        }
-        if (!(ch->arp_note1 || ch->arp_note2)) ch->freq = ch->base_freq;
     }
 
     /* envelope */
@@ -1199,7 +1217,11 @@ static void tick_effects(birb_channel *ch, birb_song *song) {
         for (int i = 0; i < 4; i++) {
             uint32_t ri = inst->fm.ops[i].ratio_i;
             uint32_t rf = inst->fm.ops[i].ratio_f;
-            ch->u.fm.op_freq[i] = (fixed16)(((uint64_t)ch->freq * ((ri << 4) | (rf & 0xF))) >> 4);
+            /* round (match editor's Math.round(C.f * C.fmR[i])), computed from
+             * the fractional freq_f so vibrato reaches the operators exactly as
+             * in the editor. fmR = (ri*16+rf)/16 (exact, /16 is a power of two). */
+            double fmR = (double)((ri << 4) | (rf & 0xF)) / 16.0;
+            ch->u.fm.op_freq[i] = (fixed16)(freq_f * fmR + 0.5);
         }
         fm_op_envelope_tick(ch, inst);
     }
@@ -1458,10 +1480,15 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
                 rev_in += ((float)out / 32768.0f) * (float)ch->reverb_send / 255.0f;
 #endif
 
-            /* advance phase */
-            ch->phase += ch->freq;
-            if (ch->phase >= FX_ONE) {
-                ch->phase -= FX_ONE;
+            /* advance phase — but NOT for drums or samples, which own their
+             * phase/position (the kick sweeps ch->phase itself, the snare adds
+             * ch->freq itself, samples use sample_pos). Advancing here too would
+             * double-step them. Mirrors the editor's `if (C.w!==5 && C.w!==8)`. */
+            if (ch->synth_type != SYNTH_DRUM && ch->synth_type != SYNTH_SAMPLE) {
+                ch->phase += ch->freq;
+                if (ch->phase >= FX_ONE) {
+                    ch->phase -= FX_ONE;
+                }
             }
         }
 

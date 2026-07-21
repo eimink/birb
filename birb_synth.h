@@ -297,10 +297,19 @@ typedef struct {
         struct {
             fixed16        op_phase[4]; /* per-op phase accumulator 0..FX_ONE */
             fixed16        op_freq[4];  /* per-op phase increment */
-            fixed16        op_env[4];   /* per-op envelope level 0..FX_ONE */
+            double         op_env[4];   /* per-op envelope level 0..FX_ONE. double so the
+                                         * A/D/R ramps accumulate like the editor's float64
+                                         * (F/(a+1), not floored) — a floored integer ramp,
+                                         * and even float32, drifted op levels enough to
+                                         * desync high-feedback FM on the lowest notes. */
             fixed16        op_lvl[4];   /* per-op static level 0..FX_ONE (live-refreshed) */
             birb_env_stage op_stage[4]; /* per-op ADSR stage */
-            fixed16        prev_out;    /* op0 feedback memory: raw carrier sine ×FX_ONE */
+            double         prev_out;    /* op0 feedback memory: raw carrier sine ×FX_ONE.
+                                         * double (not fixed16) so the FM feedback loop keeps
+                                         * full precision and matches the editor's float64
+                                         * math — fixed-point truncation drove a Nyquist
+                                         * limit-cycle, and float32 still diverged on
+                                         * high-feedback braaams, that desynced the timbre. */
             uint8_t        num_ops;     /* 2 or 4 */
             uint8_t        algorithm;   /* 0-7 (4-op only) */
             uint8_t        feedback;    /* op0 feedback 0-255 */
