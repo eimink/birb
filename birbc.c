@@ -1243,7 +1243,9 @@ static int write_js(const char *filename, birb_song *song) {
     (void)formant_base;
     fprintf(f,
         "function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue\n"
-        "var n=P(pn,q,c,cr),ii=P(pi,q,c,cr)||255,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)\n"
+        /* pi.length?...:255 — NOT `P(pi..)||255`: P returns 0 for inst0, and
+         * `0||255` would turn an explicit inst0 into "keep current instrument". */
+        "var n=P(pn,q,c,cr),ii=pi.length?P(pi,q,c,cr):255,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)\n"
         "C.ri=0;C.nc=0;C.nd=0\n"
         "var itp=fx==5,ind=fx==7&&(pm>>4)==0xD\n"
         "if(ind&&n>=2){C.dn=n;C.di=ii==255?C.i:ii;C.nd=pm&15}\n"
