@@ -1376,7 +1376,7 @@ static int write_js(const char *filename, birb_song *song) {
         else
 #endif
             fprintf(f,
-                "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=v>1?1:v<-1?-1:v}\n"
+                "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=Math.tanh(v)}\n"
                 "return{o:out,spt:spt,T:T}}\n", padv);
     }
 
