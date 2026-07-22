@@ -1427,9 +1427,14 @@ static void usage(const char *prog) {
     fprintf(stderr, "  Outputs: output_base.bsb  (binary)\n");
     fprintf(stderr, "           output_base.h    (C header)\n");
     fprintf(stderr, "           --js             also emit .js for 4K demos\n");
+    fprintf(stderr, "  Other:   --version | -v   print version and exit\n");
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+        printf("birbc (birb) %s\n", BIRB_VERSION);
+        return 0;
+    }
     if (argc < 2) {
         usage(argv[0]);
         return 1;

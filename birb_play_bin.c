@@ -4,6 +4,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "birb_synth.h"
 #include "birb_format.h"
 
@@ -37,6 +38,10 @@ static void write_wav(const char *filename, int16_t *samples, int num_samples) {
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+        printf("birb_play_bin (birb) %s\n", BIRB_VERSION);
+        return 0;
+    }
     if (argc < 2) {
         fprintf(stderr, "Usage: %s song.bin [output.wav]\n", argv[0]);
         return 1;

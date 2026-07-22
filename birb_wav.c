@@ -286,6 +286,10 @@ static void build_test_song(birb_song *song) {
 /* ---------- main ---------- */
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+        printf("birb_wav (birb) %s\n", BIRB_VERSION);
+        return 0;
+    }
     const char *filename = "birb_test.wav";
     if (argc > 1) filename = argv[1];
 

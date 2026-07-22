@@ -4,6 +4,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include "birb_synth.h"
 #include "birb_format.h"
@@ -26,6 +27,10 @@ static void audio_callback(void *ctx, AudioQueueRef queue, AudioQueueBufferRef b
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+        printf("birb_play (birb) %s\n", BIRB_VERSION);
+        return 0;
+    }
     if (argc < 2) {
         fprintf(stderr, "Usage: %s song.bin\n", argv[0]);
         return 1;

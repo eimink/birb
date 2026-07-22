@@ -232,8 +232,11 @@ def write_bsb(filename, bpm, tpr, instruments, patterns, order):
 
 # ---- Main ----
 
+BIRB_VERSION = '1.0.0'
+
 def main():
     parser = argparse.ArgumentParser(description='Convert MIDI to birb .bsb')
+    parser.add_argument('--version', action='version', version=f'midi2birb (birb) {BIRB_VERSION}')
     parser.add_argument('input', help='Input MIDI file')
     parser.add_argument('-o', '--output', help='Output .bsb file')
     parser.add_argument('--channels', default='0,1,2,9',

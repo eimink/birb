@@ -1,9 +1,14 @@
 /*
  * birb_synth.h — minimal chiptune synth engine
- * No stdlib, no malloc, no floats. Compiles to native + WASM.
+ * No stdlib, no malloc, no libm. Fixed-point 16.16 core; the FM feedback loop
+ * and the reverb bus use floating point in the full engine (both strip-able).
+ * Compiles to native + WASM.
  */
 #ifndef BIRB_SYNTH_H
 #define BIRB_SYNTH_H
+
+/* Project version — single source of truth for the C tools' --version. */
+#define BIRB_VERSION "1.0.0"
 
 #ifdef __wasm__
 typedef unsigned char uint8_t;
