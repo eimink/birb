@@ -7,7 +7,7 @@ Software synthesizer with tracker-style composition — 4 channels by default, u
 ## Components
 
 - **birb synth** — C engine, no stdlib, no malloc, no libm. Fixed-point 16.16 integer core; the FM feedback loop and the reverb bus use hardware floating point in the full engine, and both compile out (`-DBIRB_NO_FM` / `-DBIRB_NO_REVERB`) for an integer-only build. Compiles to native and WASM.
-- **birb tracker** — web-based tracker/editor, single HTML file. Runs locally or on any static host.
+- **birb tracker** — web-based tracker/editor, single HTML file. Hosted at **<https://eimink.github.io/birb/>**; also runs locally or on any static host.
 - **birbc** — compiler that converts `.birb` text or `.bsb` binary songs to `.bsb`, C headers, or self-contained JS for 4K demos.
 - **midi2birb** — Python script to convert MIDI files to `.bsb`.
 
@@ -95,7 +95,7 @@ Reverb and FM are the float-bearing parts; strip both for an integer-only engine
 
 ### Compose
 
-Open `web/editor.html` (or the hosted version) in a browser. No server needed — everything runs client-side.
+Open the hosted tracker at <https://eimink.github.io/birb/>, or `web/editor.html` locally. No server needed — everything runs client-side.
 
 ### Import a MIDI file
 
