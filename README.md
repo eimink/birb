@@ -74,12 +74,12 @@ Global:
 
 ## Build
 
-Requires clang. For WASM targets: `brew install llvm lld`. Editor minification and Brotli need `python3` and `brotli` (no npm/terser).
+Requires clang. For WASM targets: `brew install llvm lld`. Editor minification needs `python3` + `terser` (`npm install -g terser`); the Brotli step needs `brotli`.
 
 ```bash
 make all          # native tools (birb_wav, birbc, birb_play, birb_play_bin)
 make web          # WASM + web assets (requires llvm+lld)
-make editor-dist  # web/editor.min.html + .min.html.br (minify_editor.py + brotli)
+make editor-dist  # web/editor.min.html + .min.html.br (minify_editor.py → terser, then brotli)
 make serve        # local web server on :8080
 ```
 
