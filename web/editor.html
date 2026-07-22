@@ -764,9 +764,14 @@ function markDirty() { dirty = true; saveSongToStorage(); pushLiveUpdate(); }
 function initSong() {
     let el = document.getElementById('pat-rows');
     let rows = el ? +el.value || 16 : 16;
+    // Full fresh default — reset instruments too, so the "no valid save" fallback
+    // is never a half-state (default patterns paired with stale instruments).
+    song.instruments = defaultInstruments();
     song.patterns = [makePattern(rows)];
     song.order = [[0,0,0,0]];
+    song.samples = [];
     curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
+    editInst = 0; curInst = 0;
     dirty = false;
 }
 
@@ -812,38 +817,46 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 function loadSongFromStorage() {
+    // Parse + validate BEFORE mutating `song`. A load that half-applied and then
+    // bailed (empty patterns, or a throw during the editor-state restore) used to
+    // leave instruments applied while initSong() reset only patterns/order — i.e.
+    // "reload keeps instruments but resets the song/patterns". Commit atomically.
+    let data;
     try {
         let s = localStorage.getItem('birb_song');
         if (!s) return false;
-        let data = JSON.parse(s);
-        song.bpm = data.bpm || 140;
-        song.tpr = data.tpr || 6;
-        song.rev = data.rev || {size:0.7, damp:0.5, wet:0.35};
-        if (typeof data.N === 'number' && data.N >= 4 && data.N <= NCH_MAX) NCH = data.N;
-        else NCH = 4;
-        let nchEl = document.getElementById('nch'); if (nchEl) nchEl.value = NCH;
-        channelMuted = new Array(NCH).fill(false);
-        song.instruments = data.instruments || [];
-        song.patterns = data.patterns || [];
-        song.order = data.order || [[0,0,0,0]];
-        song.samples = [];
-        if (Array.isArray(data.samples)) {
-            for (let s of data.samples) {
-                try {
-                    let str = atob(s.adpcm);
-                    let adpcm = new Uint8Array(str.length);
-                    for (let i = 0; i < str.length; i++) adpcm[i] = str.charCodeAt(i);
-                    song.samples.push({
-                        name: s.name || '',
-                        data: decodeAdpcm(adpcm, s.length),
-                        baseNote: s.baseNote, loopStart: s.loopStart, loopEnd: s.loopEnd
-                    });
-                } catch (e) {}
-            }
+        data = JSON.parse(s);
+    } catch (e) { return false; }
+    if (!data || !Array.isArray(data.instruments) || !data.instruments.length) return false;
+    if (!Array.isArray(data.patterns) || !data.patterns.length) return false;
+
+    song.bpm = data.bpm || 140;
+    song.tpr = data.tpr || 6;
+    song.rev = data.rev || {size:0.7, damp:0.5, wet:0.35};
+    if (typeof data.N === 'number' && data.N >= 4 && data.N <= NCH_MAX) NCH = data.N;
+    else NCH = 4;
+    let nchEl = document.getElementById('nch'); if (nchEl) nchEl.value = NCH;
+    channelMuted = new Array(NCH).fill(false);
+    song.instruments = data.instruments;
+    song.patterns = data.patterns;
+    song.order = (Array.isArray(data.order) && data.order.length) ? data.order : [[0,0,0,0]];
+    song.samples = [];
+    if (Array.isArray(data.samples)) {
+        for (let s of data.samples) {
+            try {
+                let str = atob(s.adpcm);
+                let adpcm = new Uint8Array(str.length);
+                for (let i = 0; i < str.length; i++) adpcm[i] = str.charCodeAt(i);
+                song.samples.push({
+                    name: s.name || '',
+                    data: decodeAdpcm(adpcm, s.length),
+                    baseNote: s.baseNote, loopStart: s.loopStart, loopEnd: s.loopEnd
+                });
+            } catch (e) {}
         }
-        if (!song.instruments.length) return false;
-        if (!song.patterns.length) return false;
-        // restore editor state
+    }
+    // Editor-state restore is best-effort: never discard the (now valid) song on it.
+    try {
         let e = localStorage.getItem('birb_editor');
         if (e) {
             let ed = JSON.parse(e);
@@ -860,14 +873,17 @@ function loadSongFromStorage() {
             while (channelMuted.length < NCH) channelMuted.push(false);
             if (typeof ed.currentBank === 'number') currentBank = Math.max(0, Math.min(banksTotal() - 1, ed.currentBank));
         }
+        // Clamp restored cursors against the loaded song (editor state can be stale).
+        if (curPat >= song.patterns.length) curPat = 0;
+        if (curOrderPos >= song.order.length) curOrderPos = 0;
         document.getElementById('bpm').value = song.bpm;
         document.getElementById('tpr').value = song.tpr;
         document.getElementById('octave').value = curOctave;
         if (song.patterns[curPat])
             document.getElementById('pat-rows').value = song.patterns[curPat].length;
-        dirty = false;
-        return true;
-    } catch(e) { return false; }
+    } catch (e) {}
+    dirty = false;
+    return true;
 }
 
 function newSong() {
