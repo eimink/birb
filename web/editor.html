@@ -3726,7 +3726,11 @@ async function startLive(patOnly) {
         if (!patOnly && curOrderPos !== op) {
             curOrderPos = op;
             let newPat = song.order[curOrderPos] ? song.order[curOrderPos][0] : 0;
-            if (curPat !== newPat) { curPat = newPat; renderOrder(); }
+            if (curPat !== newPat) curPat = newPat;
+            // Always redraw the order bar: the highlighted slot follows the order
+            // index, so it must move even when the same pattern repeats across
+            // consecutive order positions (e.g. order [0,0,1]).
+            renderOrder();
         }
         // Record mode: cursor tracks the playhead so typed notes land on the playing row.
         if (recordMode) curRow = row;
