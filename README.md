@@ -2,23 +2,33 @@
 
 Minimal chiptune synth engine and tracker for demoscene productions.
 
-4-channel software synthesizer with tracker-style composition, designed to embed into size-coded demos. The engine + song data compresses to ~1-1.5KB under Brotli for 4K web intros.
+Software synthesizer with tracker-style composition — 4 channels by default, up to 16 — designed to embed into size-coded demos. A plain-oscillator engine + song data compresses to ~1-1.5KB under Brotli for 4K web intros.
 
 ## Components
 
-- **birb synth** — C engine, no stdlib, no malloc, no floats, fixed-point 16.16. Compiles to native and WASM.
+- **birb synth** — C engine, no stdlib, no malloc, no libm. Fixed-point 16.16 integer core; the FM feedback loop and the reverb bus use hardware floating point in the full engine, and both compile out (`-DBIRB_NO_FM` / `-DBIRB_NO_REVERB`) for an integer-only build. Compiles to native and WASM.
 - **birb tracker** — web-based tracker/editor, single HTML file. Runs locally or on any static host.
 - **birbc** — compiler that converts `.birb` text or `.bsb` binary songs to `.bsb`, C headers, or self-contained JS for 4K demos.
 - **midi2birb** — Python script to convert MIDI files to `.bsb`.
 
 ## Synth features
 
-- 5 waveforms: pulse (4 duty cycles), triangle, sawtooth, noise (LFSR), sine
-- **IMA-ADPCM sample playback** with pitch shifting and loop points
-- ADSR envelope per instrument + per-instrument volume
-- Per-row volume column (0 = hold, 01-FF = level)
-- Pitch envelope (for kick drums, sweeps)
-- Named instruments
+Ten voice types across six engines, chosen per instrument:
+
+- **Oscillators** — pulse (12.5 / 25 / 50 / 75% duty), triangle, sawtooth, LFSR noise, sine (5th-order minimax)
+- **FM** — 2-operator (carrier + modulator) and 4-operator with 8 algorithms; per-op ratio / level / ADSR, global feedback and mod index. Presets: Bass, Bell, Organ, Brass (2-op), Violin, BRAAAAM (4-op)
+- **Karplus-Strong** — plucked/struck string, one damping control (low = ringy, high = muted click)
+- **Algorithmic drums** — Kick / Snare / Hat / Clap / Tom / Crash; Tune / Decay / Tone / Snap re-purpose per algorithm. Preset kit (808/909 kicks, snare, rim, closed/open hat, clap, crash, ride)
+- **Formant / vowel** — source wave (pulse/saw/noise) through 3 parallel bandpass biquads at vowel formant frequencies; pick vowel A and B (A/E/I/O/U) and a sweep speed to morph A↔B, resonance steers Q
+- **Samples** — IMA-ADPCM WAV playback with pitch shifting and loop points
+
+Per-instrument: ADSR envelope + volume, pitch envelope (kick sweeps / drops), a baked arpeggio pair, reverb send (0-255), and a name.
+
+Global:
+
+- **Reverb send bus** — Schroeder-lite (4 damped combs + 2 allpass) with size / damping / wet-mix; per-instrument sends feed it
+- **Master soft-saturation** (tanh) — gentle limiting, no hard clip even when the reverb is drenched
+- **Per-row volume column** (`00` = hold previous, `01`–`FF` = level)
 
 ### Effects (FT2-inspired)
 
@@ -41,14 +51,15 @@ Minimal chiptune synth engine and tracker for demoscene productions.
 ## Tracker features
 
 - Pattern grid with keyboard-driven note entry (tracker piano layout)
-- Drag-and-drop pattern sequencer with freely reorderable order list
+- Per-instrument editor for every voice type: FM operator matrix (2/4-op, algorithm, feedback, mod index), drum Tune/Decay/Tone/Snap, formant vowels + sweep + resonance, KS damping, sample loop points
+- Global reverb panel (size / damping / wet) with per-instrument send sliders
+- Drag-and-drop pattern sequencer with a freely reorderable order list; the playhead tracks position correctly through repeated patterns
 - Copy / cut / paste (Ctrl+C/X/V) with row-range selection (Shift+arrows)
-- Per-channel mute toggles
-- **Live parameter tweaking** during playback — drag ADSR/volume sliders while the song plays and hear changes within ~50ms (AudioWorklet)
-- WAV upload with automatic stereo→mono downmix, resample to 44100Hz, and IMA-ADPCM encoding
-- Sample library shared across instruments (same sample can power multiple instruments with different ADSRs)
+- Per-channel mute toggles; configurable channel count
+- **Live parameter tweaking** during playback — drag any synth/envelope slider while the song plays and hear it within ~50ms (AudioWorklet); optional record mode where the cursor follows the playhead
+- WAV upload with automatic stereo→mono downmix, resample to 44100Hz, and IMA-ADPCM encoding; sample library shared across instruments
 - Visual ADSR envelope preview, waveform oscilloscope for samples
-- Song persistence (localStorage)
+- Autosaving song persistence (localStorage) — loading a song or editing it persists automatically; no manual save needed to survive a reload
 - Export: `.bsb`, `.js`, `.min.js` (packed + estimated Brotli size)
 - Import: `.bsb`, `.bin`, `.birb`
 
@@ -63,14 +74,22 @@ Minimal chiptune synth engine and tracker for demoscene productions.
 
 ## Build
 
-Requires clang. For WASM targets: `brew install llvm lld`. For minification: `npm install -g terser`.
+Requires clang. For WASM targets: `brew install llvm lld`. Editor minification and Brotli need `python3` and `brotli` (no npm/terser).
 
 ```bash
 make all          # native tools (birb_wav, birbc, birb_play, birb_play_bin)
 make web          # WASM + web assets (requires llvm+lld)
-make editor-dist  # produces web/editor.min.html (requires terser)
+make editor-dist  # web/editor.min.html + .min.html.br (minify_editor.py + brotli)
 make serve        # local web server on :8080
 ```
+
+### Feature strips (size-coded builds)
+
+Each synth engine compiles out independently, so a build carries only what a song uses:
+
+`-DBIRB_NO_FM` · `-DBIRB_NO_KS` · `-DBIRB_NO_DRUM` · `-DBIRB_NO_FORMANT` · `-DBIRB_NO_SAMPLES` · `-DBIRB_NO_REVERB`
+
+Reverb and FM are the float-bearing parts; strip both for an integer-only engine. The pre-wired 4K WASM variants (`web/birb4k_*.wasm`) use these; a `.bsb` self-declares which sections it needs so `birbc`/the exporter emit only the code in play.
 
 ## Usage
 
@@ -134,7 +153,7 @@ See `INTEGRATION.md` for full integration details.
 ## File formats
 
 - `.birb` — human-readable text format (for birbc input, tracker import)
-- `.bsb` — compact binary: BRB1 magic, planar pattern layout for Brotli friendliness, optional SMPL (sample bank) and NAME (instrument names) sections
+- `.bsb` — compact binary: BRB1 magic, planar pattern layout for Brotli friendliness, plus optional sections for extended instrument data (FM / Karplus-Strong / drum / formant), the reverb bus (REVB), the sample bank (SMPL), and instrument names (NAME). Absent sections default off, so a plain oscillator song stays tiny.
 - `.js` — self-contained JS with synth engine + song data (4K demo embed)
 - `.min.js` — same, minified and token-packed
 - `.h` — C header with embedded binary data
@@ -142,8 +161,10 @@ See `INTEGRATION.md` for full integration details.
 ## Example songs
 
 - `examples/sundstrom.bsb` — reference test song
-- `examples/dnb_demo.birb` — text-format D&B example
-- `examples/kick.wav`, `snare.wav`, `hat.wav` — test WAVs for sample testing (regenerate with `python3 examples/gen_test_wav.py`)
+- `examples/drums_test.birb` / `.bsb` — algorithmic drum kit
+- `examples/ks_test.birb` / `.bsb` — Karplus-Strong plucks
+- `examples/formant_test.birb`, `formant_simple.birb` — vowel / formant voices
+- `examples/kick.wav`, `snare.wav`, `hat.wav` — test WAVs for sample loading (regenerate with `python3 examples/gen_test_wav.py`)
 
 ## License
 

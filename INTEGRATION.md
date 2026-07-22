@@ -1,6 +1,6 @@
 # Integrating birb into your demo
 
-birb is a 4-channel chiptune synth. The musician composes in birb tracker and exports song data. You integrate the player into your demo engine.
+birb is a multi-channel chiptune synth (4 channels by default, up to 16). The musician composes in birb tracker and exports song data. You integrate the player into your demo engine.
 
 ## What you get from the musician
 
@@ -134,6 +134,14 @@ From the musician:
 # Add to your build alongside your demo source
 clang -Os birb_synth.c your_demo.c -framework AudioToolbox -framework CoreFoundation -o demo
 ```
+
+For a size-coded native build, compile out the synth engines the song doesn't use — each is independent:
+
+```
+-DBIRB_NO_FM  -DBIRB_NO_KS  -DBIRB_NO_DRUM  -DBIRB_NO_FORMANT  -DBIRB_NO_SAMPLES  -DBIRB_NO_REVERB
+```
+
+Reverb and FM are the only floating-point parts; dropping both keeps the engine integer-only. Override the channel count with `-DBIRB_NUM_CHANNELS=N` (4–16). As a rough guide (arm64, `-Oz`), the oscillator-only engine is ~3 KB of code and the full engine ~8 KB; each optional voice adds 0.3–1.5 KB.
 
 ### Code
 
