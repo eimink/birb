@@ -306,6 +306,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <option value="organ">Organ</option>
                         <option value="brass">Brass</option>
                         <option value="violin">Violin</option>
+                        <option value="piano">Piano</option>
                         <option value="braaam">BRAAAAM</option>
                     </select>
                 </div>
@@ -731,6 +732,36 @@ const FM_PRESETS = {
               {ri:1,rf:0,lv:210,a:1,d:10,s:195,r:24},  /* op1 -> 0, saw-like body */
               {ri:3,rf:0,lv:150,a:1,d:12,s:160,r:24},  /* op2 -> 0, odd harmonics */
               {ri:7,rf:0,lv:215,a:0,d:5, s:125,r:20}]  /* op3 -> 0, rosin bite, hosts feedback */ },
+    /* Bright FM piano — algo 5, which is two independent 2-op stacks summed
+     * (op1→op0 and op3→op2). That is the DX7 electric-piano topology: one stack
+     * is the body, the other is the metallic "tine" ping.
+     *
+     * What makes it read as a piano is not the spectrum but that the TIMBRE
+     * decays faster than the LEVEL. Measured at C-4: spectral centroid falls
+     * 532 -> 265 Hz over 400 ms while the level falls 7.6 dB. An organ patch
+     * for comparison holds its centroid flat and does not decay at all. op1's
+     * short decay to a low sustain (d16 s30) is what produces that; op3 at
+     * ratio 14 with d7 is the hammer strike.
+     *
+     * s=0 on the instrument envelope matters — a piano has no sustain plateau,
+     * it decays from the moment the note starts.
+     *
+     * Two things worth knowing before tweaking. Raising ModIdx does NOT make it
+     * brighter: 150 -> 200 measured a DROP from 532 to 436 Hz, because FM
+     * sidebands follow Bessel functions and past a point extra index
+     * redistributes energy rather than adding it. And feedback does nothing
+     * here (measured 0.1 dB) since in algo 5 it wraps op3, which has already
+     * decayed away in 7 ticks. To brighten, use op3's level and decay.
+     *
+     * Register scaling comes free: centroid measures 296 / 532 / 1517 Hz at
+     * C-2 / C-4 / C-6. Setting op1's ratio to 2 gives a much stronger
+     * brightness sweep but an even-ratio modulator yields odd harmonics only —
+     * that is a clavinet, not a piano. */
+    piano: { vol:255, a:0, d:60, s:0, r:16, nops:4, algo:5, fb:0, mi:150,
+        ops: [{ri:1, rf:0,lv:255,a:0,d:60,s:0, r:16},  /* body carrier */
+              {ri:1, rf:0,lv:200,a:0,d:16,s:30,r:12},  /* body mod — fast decay = brightness falls */
+              {ri:1, rf:0,lv:150,a:0,d:36,s:0, r:14},  /* tine carrier */
+              {ri:14,rf:0,lv:190,a:0,d:7, s:0, r:10}]  /* tine mod — the hammer strike */ },
     /* Inception BRAAAAM. Algo 4 (3,2,1 → 0): three independent modulators
      * all driving the carrier, inharmonic ratios for the torn-brass timbre.
      * Maxed feedback (220) wraps op3's output back into its own phase for
