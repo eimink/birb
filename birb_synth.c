@@ -368,6 +368,50 @@ static inline int32_t js_shr(int64_t prod, int sh) {
     return (int32_t)(uint32_t)prod >> sh;
 }
 
+/* ---------- KICK/TOM pitch-sweep rate ----------
+ * drum_tone -> per-sample retention coefficient in 1/65536, mapped so the
+ * sweep-to-95%% time runs 250 ms (tone 0) down to 3 ms (tone 255)
+ * exponentially. Interpolated between entries; a table rather than a pow()
+ * call so the C and JS engines stay in step.
+ *
+ * The old code did `p -= (gap * tone * 256) >> 20`, which truncated to zero as
+ * soon as gap * rate < 2^20 — so the sweep STALLED at gap = 4096/tone and never
+ * reached the target pitch. That is why a kick sat at 151 Hz (tone 32) or
+ * 111 Hz (tone 60) instead of the intended 65 Hz, and why tone below ~14 swept
+ * not at all. Now the pitch accumulator carries 8 fractional bits (see
+ * pitch_env, held <<8) and decays proportionally, so every tone value
+ * converges on the target. */
+static const uint16_t birb_kick_sweep[33] = {
+    65518, 65516, 65512, 65509, 65505, 65500, 65495, 65489, 65482, 65474, 65465, 65454, 65442, 65428, 65412, 65393, 65372, 65348, 65320, 65287, 65251, 65208, 65160, 65104, 65040, 64966, 64882, 64785, 64674, 64546, 64400, 64233, 64067,
+};
+
+static fixed16 birb_kick_coef(uint8_t tone) {
+    int i = tone >> 3, f = tone & 7;
+    int32_t c = birb_kick_sweep[i];
+    c += (((int32_t)birb_kick_sweep[i + 1] - c) * f) >> 3;
+    return (fixed16)c;
+}
+
+/* ---------- SNARE noise high-pass ----------
+ * drum_tone -> one-pole HP coefficient in 1/65536, cutoff 150 Hz .. 5 kHz
+ * exponential. Reference examples/snare.wav has its 1.2-16 kHz band running
+ * ~4 dB HOTTER than 400-1200 Hz — a scooped mid, not flat noise. Unfiltered
+ * white noise is what makes a synth snare read as "a piece of noise". */
+static const uint16_t birb_snare_hp[33] = {
+     1386,  1545,  1722,  1920,  2139,  2383,  2655,  2956,
+     3291,  3663,  4076,  4533,  5039,  5600,  6219,  6903,
+     7657,  8487,  9400, 10401, 11498, 12697, 14004, 15424,
+    16964, 18627, 20416, 22332, 24376, 26543, 28828, 31221,
+    33392,
+};
+
+static fixed16 birb_snare_hp_coef(uint8_t tone) {
+    int i = tone >> 3, f = tone & 7;
+    int32_t c = birb_snare_hp[i];
+    c += (((int32_t)birb_snare_hp[i + 1] - c) * f) >> 3;
+    return (fixed16)c;
+}
+
 /* Algorithmic drums. Six flavours, four unique generators (TOM uses KICK code
  * with different trigger-time params; CRASH uses HAT code similarly).
  *
@@ -401,14 +445,16 @@ static int16_t generate_drum(birb_channel *ch) {
          * body sounds meaty by itself, not thin like a sine. The pitch sweep
          * from pitch_env → pitch_env_target gives the "thump" character;
          * base_duty carries the decay rate. */
+        /* pitch_env / pitch_env_target are held <<8 so the decay keeps 8
+         * fractional bits and actually converges (see birb_kick_sweep). */
         fixed16 p = ch->u.drum.pitch_env;
         fixed16 t = ch->u.drum.pitch_env_target;
         int32_t gap = p - t;
-        fixed16 rate = ch->base_duty;
-        if (rate < 16) rate = 16;
-        p -= js_shr((int64_t)gap * rate, 20);   /* JS >> semantics (see js_shr) */
-        ch->u.drum.pitch_env = p;
-        ch->phase += p;
+        if (gap > 0) {
+            p = t + (int32_t)(((int64_t)gap * ch->base_duty) >> 16);
+            ch->u.drum.pitch_env = p;
+        }
+        ch->phase += p >> 8;
         ch->phase &= FX_MASK;
         /* Triangle wave at ±28000, tracking ch->phase through its full cycle. */
         int32_t tri;
@@ -428,24 +474,42 @@ static int16_t generate_drum(birb_channel *ch) {
             ch->u.drum.stage_tick--;
         }
     } else if (dt == 1) {
-        /* SNARE — LOUD noise + short tonal body pulse. No biquad — the old
-         * resonator rang like a bell. stage holds the noise/body mix balance
-         * (0..255, high = body-heavy). stage_tick counts down a short body
-         * envelope for the drumhead "crack". */
+        /* SNARE — high-passed noise (the wires) + a pitched drumhead that
+         * decays faster than the noise does.
+         *
+         * The old version mixed flat white noise with a square body lasting
+         * 1.5-4 ms, everything sharing one envelope. Reference snare.wav shows
+         * why that reads as noise rather than a snare: it has a 179 Hz pitched
+         * head audible through the first 60 ms, a scooped midrange, and highs
+         * that outlast the lows by ~12 dB at 60-120 ms. Head thump dies, wires
+         * ring on. One shared envelope cannot do that.
+         *
+         * pitch_env_target = HP coefficient, pitch_env = head envelope level,
+         * base_duty = head decay rate, bq_z1[0] = HP state. */
         uint16_t n = drum_noise(ch);
-        int32_t noise = (n & 1) ? 26000 : -26000;
+        int32_t src = (n & 1) ? 26000 : -26000;
+        /* one-pole HP: y = x - state, state += coeff*y */
+        int32_t y = src - ch->u.drum.bq_z1[0];
+        ch->u.drum.bq_z1[0] += js_shr((int64_t)y * ch->u.drum.pitch_env_target, FX_SHIFT);
+        /* the wires get their own exponential tail. Riding only the instrument
+         * ADSR left them almost flat (3 dB over 120 ms where the reference
+         * loses 14), because that envelope is tick-quantised and linear. */
+        int32_t noise = (int32_t)(((int64_t)y * ch->u.drum.phase2) >> 16);
+        ch->u.drum.phase2 =
+            (fixed16)(((int64_t)ch->u.drum.phase2 * ch->u.drum.bq_z2[0]) >> 16);
+
+        /* pitched head: triangle, so it has harmonics without the square's
+         * buzz, on its own exponential decay (~50 ms) */
         ch->phase += ch->freq;
         ch->phase &= FX_MASK;
-        /* Square-ish body: phase < FX_HALF → +, else −. Harder edge than sine. */
-        int32_t body = (ch->phase < FX_HALF) ? 22000 : -22000;
-        /* Body fades fast via stage_tick envelope (~5 ms). */
-        if (ch->u.drum.stage_tick > 0) {
-            body = (body * ch->u.drum.stage_tick) / 256;
-            if (ch->u.drum.stage_tick > 1) ch->u.drum.stage_tick--;
-            else ch->u.drum.stage_tick = 0;
-        } else {
-            body = 0;
-        }
+        int32_t tri;
+        if (ch->phase < FX_HALF) tri = ((int32_t)ch->phase * 4) - FX_ONE;
+        else                     tri = FX_ONE * 3 - ((int32_t)ch->phase * 4);
+        int32_t body = ((int32_t)tri * 22000) >> FX_SHIFT;
+        body = (int32_t)(((int64_t)body * ch->u.drum.pitch_env) >> 16);
+        ch->u.drum.pitch_env =
+            (fixed16)(((int64_t)ch->u.drum.pitch_env * ch->base_duty) >> 16);
+
         /* stage = body/noise mix: 0 = all noise, 255 = all body. */
         int32_t mix_b = ch->u.drum.stage;
         int32_t mix_n = 255 - mix_b;
@@ -521,83 +585,27 @@ static const uint16_t formant_freqs[5][3] = {
 };
 static const fixed16 formant_gains[3] = { FX_ONE, FX_ONE * 7 / 10, FX_ONE * 4 / 10 };
 
-/* ---------- fixed-point sin / cos (no libm) ----------
- * Inputs in fixed16 with FX_ONE = 1.0 radian. Domain restricted to [0, π/2]
- * (about 0..103000 in fixed16 units, comfortably under 2π). 5th-order Taylor
- * for sin, 4th-order for cos. Used only for biquad coefficient computation
- * at vowel formant frequencies (≤ 3010 Hz → ω ≤ 0.43 rad ≈ 28000), which is
- * deep inside the convergence radius. Intermediates use int64 to avoid
- * fixed-point overflow on x², x³, etc. */
-static fixed16 fix_sin(fixed16 x) {
-    int64_t x2 = ((int64_t)x * x) >> FX_SHIFT;
-    int64_t x3 = (x2 * x) >> FX_SHIFT;
-    int64_t x5 = (x3 * x2) >> FX_SHIFT;
-    return (fixed16)(x - x3 / 6 + x5 / 120);
-}
-static fixed16 fix_cos(fixed16 x) {
-    int64_t x2 = ((int64_t)x * x) >> FX_SHIFT;
-    int64_t x4 = (x2 * x2) >> FX_SHIFT;
-    return (fixed16)(FX_ONE - x2 / 2 + x4 / 24);
-}
 
-/* Compute biquad bandpass coefficients (RBJ constant-skirt form):
- *   ω = 2π·f / SR;   α = sin(ω) / (2Q)
- *   b0 =  α / (1+α);   a1 = -2·cos(ω) / (1+α);   a2 = (1-α) / (1+α)
- * (b1 = 0, b2 = -b0 — both folded into the step function.)
- * Frequencies are in Hz, sample rate is BIRB_SAMPLE_RATE (44100). The
- * conversion 2π/44100 is approximated as multiply-by-19 then shift right 1
- * (≈ 0.000145), which is ~1.7% high vs the true 0.0001425 — close enough
- * that vowel character is unchanged but the Q control works as intended.
- * Output is written into dst[3][3] as fixed16. */
-static void formant_calc_coeffs(uint8_t vowel, fixed16 q, fixed16 dst[3][3]) {
-    if (vowel > 4) vowel = 0;
-    if (q < FX_ONE / 2) q = FX_ONE / 2;
-    for (int i = 0; i < 3; i++) {
-        /* ω in fixed16. 19/2 ≈ 9.5 ≈ FX_ONE * 2π/44100. */
-        fixed16 omega = (fixed16)(((int32_t)formant_freqs[vowel][i] * 19) >> 1);
-        fixed16 sn = fix_sin(omega);
-        fixed16 cs = fix_cos(omega);
-        /* α = sn / (2Q) — q is fixed16, so divide as (sn << FX_SHIFT) / (2q). */
-        fixed16 alpha = (fixed16)(((int64_t)sn << FX_SHIFT) / (2 * (int64_t)q));
-        /* inv = 1 / (1 + α) in fixed16 → (FX_ONE << FX_SHIFT) / (FX_ONE + α). */
-        fixed16 denom = FX_ONE + alpha;
-        if (denom < 1) denom = 1;
-        fixed16 inv = (fixed16)(((int64_t)FX_ONE << FX_SHIFT) / denom);
-        /* b0 = α · inv · gain_i */
-        int64_t b0 = ((int64_t)alpha * inv) >> FX_SHIFT;
-        b0 = (b0 * formant_gains[i]) >> FX_SHIFT;
-        dst[i][0] = (fixed16)b0;
-        /* a1 = -2·cos(ω)·inv */
-        int64_t a1 = (int64_t)(-2) * cs;
-        a1 = (a1 * inv) >> FX_SHIFT;
-        dst[i][1] = (fixed16)a1;
-        /* a2 = (1 - α) · inv */
-        int64_t a2 = ((int64_t)(FX_ONE - alpha) * inv) >> FX_SHIFT;
-        dst[i][2] = (fixed16)a2;
-    }
-}
 
 /* Interpolate vowel A and B coefficients (computed at the channel's current
  * Q from `resonance`) into the working set at sweep position t (0..255).
  * Recomputes both vowels every call; with the 32-sample re-interp gate in
  * generate_formant() this still amortises to ~0.5 trig calls per sample.
  * Signed intermediates so negative a1 coefficients don't promote to uint32_t. */
-static void formant_interp(birb_channel *ch) {
-    uint8_t va = ch->u.formant.vowel_a;
-    uint8_t vb = ch->u.formant.vowel_b;
-    if (va > 4) va = 0;
-    if (vb > 4) vb = 0;
-    /* Resonance 0..255 → Q 2..32, fixed16. q = 2 + (res/255)*30. */
-    fixed16 q = FX_ONE * 2 + (fixed16)(((int64_t)FX_ONE * 30 * ch->u.formant.resonance) / 255);
-    fixed16 coefA[3][3], coefB[3][3];
-    formant_calc_coeffs(va, q, coefA);
-    formant_calc_coeffs(vb, q, coefB);
+static void formant_interp(birb_channel *ch, const birb_instrument *inst) {
+    /* Pure interpolation between two baked coefficient sets — no trig, and
+     * therefore no libm and no fixed-point sine to drift against the JS
+     * engines. Resonance is already folded into the baked values. Read straight
+     * from the instrument rather than copied per channel: the formant arm would
+     * otherwise size the channel union in builds without KS. */
+    const fixed16 (*A)[3] = inst->formant_coef[0];
+    const fixed16 (*B)[3] = inst->formant_coef[1];
     int32_t t = ch->u.formant.sweep_pos;          /* 0..255 */
     int32_t omt = 255 - t;
     for (int i = 0; i < 3; i++) {
-        ch->u.formant.bq_b0[i] = (fixed16)((coefA[i][0] * omt + coefB[i][0] * t) / 255);
-        ch->u.formant.bq_a1[i] = (fixed16)((coefA[i][1] * omt + coefB[i][1] * t) / 255);
-        ch->u.formant.bq_a2[i] = (fixed16)((coefA[i][2] * omt + coefB[i][2] * t) / 255);
+        ch->u.formant.bq_b0[i] = (fixed16)((A[i][0] * omt + B[i][0] * t) / 255);
+        ch->u.formant.bq_a1[i] = (fixed16)((A[i][1] * omt + B[i][1] * t) / 255);
+        ch->u.formant.bq_a2[i] = (fixed16)((A[i][2] * omt + B[i][2] * t) / 255);
     }
 }
 
@@ -606,9 +614,15 @@ static void formant_interp(birb_channel *ch) {
  * via FX_MUL; state vars are int32 and represent the filter delay line. */
 static inline int32_t biquad_bp_step(int32_t x, fixed16 b0, fixed16 a1, fixed16 a2,
                                       int32_t *z1, int32_t *z2) {
-    int32_t y = (int32_t)((((int64_t)b0 * x) >> FX_SHIFT) + *z1);
-    *z1 = (int32_t)(0 /* b1*x */ - (((int64_t)a1 * y) >> FX_SHIFT) + *z2);
-    *z2 = (int32_t)((-(int64_t)b0 * x) >> FX_SHIFT) - (int32_t)(((int64_t)a2 * y) >> FX_SHIFT);
+    /* Integer division, NOT >>: the editor and the exported player both write
+     * `(b0*src/65536|0)`, which truncates toward zero, while an arithmetic
+     * shift floors. They differ by one LSB on negative products, and in a
+     * resonant biquad that feeds its own state the error compounds — it was
+     * worth ~35% RMS divergence on formant_test between C and the emitted JS.
+     * C's / on a negative int64 truncates toward zero, matching |0. */
+    int32_t y = (int32_t)((((int64_t)b0 * x) / FX_ONE) + *z1);
+    *z1 = (int32_t)(0 /* b1*x */ - (((int64_t)a1 * y) / FX_ONE) + *z2);
+    *z2 = (int32_t)((-(int64_t)b0 * x) / FX_ONE) - (int32_t)(((int64_t)a2 * y) / FX_ONE);
     return y;
 }
 
@@ -640,7 +654,7 @@ static int16_t formant_source(birb_channel *ch) {
  * biquads at vowel formant frequencies. Linearly interpolate between vowel A
  * and B coefficients as the sweep advances; re-interpolate every 32 samples
  * so coefficient updates aren't per-sample. */
-static int16_t generate_formant(birb_channel *ch) {
+static int16_t generate_formant(birb_channel *ch, birb_song *song) {
     int16_t src = formant_source(ch);
 
     /* three parallel BPFs summed; coefficients have gain baked in. */
@@ -666,7 +680,7 @@ static int16_t generate_formant(birb_channel *ch) {
             if (sp >= 255) { sp = 255; ch->u.formant.sweep_dir = -1; }
             else if (sp <= 0) { sp = 0; ch->u.formant.sweep_dir = +1; }
             ch->u.formant.sweep_pos = (uint8_t)sp;
-            formant_interp(ch);
+            formant_interp(ch, &song->instruments[ch->cur_instrument]);
         }
     }
 
@@ -724,7 +738,7 @@ static int16_t generate_sample(birb_channel *ch, birb_song *song) {
         case SYNTH_DRUM:   return generate_drum(ch);
 #endif
 #ifndef BIRB_NO_FORMANT
-        case SYNTH_FORMANT: return generate_formant(ch);
+        case SYNTH_FORMANT: return generate_formant(ch, song);
 #endif
         default:           return 0;
     }
@@ -943,15 +957,21 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         /* Default lifetime in samples. Scaled by decay param. */
         uint32_t ttl;
         if (algo == 0) {
-            /* KICK / TOM. Start freq is 2× dfreq for the initial thwack,
-             * body settles at dfreq/2 (≈ 65 Hz at C3, audible). Transient
+            /* KICK / TOM. Start freq is 8× dfreq for the initial thwack,
+             * body settles at dfreq/2. Transient
              * burst lives in stage_tick (384 samples ≈ 8.7 ms). */
+            /* Sweep 8x dfreq down to dfreq/2 — a 16x span, four octaves.
+             * It used to start at 2x, a 4x span, which could not cover the
+             * range a kick actually needs: the attack wants 180-300 Hz, the
+             * body 60-80 Hz and the sub tail ~20 Hz, which is roughly 15x.
+             * With only 4x available the sweep either started too low or
+             * stopped too high, and the result was a short bloop instead of a
+             * thud. Reference kick.wav in examples/ runs 169 -> 23 Hz. */
             fixed16 start_f = dfreq;
-            ch->u.drum.pitch_env = start_f << 1;
-            ch->u.drum.pitch_env_target = start_f >> 1;
+            ch->u.drum.pitch_env = (start_f << 3) << 8;
+            ch->u.drum.pitch_env_target = (start_f >> 1) << 8;
             /* Decay rate: higher `tone` = faster pitch decay. */
-            ch->base_duty = (fixed16)((uint32_t)inst->drum_tone * 256);
-            if (ch->base_duty < 16) ch->base_duty = 16;
+            ch->base_duty = birb_kick_coef(inst->drum_tone);
             ch->u.drum.stage = inst->drum_snap;
             ch->u.drum.stage_tick = 384;
             /* lifetime: decay param maps ~8..200ms at 44.1kHz */
@@ -961,10 +981,29 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             /* SNARE — noise + body pulse. stage = body/noise mix (snap),
              * stage_tick = body envelope length in samples (tone-controlled,
              * shorter = crisper "tok", longer = more "thud"). */
+            /* base_freq too, not just freq: tick_effects resets
+             * freq = base_freq every tick when no arpeggio is active, which
+             * silently discarded drum_tune and left the head stuck on the
+             * played note. */
             ch->freq = dfreq > 0 ? dfreq : note_to_freq(26); /* D3 fallback */
+            ch->base_freq = ch->freq;
             ch->u.drum.stage = inst->drum_snap;
-            ch->u.drum.stage_tick = 64 + (inst->drum_tone >> 1); /* ~1.5..4 ms body */
+            /* tone sets how bright the wires are; the head runs its own ~50 ms
+             * exponential decay so it dies before the noise does */
+            ch->u.drum.pitch_env_target = birb_snare_hp_coef(inst->drum_tone);
+            ch->u.drum.pitch_env = FX_ONE;
+            ch->base_duty = 65460;                  /* head: ~90 ms to -40 dB */
+            ch->u.drum.bq_z1[0] = 0;
             ttl = (uint32_t)inst->drum_decay * 120 + 1024;
+            /* noise tail: reach -40 dB over roughly the drum's lifetime.
+             * tau = ttl/4.6, and for tau this large exp(-1/tau) is within a
+             * fraction of a percent of 1 - 1/tau, so no exp() is needed. */
+            ch->u.drum.phase2 = FX_ONE;
+            {
+                uint32_t drop = 301466u / (ttl ? ttl : 1);
+                if (drop > 4096) drop = 4096;
+                ch->u.drum.bq_z2[0] = (fixed16)(FX_ONE - drop);
+            }
         } else if (algo == 2) {
             /* HAT / CRASH — noise through one-pole HP. snap controls HP
              * cutoff (higher = brighter hat), tone unused here but kept for
@@ -1020,7 +1059,7 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             case 3: ch->base_duty = DUTY_75; break;
             default: ch->base_duty = DUTY_50; break;
         }
-        formant_interp(ch);
+        formant_interp(ch, inst);
     }
 #endif
 #ifndef BIRB_NO_SAMPLES
@@ -1196,6 +1235,20 @@ static void formant_live_tick(birb_channel *ch, birb_instrument *inst) {
 }
 #endif
 
+/* Triangle LFO for vibrato and tremolo, spanning +/-512 over one phase cycle.
+ *
+ * This used to be a rising sawtooth: ((phase & 0xFFFF) * 4 - FX_ONE*2) >> 8.
+ * That ramps up and snaps back once per cycle, which measured as a textbook saw
+ * harmonic series on the amplitude envelope (h2 -7.7 dB, h3 -10.6, h4 -13.7)
+ * and is audible as a pulse at every wrap once the depth is real. A triangle
+ * has the same peak range, so depth calibration is unchanged, but no
+ * discontinuity. Same +/-512 span keeps both effects' depth scaling valid. */
+static int32_t birb_lfo_tri(fixed16 phase) {
+    int32_t p = (int32_t)(phase & 0xFFFF);
+    int32_t t = p < (FX_ONE / 2) ? p : (FX_ONE - p);   /* fold to a triangle */
+    return ((t << 2) - FX_ONE) >> 7;
+}
+
 static void tick_effects(birb_channel *ch, birb_song *song) {
     /* pitch envelope */
     if (ch->pitch_env_ticks > 0) {
@@ -1248,18 +1301,25 @@ static void tick_effects(birb_channel *ch, birb_song *song) {
      * takes the integer part. */
     double freq_f = (double)ch->freq;
     if (ch->vibrato_depth > 0) {
-        int32_t lfo = (((int32_t)(ch->vibrato_phase & 0xFFFF) * 4) - (FX_ONE * 2)) >> 8;
+        int32_t lfo = birb_lfo_tri(ch->vibrato_phase);
         double vib = (double)lfo * (double)ch->vibrato_depth / (double)FX_ONE;
         freq_f += vib;
         ch->freq += (fixed16)vib;
         ch->vibrato_phase += ch->vibrato_speed;
     }
 
-    /* tremolo — same small sawtooth LFO into the mixer's amplitude mod (editor:
-     * C.tm = LFO, then en = C.e*(1 + C.tm/F)). Tiny by construction. */
+    /* tremolo — same LFO into the mixer's amplitude mod (editor: C.tm = LFO,
+     * then en = C.e*(1 + C.tm/F)), so tremolo_mod is a fixed16 fraction where
+     * FX_ONE == 100% modulation.
+     *
+     * The old scale divided by FX_ONE, which put the maximum at 512*240/65536 =
+     * 1.875 — i.e. 0.003% modulation. 8xy was a silent no-op at every setting.
+     * lfo spans +/-512 and depth spans 0..240, so >>1 puts y=15 at 61440
+     * (~94% depth) and makes y map to roughly y/16 of full modulation:
+     * y=1 -> 6%, y=4 -> 25%, y=8 -> 50%. */
     if (ch->tremolo_depth > 0) {
-        int32_t lfo = (((int32_t)(ch->tremolo_phase & 0xFFFF) * 4) - (FX_ONE * 2)) >> 8;
-        ch->tremolo_mod = (fixed16)((int64_t)lfo * ch->tremolo_depth / FX_ONE);
+        int32_t lfo = birb_lfo_tri(ch->tremolo_phase);
+        ch->tremolo_mod = (fixed16)(((int64_t)lfo * ch->tremolo_depth) >> 1);
         ch->tremolo_phase += ch->tremolo_speed;
     } else {
         ch->tremolo_mod = 0;

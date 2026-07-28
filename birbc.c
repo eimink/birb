@@ -40,6 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <ctype.h>
 #include "birb_synth.h"
 #include "birb_format.h"
@@ -569,6 +570,33 @@ static int parse_birb_file(const char *filename, birb_song *song) {
 
 /* ---------- binary writer ---------- */
 
+
+/* ---------- baked formant coefficients ----------
+ * Computed here, in double precision, exactly as the editor's JS does
+ * (2*PI*f/44100, Math.sin/Math.cos), and written into the song. The runtime
+ * engines then need no trig at all: the C engine used to approximate omega
+ * with a documented 1.7% error while the JS engines used exact Math.sin, so
+ * identical instruments produced different filters. Baking removes both the
+ * libm dependency and the divergence. */
+static const uint16_t bc_formant_freqs[5][3] = {
+    { 730, 1090, 2440 }, { 530, 1840, 2480 }, { 270, 2290, 3010 },
+    { 570,  840, 2410 }, { 300,  870, 2240 },
+};
+static const double bc_formant_gains[3] = { 1.0, 0.7, 0.4 };
+
+static void bc_formant_coeffs(int vowel, double q, int32_t out[3][3]) {
+    if (vowel < 0 || vowel > 4) vowel = 0;
+    for (int i = 0; i < 3; i++) {
+        double om = 2.0 * M_PI * bc_formant_freqs[vowel][i] / 44100.0;
+        double sn = sin(om), cs = cos(om);
+        double al = sn / (2.0 * q), iv = 1.0 / (1.0 + al);
+        out[i][0] = (int32_t)(al * iv * bc_formant_gains[i] * 65536.0);
+        out[i][1] = (int32_t)(-2.0 * cs * iv * 65536.0);
+        out[i][2] = (int32_t)((1.0 - al) * iv * 65536.0);
+    }
+}
+static double bc_formant_q(uint8_t res) { return 2.0 + (res / 255.0) * 30.0; }
+
 static int write_binary(const char *filename, birb_song *song) {
     FILE *f = fopen(filename, "wb");
     if (!f) {
@@ -832,6 +860,21 @@ static int write_binary(const char *filename, birb_song *song) {
                 inst->formant_resonance
             };
             fwrite(rec, 1, 7, f);
+            /* 18 baked coefficients, int32 LE */
+            {
+                double q = bc_formant_q(inst->formant_resonance);
+                int32_t cf[2][3][3];
+                bc_formant_coeffs(inst->formant_vowel_a, q, cf[0]);
+                bc_formant_coeffs(inst->formant_vowel_b, q, cf[1]);
+                for (int v = 0; v < 2; v++)
+                    for (int fi = 0; fi < 3; fi++)
+                        for (int c = 0; c < 3; c++) {
+                            int32_t x = cf[v][fi][c];
+                            uint8_t b[4] = { (uint8_t)x, (uint8_t)(x >> 8),
+                                             (uint8_t)(x >> 16), (uint8_t)(x >> 24) };
+                            fwrite(b, 1, 4, f);
+                        }
+            }
         }
     }
 
@@ -1229,7 +1272,7 @@ static int write_js(const char *filename, birb_song *song) {
         "var jo=-1,jr=0\n",
         uses_fm ? ",fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmAlgo:0,fmMi:64,fmFb:0,fmNo:2,fmPrev:0" : "",
         uses_ks ? ",kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0" : "",
-        uses_drum ? ",drAl:0,drAlOrig:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0" : "",
+        uses_drum ? ",drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0" : "",
         uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "",
         uses_reverb ? ",rs:0" : "");
     if (uses_drive) fprintf(f, "for(c=0;c<N;c++){ch[c].dp=1;ch[c].dn=1}\n");
@@ -1240,12 +1283,21 @@ static int write_js(const char *filename, birb_song *song) {
      * emitted: without them the exported player would not match the editor. */
     fprintf(f,
         "function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}\n"
+        "function LT(p){p&=65535;var t=p<32768?p:65536-p;return((t<<2)-65536)>>7}\n"
         "var TG=[29819,29819,29819,29819,29819,23127,15360,38838,61580,149078].map(v=>v/65536)\n"
         "var LE=0,MG=%.6f,MT=%.6f,MR=%.6f,MC=SS(%.6f)\n",
         (song->master_gain ? song->master_gain : 128) / 64.0,
         (song->limit_thresh ? song->limit_thresh : 242) / 255.0,
         1.0 - 1.0 / (44100.0 * ((song->limit_release ? song->limit_release : 50) * 0.001)),
         (song->limit_thresh ? song->limit_thresh : 242) / 255.0);
+    /* drum-only tables — TG and the master constants above are NOT gated, every
+     * song needs them */
+    if (uses_drum)
+        fprintf(f,
+            "var KSW=[65518,65516,65512,65509,65505,65500,65495,65489,65482,65474,65465,65454,65442,65428,65412,65393,65372,65348,65320,65287,65251,65208,65160,65104,65040,64966,64882,64785,64674,64546,64400,64233,64067]\n"
+            "function KC(t){var i=t>>3,f=t&7,c=KSW[i];return c+(((KSW[i+1]-c)*f)>>3)}\n"
+            "var SHP=[1386,1545,1722,1920,2139,2383,2655,2956,3291,3663,4076,4533,5039,5600,6219,6903,7657,8487,9400,10401,11498,12697,14004,15424,16964,18627,20416,22332,24376,26543,28828,31221,33392]\n"
+            "function SC(t){var i=t>>3,f=t&7,c=SHP[i];return c+(((SHP[i+1]-c)*f)>>3)}\n");
     if (uses_ks)
         fprintf(f,
             "var KQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398]\n"
@@ -1262,10 +1314,27 @@ static int write_js(const char *filename, birb_song *song) {
          * (Hz) × 3 formants per vowel; per-formant gains baked into b0.
          * Coeffs recomputed when vowel or Q changes; sweep just interps. */
         fprintf(f,
-            "var FFREQS=[[730,1090,2440],[530,1840,2480],[270,2290,3010],[570,840,2410],[300,870,2240]],\n"
-            "FGAINS=[1.0,0.7,0.4]\n"
-            "function FCC(vw,q,dst){for(var i=0;i<3;i++){var om=2*Math.PI*FFREQS[vw][i]/44100,sn=Math.sin(om),cs=Math.cos(om),al=sn/(2*q),iv=1/(1+al);dst[i*3+0]=(al*iv*FGAINS[i]*F)|0;dst[i*3+1]=(-2*cs*iv*F)|0;dst[i*3+2]=((1-al)*iv*F)|0}}\n"
-            "function FI(C){var q=2+(C.ftR/255)*30;if(!C._FCA){C._FCA=new Float64Array(9);C._FCB=new Float64Array(9);C._FQ=-1;C._FVA=-1;C._FVB=-1}var va=C.ftVa,vb=C.ftVb;if(C._FQ!==q||C._FVA!==va){FCC(va,q,C._FCA);C._FVA=va}if(C._FQ!==q||C._FVB!==vb){FCC(vb,q,C._FCB);C._FVB=vb}C._FQ=q;var t=C.ftSp,omt=255-t;for(var i=0;i<3;i++){C.ftB0[i]=((C._FCA[i*3+0]*omt+C._FCB[i*3+0]*t)/255)|0;C.ftA1[i]=((C._FCA[i*3+1]*omt+C._FCB[i*3+1]*t)/255)|0;C.ftA2[i]=((C._FCA[i*3+2]*omt+C._FCB[i*3+2]*t)/255)|0}}\n");
+            "function FI(C){var A=FCO[C.i][0],B=FCO[C.i][1],t=C.ftSp,o=255-t;for(var i=0;i<3;i++){C.ftB0[i]=((A[i*3]*o+B[i*3]*t)/255)|0;C.ftA1[i]=((A[i*3+1]*o+B[i*3+1]*t)/255)|0;C.ftA2[i]=((A[i*3+2]*o+B[i*3+2]*t)/255)|0}}\n");
+        /* baked coefficients per instrument — no trig, and identical to what
+         * the C engine reads from the song, so the two agree exactly */
+        fprintf(f, "var FCO=[");
+        for (int i = 0; i < song->num_instruments; i++) {
+            birb_instrument *fin = &song->instruments[i];
+            if (i) fprintf(f, ",");
+            if (fin->synth_type != SYNTH_FORMANT) { fprintf(f, "0"); continue; }
+            double q = bc_formant_q(fin->formant_resonance);
+            int32_t cf[2][3][3];
+            bc_formant_coeffs(fin->formant_vowel_a, q, cf[0]);
+            bc_formant_coeffs(fin->formant_vowel_b, q, cf[1]);
+            fprintf(f, "[[");
+            for (int fi = 0; fi < 3; fi++) for (int c = 0; c < 3; c++)
+                fprintf(f, "%s%d", (fi || c) ? "," : "", cf[0][fi][c]);
+            fprintf(f, "],[");
+            for (int fi = 0; fi < 3; fi++) for (int c = 0; c < 3; c++)
+                fprintf(f, "%s%d", (fi || c) ? "," : "", cf[1][fi][c]);
+            fprintf(f, "]]");
+        }
+        fprintf(f, "]\n");
     }
     if (uses_fm) {
         /* 4-op FM. 8 algos, mirrors fmRender4() in the editor. raw is the
@@ -1313,8 +1382,8 @@ static int write_js(const char *filename, birb_song *song) {
             : "",
         uses_drum
             ? "\nif(j[0]===8){var dt=j[17]&7,al=dt===4?0:dt===5?2:dt,tn=j[18];if(tn>127)tn-=256;var dec=j[19],tone=j[20],snp=j[21],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;"
-              "if(al===0){C.drPe=df<<1;C.drPet=df>>1;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}"
-              "else if(al===1){C.f=df>0?df:24<<2;C.drMix=snp;C.drBodyT=64+(tone>>1);tt=dec*120+1024}"
+              "if(al===0){C.drPe=(df<<3)<<8;C.drPet=(df>>1)<<8;C.drRate=KC(tone);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}"
+              "else if(al===1){C.f=df>0?df:24<<2;C.b=C.f;C.drMix=snp;C.drPet=SC(tone);C.drPe=F;C.drRate=65460;C.drZ1=0;tt=dec*120+1024;C.drP2=F;C.drNz=F-Math.min(4096,(301466/(tt||1))|0)}"
               "else if(al===2){var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;C.drZ1=0;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}"
               "else{C.drBurstLen=80+(snp>>1);C.drStage=0;C.drStageT=C.drBurstLen;tt=dec*160+2048}"
               "if(tt>0xFFFFFF)tt=0xFFFFFF;C.drTtl=tt}"
@@ -1357,8 +1426,8 @@ static int write_js(const char *filename, birb_song *song) {
         "if(C.l){C.b+=C.l;if(C.b<1)C.b=1}\n"
         "if(C.pt&&C.ps){if(C.b<C.pt){C.b+=C.ps;if(C.b>C.pt)C.b=C.pt}else if(C.b>C.pt){C.b-=C.ps;if(C.b<C.pt)C.b=C.pt}}\n"
         "if(C.x|C.y){var n=C.n,t=C.k%%3;C.f=nf(t==1?n+C.x:t==2?n+C.y:n);C.k++}else C.f=C.b\n"
-        "if(C.vd){C.f+=((C.vp&65535)*4-F*2>>8)*C.vd/F;C.vp+=C.vs}\n"
-        "if(C.td){C.tm=((C.tp&65535)*4-F*2>>8)*C.td/F;C.tp+=C.ts}else C.tm=0\n"
+        "if(C.vd){C.f+=LT(C.vp)*C.vd/F;C.vp+=C.vs}\n"
+        "if(C.td){C.tm=(LT(C.tp)*C.td)>>1;C.tp+=C.ts}else C.tm=0\n"
         "var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}\n"
         "else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}\n"
         "else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}\n");
@@ -1384,7 +1453,7 @@ static int write_js(const char *filename, birb_song *song) {
     }
     if (uses_drum) {
         fprintf(f,
-            "if(C.w===8&&C.i<ni){var jd=I[C.i];C.drSnap=jd[21];C.drMix=jd[21];C.drRate=Math.max(16,jd[20]*256);if(C.drAl===2){var hpL=jd[21]*(F*15/16/255)|0;if(hpL<F>>4)hpL=F>>4;C.drPet=hpL}}\n");
+            "if(C.w===8&&C.i<ni){var jd=I[C.i];C.drSnap=jd[21];C.drMix=jd[21];C.drRate=KC(jd[20]);if(C.drAl===2){var hpL=jd[21]*(F*15/16/255)|0;if(hpL<F>>4)hpL=F>>4;C.drPet=hpL}}\n");
     }
     if (uses_formant) {
         int va_idx = formant_base + 2, vb_idx = formant_base + 3,
@@ -1421,10 +1490,10 @@ static int write_js(const char *filename, birb_song *song) {
             "if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};");
         if (drum_algos & 1)
             fprintf(f,
-                "if(C.drAl===0){var gp=C.drPe-C.drPet;C.drPe-=(gp*C.drRate)>>20;C.p=(C.p+C.drPe)%%F;var tri=C.p<F/2?(C.p*4-F):(F*3-C.p*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}");
+                "if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8))%%F;var tri=C.p<F/2?(C.p*4-F):(F*3-C.p*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}");
         if (drum_algos & 2)
             fprintf(f,
-                "%sif(C.drAl===1){var nn=lfn();var noi=(nn&1)?26000:-26000;C.p=(C.p+C.f)%%F;var bd=C.p<F/2?22000:-22000;if(C.drBodyT>0){bd=(bd*C.drBodyT/256)|0;C.drBodyT--}else bd=0;var mxB=C.drMix,mxN=255-mxB;o_=((noi*mxN+bd*mxB)/255)|0}",
+                "%sif(C.drAl===1){var nn=lfn();var sr_=(nn&1)?26000:-26000;var y_=sr_-C.drZ1;C.drZ1+=(y_*C.drPet)>>16;var noi=Math.floor(y_*C.drP2/65536);C.drP2=Math.floor(C.drP2*C.drNz/65536);C.p=(C.p+C.f)%%F;var tr_=C.p<F/2?(C.p*4-F):(F*3-C.p*4);var bd=(tr_*22000)>>16;bd=Math.floor(bd*C.drPe/65536);C.drPe=Math.floor(C.drPe*C.drRate/65536);var mxB=C.drMix,mxN=255-mxB;o_=((noi*mxN+bd*mxB)/255)|0}",
                 (drum_algos & 1) ? "else " : "");
         if (drum_algos & 4)
             fprintf(f,

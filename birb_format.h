@@ -105,14 +105,17 @@
  *   Optional FRIN section (formant instrument params):
  *     'F' 'R' 'I' 'N'
  *     count: u8 (number of formant instruments)
- *     Per formant inst (7 bytes):
+ *     Per formant inst (79 bytes):
  *       inst_idx:     u8  (loader sets synth_type to SYNTH_FORMANT)
  *       source_wave:  u8  (WAVE_PULSE / WAVE_SAWTOOTH / WAVE_NOISE)
  *       duty:         u8  (duty code 0..3, relevant when source = pulse)
  *       vowel_a:      u8  (0=A 1=E 2=I 3=O 4=U)
  *       vowel_b:      u8
  *       sweep_speed:  u8  (0 = static vowel_a; >0 bounces A↔B)
- *       resonance:    u8  (0..255; currently advisory — table fixed at Q=8)
+ *       resonance:    u8  (0..255 → Q 2..32)
+ *       coefficients: i32 × 18, little-endian — [vowel][formant][b0,a1,a2],
+ *         baked by the compiler from the vowel pair and Q. The runtimes do no
+ *         trig at all; see formant_coef in birb_synth.h for why.
  *     Loaders with -DBIRB_NO_FORMANT skip the entire section cleanly.
  *
  *   Optional NAME section (instrument names):
@@ -121,6 +124,9 @@
  */
 #ifndef BIRB_FORMAT_H
 #define BIRB_FORMAT_H
+
+/* FRIN record: 7 param bytes + 18 int32 baked biquad coefficients */
+#define BIRB_FRIN_REC (7 + 18 * 4)
 
 #include "birb_synth.h"
 
@@ -480,14 +486,14 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
 #ifdef BIRB_NO_FORMANT
         if (pos < len) {
             int fcount = data[pos++];
-            if (pos + 7 * fcount > len) return -1;
-            pos += 7 * fcount;
+            if (pos + BIRB_FRIN_REC * fcount > len) return -1;
+            pos += BIRB_FRIN_REC * fcount;
         }
 #else
         if (pos >= len) return -1;
         int fcount = data[pos++];
         for (int k = 0; k < fcount; k++) {
-            if (pos + 7 > len) return -1;
+            if (pos + BIRB_FRIN_REC > len) return -1;
             uint8_t idx = data[pos];
             uint8_t sw  = data[pos + 1];
             uint8_t duty = data[pos + 2];
@@ -505,7 +511,24 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
                 inst->formant_sweep_speed = sp;
                 inst->formant_resonance = res;
             }
-            pos += 7;
+            /* 18 baked biquad coefficients, int32 LE: [vowel][formant][b0,a1,a2].
+             * Computed by the compiler so no runtime trig is needed — see
+             * formant_coef in birb_synth.h. */
+            {
+                int q = pos + 7;
+                for (int v = 0; v < 2; v++)
+                    for (int fi = 0; fi < 3; fi++)
+                        for (int c = 0; c < 3; c++) {
+                            int32_t val = (int32_t)((uint32_t)data[q]
+                                        | ((uint32_t)data[q+1] << 8)
+                                        | ((uint32_t)data[q+2] << 16)
+                                        | ((uint32_t)data[q+3] << 24));
+                            if (idx < BIRB_MAX_INSTRUMENTS)
+                                song->instruments[idx].formant_coef[v][fi][c] = val;
+                            q += 4;
+                        }
+            }
+            pos += BIRB_FRIN_REC;
         }
 #endif
     }

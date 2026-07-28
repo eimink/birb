@@ -214,6 +214,14 @@ typedef struct {
     uint8_t   formant_vowel_b;      /* sweep destination */
     uint8_t   formant_sweep_speed;  /* 0=static vowel_a, >0 sweeps A→B→A */
     uint8_t   formant_resonance;    /* 0-255 reserved; current table uses Q=8 */
+    /* Biquad coefficients for vowel A and vowel B, baked at compile time by
+     * birbc (or by the editor on export) rather than derived here. The runtime
+     * therefore needs no sin/cos at all: the C engine used a fixed-point
+     * approximation with a documented 1.7% error in omega while the JS engines
+     * used exact Math.sin, so the same instrument produced measurably different
+     * filters in each. Baking removes the trig AND makes them agree, because
+     * both read the same numbers. [vowel][formant][b0,a1,a2]. */
+    fixed16   formant_coef[2][3][3];
 #endif
     char      name[32];      /* instrument name (editor only, not in core binary) */
 } birb_instrument;
