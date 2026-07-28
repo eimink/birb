@@ -3254,6 +3254,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             order: s.order,
             samples,
             rev: s.rev || {size:0.7, damp:0.5, wet:0.35},
+            master: s.master || MASTER_DEFAULTS,
             channelMuted: s.channelMuted || new Array(this.N).fill(false)
         };
     }
