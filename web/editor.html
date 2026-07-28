@@ -212,7 +212,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
     <button id="btn-stop" onclick="stopPlay()">&#9632; Stop</button>
     <button id="btn-rec" onclick="toggleRecord()" title="Record mode — cursor follows the playhead; type notes to record them live while playing">&#9679; Rec</button>
     <div class="sep"></div>
-    <button onclick="toggleFx()" id="btn-fx" title="Reverb / FX send bus">&#9835; FX</button>
+    <button onclick="toggleFx()" id="btn-fx" title="Master bus + reverb send bus">&#9835; MSTR/FX</button>
     <button onclick="toggleInfo()" id="btn-info">? Info</button>
 </div>
 <div class="toolbar">
@@ -422,10 +422,8 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
             Each instrument's <b style="color:var(--acc2)">Rev</b> send (instrument editor, under Vol) feeds this bus.<br>
             <b style="color:var(--acc)">Wet</b> 0 = off &middot; <b style="color:var(--acc)">Size</b> = tail length &middot; <b style="color:var(--acc)">Damp</b> = darker tail.
         </p>
-    </div>
 
-    <div class="info-panel" id="master-panel">
-        <h3>Master <span style="color:var(--dim);font-weight:normal">&middot; gain &rarr; limiter &rarr; soft clip</span></h3>
+        <h3 class="section" style="margin-top:12px">Master <span style="color:var(--dim);font-weight:normal">&middot; gain &rarr; limiter &rarr; soft clip</span></h3>
         <div class="inst-edit" style="border-top:none;padding:0">
             <div class="row"><label>Gain</label><input type="range" id="mst-gain" min="0" max="255" value="128"><span class="val" id="mst-gain-v">2.00x</span></div>
             <div class="row"><label>Ceiling</label><input type="range" id="mst-thresh" min="26" max="255" value="242"><span class="val" id="mst-thresh-v">0.95</span></div>
@@ -2027,10 +2025,9 @@ function loadInstEditor() {
     document.getElementById('ie-arp2').value = ins.arp2;
     document.getElementById('ie-vol').value = ins.vol !== undefined ? ins.vol : 255;
     document.getElementById('ie-rev').value = ins.rev || 0;
-    for (let [id, k] of [['ie-drive','drive'],['ie-ducksend','duckSend'],['ie-duckamt','duckAmt']]) {
-        document.getElementById(id).value = ins[k] || 0;
-        document.getElementById(id + '-v').textContent = ins[k] || 0;
-    }
+    document.getElementById('ie-drive').value = ins.drive || 0;
+    document.getElementById('ie-ducksend').value = ins.duckSend || 0;
+    document.getElementById('ie-duckamt').value = ins.duckAmt || 0;
     document.getElementById('ie-name').value = ins.name || '';
     updateInstValues();
     drawADSR();
@@ -2099,7 +2096,7 @@ function editNextInstrument() {
     loadInstEditor();
 }
 function updateInstValues() {
-    for (let k of ['a','d','s','r','vol','rev']) {
+    for (let k of ['a','d','s','r','vol','rev','drive','ducksend','duckamt']) {
         let el = document.getElementById('ie-'+k);
         document.getElementById('ie-'+k+'-v').textContent = el.value;
     }
