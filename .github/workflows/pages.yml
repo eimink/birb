@@ -39,7 +39,9 @@ jobs:
           mkdir -p _site
           cp web/editor.min.html _site/index.html
 
-      - uses: actions/upload-pages-artifact@v4
+      # v5 is the first release whose inner actions/upload-artifact pin is v7
+      # (node24). v4 wrapped upload-artifact v4.6.2, which still runs node20.
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
