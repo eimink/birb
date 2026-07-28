@@ -201,30 +201,31 @@ def write_bsb(filename, bpm, tpr, instruments, patterns, order):
         buf.append(inst.get('arp2', 0))
         buf.append(inst.get('vol', 255))
         buf.append(0)  # reserved
-    # patterns (planar)
+    # pattern lengths: ALL of them together, then the plane-empty flags byte,
+    # then each non-empty plane channel-major across every pattern. This writer
+    # previously emitted a per-pattern {nrows, 5 planes} layout, which the
+    # loader has not accepted for a long time — every .bsb it produced was
+    # rejected by birb_load.
     for pat in patterns:
-        nrows = len(pat)
-        buf.append(nrows)
-        # notes
+        buf.append(len(pat))
+
+    PLANES = ('note', 'inst', 'vol', 'fx', 'prm')
+    DEFAULTS = (0, 0xFF, 0, 0, 0)
+
+    flags = 0
+    for pl, (key, dflt) in enumerate(zip(PLANES, DEFAULTS)):
+        if all(pat[r][c][key] == dflt
+               for pat in patterns for r in range(len(pat)) for c in range(4)):
+            flags |= 1 << pl
+    buf.append(flags)
+
+    for pl, key in enumerate(PLANES):
+        if flags & (1 << pl):
+            continue
         for c in range(4):
-            for r in range(nrows):
-                buf.append(pat[r][c]['note'])
-        # instruments
-        for c in range(4):
-            for r in range(nrows):
-                buf.append(pat[r][c]['inst'])
-        # volume
-        for c in range(4):
-            for r in range(nrows):
-                buf.append(pat[r][c]['vol'])
-        # effects
-        for c in range(4):
-            for r in range(nrows):
-                buf.append(pat[r][c]['fx'])
-        # params
-        for c in range(4):
-            for r in range(nrows):
-                buf.append(pat[r][c]['prm'])
+            for pat in patterns:
+                for r in range(len(pat)):
+                    buf.append(pat[r][c][key])
 
     with open(filename, 'wb') as f:
         f.write(buf)
