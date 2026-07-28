@@ -858,6 +858,40 @@ static int write_binary(const char *filename, birb_song *song) {
     }
 #endif
 
+    /* MSTR section — master bus + per-instrument dynamics. Written only when
+     * the song departs from the defaults, so simple songs cost nothing. Must
+     * sit after REVB and before NAME to match the positional loader order. */
+#ifndef BIRB_NO_MASTER
+    {
+        int dyn_count = 0;
+        for (int i = 0; i < song->num_instruments; i++)
+            if (song->instruments[i].drive || song->instruments[i].duck_send ||
+                song->instruments[i].duck_amt) dyn_count++;
+        int non_default = (song->master_gain   && song->master_gain   != 128) ||
+                          (song->limit_thresh  && song->limit_thresh  != 242) ||
+                          (song->limit_release && song->limit_release != 50)  ||
+                          (song->duck_release  && song->duck_release  != 120);
+        if (non_default || dyn_count > 0) {
+            fwrite("MSTR", 1, 4, f);
+            uint8_t g[4] = {
+                song->master_gain   ? song->master_gain   : 128,
+                song->limit_thresh  ? song->limit_thresh  : 242,
+                song->limit_release ? song->limit_release : 50,
+                song->duck_release  ? song->duck_release  : 120,
+            };
+            fwrite(g, 1, 4, f);
+            uint8_t cnt = (uint8_t)dyn_count;
+            fwrite(&cnt, 1, 1, f);
+            for (int i = 0; i < song->num_instruments; i++) {
+                birb_instrument *in = &song->instruments[i];
+                if (!in->drive && !in->duck_send && !in->duck_amt) continue;
+                uint8_t rec[4] = { (uint8_t)i, in->drive, in->duck_send, in->duck_amt };
+                fwrite(rec, 1, 4, f);
+            }
+        }
+    }
+#endif
+
     /* NAME section — instrument names */
     int has_names = 0;
     for (int i = 0; i < song->num_instruments; i++)
@@ -986,6 +1020,14 @@ static int write_js(const char *filename, birb_song *song) {
     /* Reverb is emitted only when the song actually uses it (wet > 0 or some
      * instrument sends) — same emit-only-if-used pattern as FM/KS/drum. This
      * is how the exported player gets its "with / without reverb" variants. */
+    /* per-voice dynamics are only emitted when some instrument uses them, so
+     * a 4K song that does not touch drive or ducking pays nothing for them */
+    int uses_drive = 0, uses_duck = 0;
+    for (int i = 0; i < song->num_instruments; i++) {
+        if (song->instruments[i].drive) uses_drive = 1;
+        if (song->instruments[i].duck_send || song->instruments[i].duck_amt) uses_duck = 1;
+    }
+
     int uses_reverb = 0;
 #ifndef BIRB_NO_REVERB
     double rv_fb = 0, rv_dc = 0, rv_wet = 0;
@@ -1087,6 +1129,23 @@ static int write_js(const char *filename, birb_song *song) {
     }
 #endif
 
+    /* per-instrument drive / duck send / duck amount, indexed like I[] */
+    if (uses_drive) {
+        fprintf(f, "DV=[");
+        for (int i = 0; i < song->num_instruments; i++)
+            fprintf(f, "%s%d", i ? "," : "", song->instruments[i].drive);
+        fprintf(f, "],\n");
+    }
+    if (uses_duck) {
+        fprintf(f, "DS=[");
+        for (int i = 0; i < song->num_instruments; i++)
+            fprintf(f, "%s%d", i ? "," : "", song->instruments[i].duck_send);
+        fprintf(f, "],\nDA=[");
+        for (int i = 0; i < song->num_instruments; i++)
+            fprintf(f, "%s%d", i ? "," : "", song->instruments[i].duck_amt);
+        fprintf(f, "],\n");
+    }
+
     /* pattern lengths */
     fprintf(f, "pl=[");
     for (int p = 0; p < song->num_patterns; p++) {
@@ -1169,10 +1228,31 @@ static int write_js(const char *filename, birb_song *song) {
         "for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,tp:0,ts:0,td:0,tm:0%s%s%s%s%s}\n"
         "var jo=-1,jr=0\n",
         uses_fm ? ",fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmAlgo:0,fmMi:64,fmFb:0,fmNo:2,fmPrev:0" : "",
-        uses_ks ? ",kb:new Int16Array(1024),kl:0,kp:0,kd:0" : "",
+        uses_ks ? ",kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0" : "",
         uses_drum ? ",drAl:0,drAlOrig:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0" : "",
         uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "",
         uses_reverb ? ",rs:0" : "");
+    if (uses_drive) fprintf(f, "for(c=0;c<N;c++){ch[c].dp=1;ch[c].dn=1}\n");
+    if (uses_duck)  fprintf(f, "for(c=0;c<N;c++){ch[c].ds=0;ch[c].da=0}\n");
+    /* Master bus. SS is the rational tanh the C engine uses (birb_soft_sat);
+     * TG is the per-synth-type loudness calibration indexed by wave id, as the
+     * same fixed16 constants over 65536 so C and JS agree. Both are always
+     * emitted: without them the exported player would not match the editor. */
+    fprintf(f,
+        "function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}\n"
+        "var TG=[29819,29819,29819,29819,29819,23127,15360,38838,61580,149078].map(v=>v/65536)\n"
+        "var LE=0,MG=%.6f,MT=%.6f,MR=%.6f,MC=SS(%.6f)\n",
+        (song->master_gain ? song->master_gain : 128) / 64.0,
+        (song->limit_thresh ? song->limit_thresh : 242) / 255.0,
+        1.0 - 1.0 / (44100.0 * ((song->limit_release ? song->limit_release : 50) * 0.001)),
+        (song->limit_thresh ? song->limit_thresh : 242) / 255.0);
+    if (uses_ks)
+        fprintf(f,
+            "var KQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398]\n"
+            "function KG(d,l){var i=d>>3,f=d&7,q=KQ[i];q+=((KQ[i+1]-q)*f)>>3;var a=(q*l)>>8;return a>=65535?0:65535-a}\n");
+    if (uses_duck)
+        fprintf(f, "var DE=0,DR=%.6f\n",
+            1.0 - 1.0 / (44100.0 * ((song->duck_release ? song->duck_release : 120) * 0.001)));
     if (uses_fm || uses_drum || uses_sine) {
         fprintf(f,
             "function SA_(ph){var p=((ph%%F)+F)%%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n");
@@ -1220,14 +1300,16 @@ static int write_js(const char *filename, birb_song *song) {
         "C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]\n"
         "C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];\n"
         "if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}\n"
-        "C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0%s\n"
+        "C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0%s%s%s\n"
         "if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}%s%s%s%s}\n",
         uses_reverb ? ";C.rs=RS[ii]||0" : "",
+        uses_drive ? ";C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1" : "",
+        uses_duck  ? ";C.ds=DS[ii]||0;C.da=DA[ii]||0" : "",
         uses_fm
             ? "\nif(j[0]===6){var fm=j[15];C.fmNo=j[11];C.fmAlgo=j[12]|0;C.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}"
             : "",
         uses_ks
-            ? "\nif(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kbit=(lf^(lf>>1))&1;lf=((lf>>1)|(kbit<<14))&0xFFFF;C.kb[ki]=(lf&1)?16383:-16383}}"
+            ? "\nif(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kbit=(lf^(lf>>1))&1;lf=((lf>>1)|(kbit<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}"
             : "",
         uses_drum
             ? "\nif(j[0]===8){var dt=j[17]&7,al=dt===4?0:dt===5?2:dt,tn=j[18];if(tn>127)tn-=256;var dec=j[19],tone=j[20],snp=j[21],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;"
@@ -1315,9 +1397,10 @@ static int write_js(const char *filename, birb_song *song) {
     fprintf(f, "}}\n");
     fprintf(f,
         "for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--\n"
-        "var v=0%s;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e%s)continue\n"
+        "var v=0%s%s;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e%s)continue\n"
         "var h=C.p,s;\n",
         uses_reverb ? ",rI=0" : "",
+        uses_duck ? ",DI=0,DN=DE" : "",
         uses_drum ? "&&!C.drTtl" : "");
     if (uses_fm) {
         /* nops=4 → FM4 (8 algos); nops=2 → simpler op1→op0 with feedback. */
@@ -1326,7 +1409,7 @@ static int write_js(const char *filename, birb_song *song) {
     }
     if (uses_ks) {
         fprintf(f,
-            "if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*(255-C.kd))>>8;C.kp=knx;s=kcur/32768}}else \n");
+            "if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*C.kg)>>16;C.kp=knx;s=kcur/32768}}else \n");
     }
     if (uses_drum) {
         /* New drum DSP — mirrors editor renderSong:
@@ -1368,16 +1451,25 @@ static int write_js(const char *filename, birb_song *song) {
         "var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F\n");
     {
         const char *padv = uses_drum ? "if(C.w!==8)" : "";
+        /* per-voice drive is applied to s before the envelope; calibration and
+         * ducking scale cv; the master chain replaces the bare tanh */
+        const char *drv = uses_drive ? "if(C.dp>1)s=SS(s*C.dp)*C.dn;" : "";
+        const char *dsend = uses_duck
+            ? "if(C.ds)DI+=(cv<0?-cv:cv)*C.ds/255;if(C.da&&DN>0){var dg=1-DN*C.da/255;cv*=dg>0?dg:0}" : "";
+        const char *dtick = uses_duck
+            ? "var dd=DI>1?1:DI;DE=dd>DE?dd:dd+(DE-dd)*DR;" : "";
+        const char *master =
+            "v*=MG;var la=v<0?-v:v;LE=la>LE?la:la+(LE-la)*MR;if(LE>MT)v*=MT/LE;out[i]=SS(v)/MC";
 #ifndef BIRB_NO_REVERB
         if (uses_reverb)
             fprintf(f,
-                "var cv=s*en*C.v*C.rv/F/255/255;v+=cv;if(C.rs)rI+=cv*C.rs/255;%sC.p=(C.p+C.f)%%F}v+=RV(rI);out[i]=Math.tanh(v)}\n"
-                "return{o:out,spt:spt,T:T}}\n", padv);
+                "%svar cv=s*en*C.v*C.rv/F/255/255*TG[C.w];%sv+=cv;if(C.rs)rI+=cv*C.rs/255;%sC.p=(C.p+C.f)%%F}v+=RV(rI);%s%s}\n"
+                "return{o:out,spt:spt,T:T}}\n", drv, dsend, padv, dtick, master);
         else
 #endif
             fprintf(f,
-                "v+=s*en*C.v*C.rv/F/255/255;%sC.p=(C.p+C.f)%%F}out[i]=Math.tanh(v)}\n"
-                "return{o:out,spt:spt,T:T}}\n", padv);
+                "%svar cv=s*en*C.v*C.rv/F/255/255*TG[C.w];%sv+=cv;%sC.p=(C.p+C.f)%%F}%s%s}\n"
+                "return{o:out,spt:spt,T:T}}\n", drv, dsend, padv, dtick, master);
     }
 
     fclose(f);

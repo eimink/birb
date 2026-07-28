@@ -181,7 +181,20 @@ typedef struct {
     birb_fm_inst fm;         /* FM params (only meaningful when synth_type == SYNTH_FM) */
 #endif
 #ifndef BIRB_NO_KS
-    uint8_t   ks_damping;    /* KS pluck damping 0-255; higher = shorter sustain */
+    uint8_t   ks_damping;    /* KS pluck damping 0-255; higher = shorter sustain.
+                              * Maps to T60 4.0 s .. 0.02 s exponentially and is
+                              * pitch-compensated (see birb_ks_q24). */
+#endif
+#ifndef BIRB_NO_MASTER
+    /* Per-voice dynamics. `drive` is level-matched soft saturation applied
+     * before the mixer: it raises a voice's RMS without raising its peak, which
+     * is the only way a high-crest-factor source (a KS pluck measures ~19 dB
+     * crest, an FM sine ~3 dB) can hold its own against a sustained bass.
+     * `duck_send` feeds this instrument into the sidechain bus; `duck_amt` is
+     * how much this instrument gets ducked BY that bus. */
+    uint8_t   drive;         /* 0 = clean, 255 = heavily saturated */
+    uint8_t   duck_send;     /* 0-255, how much this voice drives the duck bus */
+    uint8_t   duck_amt;      /* 0-255, how much this voice is ducked */
 #endif
 #ifndef BIRB_NO_DRUM
     /* Drum synth params (only meaningful when synth_type == SYNTH_DRUM). */
@@ -278,6 +291,14 @@ typedef struct {
 #ifndef BIRB_NO_REVERB
     uint8_t       reverb_send;     /* per-channel reverb send 0-255, copied from instrument */
 #endif
+#ifndef BIRB_NO_MASTER
+    uint8_t       duck_send;       /* copied from instrument at trigger */
+    uint8_t       duck_amt;
+    /* Drive resolved at trigger time: pre is the saturator input gain, norm
+     * rescales the output so peak level is unchanged and only RMS rises. */
+    float         drive_pre;
+    float         drive_norm;
+#endif
 
     /* ---- type-specific state (tagged by synth_type) ---- */
     union {
@@ -337,7 +358,12 @@ typedef struct {
             int16_t  buf[BIRB_KS_BUF_SIZE];  /* delay line, noise-filled on trigger */
             uint16_t buf_len;                /* active length, clamped to BIRB_KS_BUF_SIZE */
             uint16_t buf_pos;                /* read/write head */
-            uint8_t  damping;                /* 0 = ring forever, 255 = fast decay */
+            /* Per-period loop gain in 1/65536, derived at trigger time from the
+             * instrument's damping byte AND buf_len (see birb_ks_loop_gain).
+             * Storing the resolved gain rather than the raw damping byte is what
+             * makes decay time pitch-independent: a long buffer needs a higher
+             * per-period gain to reach the same T60 in seconds. */
+            uint16_t loop_gain;
         } ks;
 #endif
 #ifndef BIRB_NO_DRUM
@@ -451,6 +477,15 @@ typedef struct {
     uint8_t  rev_damp;   /* global reverb bus: HF damping     0-255 */
     uint8_t  rev_wet;    /* global reverb bus: wet mix        0-255 (0 = off) */
 #endif
+#ifndef BIRB_NO_MASTER
+    /* Master bus (see the MSTR section in birb_format.h). Defaults are applied
+     * by birb_parse_song when the section is absent, so every song gets the
+     * same gain structure whether or not it carries master data. */
+    uint8_t  master_gain;   /* 0-255, gain = v/64 (so 64 = unity, 255 = 4x) */
+    uint8_t  limit_thresh;  /* 0-255, limiter ceiling = v/255 (default 242) */
+    uint8_t  limit_release; /* 0-255 ms release time      (default 50) */
+    uint8_t  duck_release;  /* 0-255 ms sidechain release (default 120) */
+#endif
 
     birb_instrument instruments[BIRB_MAX_INSTRUMENTS];
     uint8_t         order[BIRB_MAX_ORDER][BIRB_NUM_CHANNELS]; /* pattern index per channel per position */
@@ -489,6 +524,16 @@ typedef struct {
     int   rev_comb_pos[BIRB_REV_NCOMB];
     float rev_ap[BIRB_REV_NAP][BIRB_REV_AMAX];
     int   rev_ap_pos[BIRB_REV_NAP];
+#endif
+
+#ifndef BIRB_NO_MASTER
+    /* Master bus state. lim_env is a peak follower with instantaneous attack
+     * and a one-pole release — a feedback limiter, so no lookahead buffer is
+     * needed and the soft-saturator downstream absorbs the small overshoot.
+     * duck_env is the sidechain follower; it is applied with a one-sample
+     * delay so the whole mix still runs in a single pass. */
+    float lim_env;
+    float duck_env;
 #endif
 
     /* sequencer */

@@ -4,6 +4,12 @@
  */
 #include "birb_synth.h"
 
+#if !defined(BIRB_NO_REVERB) || !defined(BIRB_NO_MASTER)
+/* Defined down with the master bus; declared here because trigger_note uses it
+ * to resolve per-instrument drive. */
+static float birb_soft_sat(float x);
+#endif
+
 /* ---------- note frequency lookup ---------- *
  * Phase increment per sample at BIRB_SAMPLE_RATE=44100, as a 12-entry
  * octave-base table shifted by octave: freq = base[n%12] << (n/12).
@@ -257,11 +263,53 @@ static int16_t gen_fm(birb_channel *ch) {
 #endif /* BIRB_NO_FM */
 
 #ifndef BIRB_NO_KS
+/* ---------- Karplus-Strong decay table ----------
+ * Q24[i] is the per-period attenuation rate for damping = i*8, scaled by 2^24
+ * and with the delay length factored out, so
+ *
+ *     attenuation_16 = (Q24[damping] * buf_len) >> 8
+ *     loop_gain      = 65535 - attenuation_16
+ *
+ * gives a decay whose T60 is (near enough) constant in SECONDS rather than in
+ * periods. The old code multiplied by a fixed (255-damping)/256 per period,
+ * which made a C-5 pluck die four times faster than a C-3 one and squeezed the
+ * entire musically useful range into damping 8..20.
+ *
+ * The table maps damping 0..255 onto T60 4.0 s .. 0.02 s exponentially:
+ *     T60(d) = 4.0 * (0.02/4.0)^(d/255)
+ *     Q24(d) = ln(10^3) * 2^24 / (T60(d) * 44100)
+ * Values are interpolated between table entries (see birb_ks_loop_gain). It is
+ * a table rather than a pow() call so the C engines and the JS engines stay
+ * bit-identical — no libm, and no cross-language transcendental drift.
+ *
+ * Note the loop's 2-tap averaging filter imposes its own ceiling on T60 at very
+ * high notes (~0.26 s at C-7), so the pitch-independence holds up to about C-6.
+ * That is string-like behaviour and is left alone deliberately. */
+static const uint32_t birb_ks_q24[33] = {
+        657,     776,     916,    1082,    1277,    1508,    1781,    2103,
+       2484,    2933,    3463,    4089,    4829,    5702,    6733,    7951,
+       9388,   11086,   13091,   15458,   18253,   21554,   25452,   30054,
+      35489,   41907,   49485,   58434,   69001,   81479,   96213,  113612,
+     131398,
+};
+
+/* Resolve (damping, delay length) into the per-period loop gain in 1/65536.
+ * Clamped to 65535 so the per-sample product below always fits in int32. */
+static uint16_t birb_ks_loop_gain(uint8_t damping, uint16_t len) {
+    int i = damping >> 3;
+    int frac = damping & 7;
+    uint32_t q = birb_ks_q24[i];
+    q += (uint32_t)(((int32_t)birb_ks_q24[i + 1] - (int32_t)q) * frac) >> 3;
+    uint32_t att = (q * (uint32_t)len) >> 8;
+    if (att >= 65535) return 0;
+    return (uint16_t)(65535 - att);
+}
+
 /* Karplus-Strong pluck. Reads the current sample from the delay line, writes
  * back a low-pass-filtered, damped copy, and advances the head. The buffer is
  * pre-filled with noise on trigger (see trigger_note); over time the filter
  * eats the high frequencies, leaving a harmonic that decays to silence at a
- * rate controlled by `damping`. */
+ * rate set by loop_gain (resolved from damping + pitch at trigger time). */
 static int16_t generate_ks(birb_channel *ch) {
     uint16_t len = ch->u.ks.buf_len;
     if (len < 2) return 0;
@@ -270,9 +318,8 @@ static int16_t generate_ks(birb_channel *ch) {
     int16_t out = ch->u.ks.buf[pos];
     /* simple 2-tap low-pass: average of current + next tap */
     int32_t avg = ((int32_t)out + ch->u.ks.buf[next]) >> 1;
-    /* damping attenuates what we write back. damping=0 → pure avg (rings);
-     * damping=255 → silent write-back (instant decay). */
-    int32_t damped = (avg * (255 - ch->u.ks.damping)) >> 8;
+    /* |avg| <= 32767 and loop_gain <= 65535, so this stays inside int32. */
+    int32_t damped = (avg * (int32_t)ch->u.ks.loop_gain) >> 16;
     ch->u.ks.buf[pos] = (int16_t)damped;
     ch->u.ks.buf_pos = next;
     return out;
@@ -772,6 +819,20 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
 #ifndef BIRB_NO_REVERB
     ch->reverb_send = inst->reverb_send;
 #endif
+#ifndef BIRB_NO_MASTER
+    ch->duck_send = inst->duck_send;
+    ch->duck_amt  = inst->duck_amt;
+    /* Resolve drive once per note. pre spans 1x..9x into the saturator; norm
+     * divides by what the saturator does to a full-scale input at that drive,
+     * so the peak comes back to where it started and only the RMS has moved. */
+    if (inst->drive) {
+        ch->drive_pre  = 1.0f + (float)inst->drive * (8.0f / 255.0f);
+        ch->drive_norm = 1.0f / birb_soft_sat(ch->drive_pre);
+    } else {
+        ch->drive_pre  = 1.0f;
+        ch->drive_norm = 1.0f;
+    }
+#endif
     ch->arp_tick = 0;
     ch->vibrato_phase = 0;
     ch->vibrato_speed = 0;
@@ -841,16 +902,18 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         if (len > BIRB_KS_BUF_SIZE) len = BIRB_KS_BUF_SIZE;
         ch->u.ks.buf_len = (uint16_t)len;
         ch->u.ks.buf_pos = 0;
-        ch->u.ks.damping = inst->ks_damping;
+        ch->u.ks.loop_gain = birb_ks_loop_gain(inst->ks_damping, (uint16_t)len);
         /* Fill buffer with a deterministic LFSR noise burst. Seed is shifted
          * from the note so identical instruments on different pitches don't
-         * alias phase-locked. */
+         * alias phase-locked. Excitation is full scale: at ±16383 the pluck
+         * started 6 dB below every other synth type before its envelope had
+         * even begun, which no amount of instrument volume could win back. */
         uint16_t lfsr = (uint16_t)(0x7FFF ^ ((uint16_t)semitone * 0x1D79));
         if (!lfsr) lfsr = 0x7FFF;
         for (uint16_t i = 0; i < len; i++) {
             uint16_t bit = (lfsr ^ (lfsr >> 1)) & 1;
             lfsr = (lfsr >> 1) | (bit << 14);
-            ch->u.ks.buf[i] = (lfsr & 1) ? 16383 : -16383;
+            ch->u.ks.buf[i] = (lfsr & 1) ? 32767 : -32767;
         }
     }
 #endif
@@ -1388,6 +1451,21 @@ void birb_init(birb_state *state, birb_song *song) {
     state->jump_order = -1;
     state->jump_row = 0;
 
+#ifndef BIRB_NO_MASTER
+    /* Master defaults, applied when the song carries no MSTR section (or was
+     * built in memory). Zero is treated as "unset" the same way ch->volume is:
+     * a stored master_gain of 0 would just mean silence, which nobody wants as
+     * a persisted value. Gain defaults to x2.0 rather than unity because the
+     * per-type calibration deliberately pulls every voice down to a -13 LUFS
+     * reference to create headroom; at unity an existing song would render
+     * 3.6 dB quieter than before for no reason. x2.0 lands it slightly louder
+     * than it was, with the limiter engaging only on peaks. */
+    if (song->master_gain   == 0) song->master_gain   = 128;   /* x2.0  */
+    if (song->limit_thresh  == 0) song->limit_thresh  = 242;   /* 0.949 */
+    if (song->limit_release == 0) song->limit_release = 50;    /* ms    */
+    if (song->duck_release  == 0) song->duck_release  = 120;   /* ms    */
+#endif
+
     /* init noise LFSRs (basic-synth union arm; safe to touch because the
      * channel default synth_type is SYNTH_BASIC=0 via the zero-init above) */
     for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
@@ -1399,6 +1477,22 @@ void birb_init(birb_state *state, birb_song *song) {
     process_row(state);
 }
 
+#if !defined(BIRB_NO_REVERB) || !defined(BIRB_NO_MASTER)
+/* Rational tanh approximation — bounded soft saturation, no libm. Input is
+ * clamped to the monotonic ±3 window where it reaches ±1.
+ *
+ * The JS engines use this same rational form rather than Math.tanh. They used
+ * to differ (Math.tanh(3) is 0.9950 where this returns exactly 1.0, so a hot
+ * mix hard-clipped in C but not in JS); using one function everywhere makes all
+ * five render paths agree. With the limiter ahead of it the input never leaves
+ * ±thresh anyway, so the ±3 clamp is now unreachable in normal operation. */
+static float birb_soft_sat(float x) {
+    if (x < -3.0f) x = -3.0f; else if (x > 3.0f) x = 3.0f;
+    float x2 = x * x;
+    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+}
+#endif
+
 #ifndef BIRB_NO_REVERB
 /* ---------- reverb send bus (see birb_synth.h) ----------
  * Float DSP, active only in the reverb build; the lean build keeps the
@@ -1406,15 +1500,6 @@ void birb_init(birb_state *state, birb_song *song) {
  * exactly, operating in the ±1 sample domain. */
 static const int birb_rev_comb_len[BIRB_REV_NCOMB] = { 1116, 1188, 1277, 1356 };
 static const int birb_rev_ap_len[BIRB_REV_NAP]     = { 556, 441 };
-
-/* Rational tanh approximation — bounded soft saturation, no libm. Matches
- * JS Math.tanh to <2% over the working range (imperceptible on a master
- * saturator). Input clamped to the monotonic ±3 window where it reaches ±1. */
-static float birb_soft_sat(float x) {
-    if (x < -3.0f) x = -3.0f; else if (x > 3.0f) x = 3.0f;
-    float x2 = x * x;
-    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
-}
 
 static float birb_reverb_tick(birb_state *st, float x, float size, float damp, float wet) {
     float fb = 0.7f + 0.28f * size;
@@ -1443,6 +1528,62 @@ static float birb_reverb_tick(birb_state *st, float x, float size, float damp, f
 }
 #endif /* BIRB_NO_REVERB */
 
+#ifndef BIRB_NO_MASTER
+/* ---------- per-synth-type loudness calibration ----------
+ * Indexed by birb_synth_type. Before these gains existed, an instrument at
+ * volume 255 measured anywhere from -0.4 LUFS (FM bass) to -24.7 LUFS (formant
+ * pad) depending only on which synth type it happened to be — a 24 dB spread
+ * with no way to compensate, because volume was already maxed. These constants
+ * normalise every family to a common -13 LUFS reference so the volume column
+ * means the same thing everywhere and the mix starts with real headroom.
+ *
+ * Measured with a BS.1770 K-weighted meter, each family keyed to its LOUDEST
+ * preset so no voice can clip after calibration — except DRUM, which is keyed
+ * to its median instead: crash and ride are sustained-noise outliers sitting
+ * 19 dB above the kicks, and keying to them would bury the whole kit. Those two
+ * presets carry a lower preset volume instead.
+ *
+ * Values are 16.16 fixed point. FORMANT is above unity because that generator
+ * only ever reached a peak of 0.21 — it had 13 dB of unused range. */
+static const fixed16 birb_type_gain[6] = {
+    29819,   /* SYNTH_BASIC   x0.455  (keyed to sine,      -6.16 LUFS) */
+    23127,   /* SYNTH_SAMPLE  x0.353  (keyed to full-scale, -3.95)     */
+    15360,   /* SYNTH_FM      x0.234  (keyed to bass,      -0.40)      */
+    38838,   /* SYNTH_KS      x0.593  (keyed to damp40 C-3, -8.45)     */
+    61580,   /* SYNTH_DRUM    x0.940  (keyed to median,   -12.46)      */
+   149078,   /* SYNTH_FORMANT x2.275  (keyed to eebuzz,   -20.14)      */
+};
+
+/* Feedback peak limiter. Instantaneous attack, one-pole release: the envelope
+ * jumps straight to any new peak and decays back over `rel`. Gain reduction is
+ * thresh/env whenever env exceeds the threshold. This replaces relying on the
+ * bare saturator, which as a static waveshaper let a loud sustained bass push
+ * everything else into the flat part of its curve — measured at 3.3 dB of
+ * suppression on a pluck with the bass merely present, and -23 dB once a dense
+ * mix reached a level of 2.0. A limiter sets one gain for the whole mix instead
+ * of reshaping each sample independently, so quiet sources keep their level. */
+static float birb_limiter_tick(birb_state *st, float x, float thresh, float rel) {
+    float a = x < 0.0f ? -x : x;
+    if (a > st->lim_env) st->lim_env = a;
+    else st->lim_env = a + (st->lim_env - a) * rel;
+    if (st->lim_env > thresh) return x * (thresh / st->lim_env);
+    return x;
+}
+
+/* One-pole coefficient for a `ms` millisecond release at the current rate.
+ * exp(-1/(SR*t)) without libm: for the ranges here (5..255 ms) the first-order
+ * form 1 - 1/(SR*t) is within 0.5% of the exponential, and the difference is a
+ * fraction of a dB on the release tail. */
+static float birb_release_coeff(int ms) {
+    if (ms < 1) ms = 1;
+    float n = (float)BIRB_SAMPLE_RATE * (float)ms * 0.001f;
+    float c = 1.0f - 1.0f / n;
+    if (c < 0.0f) c = 0.0f;
+    if (c > 0.9999f) c = 0.9999f;
+    return c;
+}
+#endif /* BIRB_NO_MASTER */
+
 void birb_render(birb_state *state, int16_t *output, int num_samples) {
     for (int i = 0; i < num_samples; i++) {
         /* advance sequencer */
@@ -1457,11 +1598,30 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
 #ifndef BIRB_NO_REVERB
         float rev_in = 0.0f;   /* summed reverb send, ±1 domain */
 #endif
+#ifndef BIRB_NO_MASTER
+        int32_t duck_in = 0;   /* sidechain bus sum for the NEXT sample */
+        /* Gain the sidechain applies this sample. Uses the envelope built from
+         * the previous sample so the mix stays single-pass; one sample of delay
+         * at 44.1 kHz is 23 us and inaudible. */
+        float duck_now = state->duck_env;
+#endif
         for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
             birb_channel *ch = &state->channels[c];
             if (ch->env_stage == ENV_OFF && ch->env_level == 0) continue;
 
             int16_t sample = generate_sample(ch, state->song);
+#ifndef BIRB_NO_MASTER
+            /* Per-voice drive: saturate hard, then scale back so the peak is
+             * unchanged. Only the RMS rises — which is what makes a pluck
+             * audible against a sustained bass without turning the bass down. */
+            if (ch->drive_pre > 1.0f) {
+                float d = birb_soft_sat((float)sample * (1.0f / 32767.0f) * ch->drive_pre)
+                        * ch->drive_norm * 32767.0f;
+                if (d > 32767.0f) d = 32767.0f;
+                if (d < -32767.0f) d = -32767.0f;
+                sample = (int16_t)d;
+            }
+#endif
             /* apply envelope, instrument volume, row volume, and tremolo */
             int32_t vol = ch->volume ? ch->volume : 255;
             int32_t rvol = ch->row_vol;
@@ -1474,6 +1634,24 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             int32_t out = ((int32_t)sample * FX_TO_INT(env * 256)) >> 8;
             out = out * vol / 255;
             out = out * rvol / 255;
+#ifndef BIRB_NO_MASTER
+            /* per-synth-type loudness calibration (see birb_type_gain) */
+            {
+                uint8_t t = ch->synth_type;
+                if (t < 6)
+                    out = (int32_t)(((int64_t)out * birb_type_gain[t]) >> FX_SHIFT);
+            }
+            /* this voice feeds the sidechain bus before being ducked itself */
+            if (ch->duck_send) {
+                int32_t a = out < 0 ? -out : out;
+                duck_in += a * ch->duck_send / 255;
+            }
+            if (ch->duck_amt && duck_now > 0.0f) {
+                float g = 1.0f - duck_now * ((float)ch->duck_amt / 255.0f);
+                if (g < 0.0f) g = 0.0f;
+                out = (int32_t)((float)out * g);
+            }
+#endif
             mix += out;
 #ifndef BIRB_NO_REVERB
             if (ch->reverb_send)
@@ -1492,19 +1670,44 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             }
         }
 
-#ifndef BIRB_NO_REVERB
-        /* reverb send bus + tanh master saturation, in the ±1 domain — matches
-         * the web editor. tanh is always applied (as in the editor), so a wet=0
-         * song still gets the same gentle master softening. */
+#if !defined(BIRB_NO_REVERB) || !defined(BIRB_NO_MASTER)
+        /* ---------- master bus, in the ±1 domain ----------
+         *   sum -> reverb return -> master gain -> limiter -> soft sat -> ceiling
+         * The trailing division by soft_sat(thresh) matters: limiting to 0.95
+         * and then saturating lands the loudest peak at 0.755, throwing away
+         * 2.4 dB of output range. Normalising by the saturator's own value at
+         * the threshold puts the ceiling back at full scale. */
         {
             float vf = (float)mix / 32768.0f;
             birb_song *sg = state->song;
+#ifndef BIRB_NO_REVERB
             if (sg->rev_wet)
                 vf += birb_reverb_tick(state, rev_in,
                                        sg->rev_size / 255.0f,
                                        sg->rev_damp / 255.0f,
                                        sg->rev_wet  / 255.0f);
+#endif
+#ifndef BIRB_NO_MASTER
+            /* sidechain envelope for the next sample: instant attack, one-pole
+             * release, driven by the summed duck sends */
+            {
+                float d = (float)duck_in / 32768.0f;
+                if (d > 1.0f) d = 1.0f;
+                if (d > state->duck_env) state->duck_env = d;
+                else state->duck_env = d + (state->duck_env - d)
+                                         * birb_release_coeff(sg->duck_release);
+            }
+            vf *= (float)sg->master_gain / 64.0f;
+            {
+                float thr = (float)sg->limit_thresh / 255.0f;
+                if (thr < 0.05f) thr = 0.05f;
+                vf = birb_limiter_tick(state, vf, thr,
+                                       birb_release_coeff(sg->limit_release));
+                vf = birb_soft_sat(vf) / birb_soft_sat(thr);
+            }
+#else
             vf = birb_soft_sat(vf);
+#endif
             int32_t o = (int32_t)(vf * 32767.0f);
             if (o > 32767) o = 32767;
             if (o < -32767) o = -32767;

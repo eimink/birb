@@ -201,11 +201,29 @@ static void tick(void) {
     }
 }
 
-/* --- reverb DSP (float; gated) — rational tanh, no libm --- */
+/* --- rational tanh, no libm. Shared by the reverb and the master bus, so it
+ * lives outside the reverb gate. --- */
+#if !defined(BIRB_NO_REVERB) || !defined(BIRB_NO_MASTER)
+static float ssat(float x){ if(x<-3.f)x=-3.f; else if(x>3.f)x=3.f; float x2=x*x; return x*(27.f+x2)/(27.f+9.f*x2); }
+#endif
+
+#ifndef BIRB_NO_MASTER
+/* Master bus. This player only generates basic waveforms, so the per-type
+ * calibration collapses to the single SYNTH_BASIC constant from
+ * birb_synth.c's birb_type_gain (29819/65536 = x0.455). Limiter state is one
+ * float; threshold/release are the engine defaults since the 4K format carries
+ * no MSTR section. */
+#define TG_BASIC 29819
+static float lim_env = 0.f;
+static const float M_GAIN = 2.f;                          /* engine default */
+static const float M_THR = 242.f/255.f;
+static const float M_REL = 1.f - 1.f/(44100.f*0.050f);   /* 50 ms */
+#endif
+
+/* --- reverb DSP (float; gated) --- */
 #ifndef BIRB_NO_REVERB
 static const int rc_len[4] = {1116,1188,1277,1356};
 static const int ra_len[2] = {556,441};
-static float ssat(float x){ if(x<-3.f)x=-3.f; else if(x>3.f)x=3.f; float x2=x*x; return x*(27.f+x2)/(27.f+9.f*x2); }
 static float rev_tick(float x, float size, float damp, float wet){
     float fb=0.7f+0.28f*size, dc=0.4f*damp, o=0.f;
     for(int k=0;k<4;k++){ int L=rc_len[k],pp=rcp[k]; float y=rc[k][pp];
@@ -281,6 +299,11 @@ void render(i32 n) {
             if (!p->env_st && !p->env) continue;
             i32 s = gen(p);
             i32 o = (s * (p->env >> 8)) >> 8;
+#ifndef BIRB_NO_MASTER
+            /* loudness calibration; |o| <= 32767 and the gain < 2^15, so this
+             * stays inside i32 without needing 64-bit math */
+            o = (o * TG_BASIC) >> 16;
+#endif
             mix += o;
 #ifndef BIRB_NO_REVERB
             u8 sd = inst_send[p->ci];
@@ -293,12 +316,31 @@ void render(i32 n) {
         {
             float vf = (float)mix / 32768.f;
             if (rev_wet) vf += rev_tick(rev_in, rev_size/255.f, rev_damp/255.f, rev_wet/255.f);
+#ifndef BIRB_NO_MASTER
+            /* limiter -> soft sat -> ceiling normalisation (see birb_synth.c) */
+            vf *= M_GAIN;
+            { float a = vf < 0.f ? -vf : vf;
+              lim_env = a > lim_env ? a : a + (lim_env - a) * M_REL;
+              if (lim_env > M_THR) vf *= M_THR / lim_env;
+              vf = ssat(vf) / ssat(M_THR); }
+#else
             vf = ssat(vf);
+#endif
             i32 oo = (i32)(vf * 32767.f);
             if (oo > 32767) oo = 32767; if (oo < -32767) oo = -32767;
             out_buf[i] = oo;
         }
 #else
+#ifndef BIRB_NO_MASTER
+        { float vf = (float)mix / 32768.f * M_GAIN;
+          float a = vf < 0.f ? -vf : vf;
+          lim_env = a > lim_env ? a : a + (lim_env - a) * M_REL;
+          if (lim_env > M_THR) vf *= M_THR / lim_env;
+          vf = ssat(vf) / ssat(M_THR);
+          i32 oo = (i32)(vf * 32767.f);
+          if (oo > 32767) oo = 32767; if (oo < -32767) oo = -32767;
+          mix = oo; }
+#endif
         if (mix > 32767) mix = 32767;
         if (mix < -32767) mix = -32767;
         out_buf[i] = mix;

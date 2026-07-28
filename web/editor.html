@@ -286,6 +286,9 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <div class="row"><label>R</label><input type="range" id="ie-r" min="0" max="255" value="0"><span class="val" id="ie-r-v">0</span></div>
                         <div class="row"><label>Vol</label><input type="range" id="ie-vol" min="0" max="255" value="255"><span class="val" id="ie-vol-v">255</span></div>
                         <div class="row"><label>Rev</label><input type="range" id="ie-rev" min="0" max="255" value="0"><span class="val" id="ie-rev-v">0</span></div>
+                        <div class="row"><label>Drive</label><input type="range" id="ie-drive" min="0" max="255" value="0"><span class="val" id="ie-drive-v">0</span></div>
+                        <div class="row"><label>Duck snd</label><input type="range" id="ie-ducksend" min="0" max="255" value="0"><span class="val" id="ie-ducksend-v">0</span></div>
+                        <div class="row"><label>Duck amt</label><input type="range" id="ie-duckamt" min="0" max="255" value="0"><span class="val" id="ie-duckamt-v">0</span></div>
                         <div class="row"><label>PE</label><input type="number" id="ie-pe" value="0" min="-128" max="127" style="width:44px"><label>Len</label><input type="number" id="ie-pel" value="0" min="0" max="255" style="width:44px"></div>
                         <div class="row"><label>Arp</label><input type="number" id="ie-arp1" value="0" min="0" max="15" style="width:36px"><input type="number" id="ie-arp2" value="0" min="0" max="15" style="width:36px"></div>
                         <div class="row"><label>Name</label><input type="text" id="ie-name" value="" placeholder="unnamed" style="width:140px" oninput="saveInstName()"></div>
@@ -421,6 +424,25 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
         </p>
     </div>
 
+    <div class="info-panel" id="master-panel">
+        <h3>Master <span style="color:var(--dim);font-weight:normal">&middot; gain &rarr; limiter &rarr; soft clip</span></h3>
+        <div class="inst-edit" style="border-top:none;padding:0">
+            <div class="row"><label>Gain</label><input type="range" id="mst-gain" min="0" max="255" value="128"><span class="val" id="mst-gain-v">2.00x</span></div>
+            <div class="row"><label>Ceiling</label><input type="range" id="mst-thresh" min="26" max="255" value="242"><span class="val" id="mst-thresh-v">0.95</span></div>
+            <div class="row"><label>Release</label><input type="range" id="mst-rel" min="1" max="255" value="50"><span class="val" id="mst-rel-v">50ms</span></div>
+            <div class="row"><label>Duck rel</label><input type="range" id="mst-duckrel" min="1" max="255" value="120"><span class="val" id="mst-duckrel-v">120ms</span></div>
+        </div>
+        <p class="desc" style="font-size:10px;line-height:1.5;margin-top:10px">
+            Push <b style="color:var(--acc)">Gain</b> past 1x to drive the limiter &mdash; that is how you get loud without
+            the bass flattening everything else. Output is normalised back to full scale, so raising Gain
+            raises density, not peak.<br>
+            <b style="color:var(--acc2)">Drive</b> (per instrument) raises a sound's RMS without raising its peak &mdash; the
+            fix for plucks that vanish under a sustained bass.<br>
+            <b style="color:var(--acc2)">Duck snd</b> feeds the sidechain, <b style="color:var(--acc2)">Duck amt</b> gets ducked by it.
+            Kick sends, bass receives.
+        </p>
+    </div>
+
     <div class="info-panel" id="info-panel">
         <h3>Effects</h3>
         <table>
@@ -553,7 +575,22 @@ s.start();</pre>
    SONG STATE
    ================================================================ */
 const WAVE_NAMES = ['pulse','triangle','sawtooth','noise','sine','sample','fm','ks','drum','formant'];
-const KS_DEFAULTS = { damping: 40 };
+const KS_DEFAULTS = { damping: 67 };   /* ~1 s pluck under the remapped curve */
+/* ---- shared mix constants, mirroring birb_synth.c ----
+ * KSQ: per-period KS attenuation rate for damping = i*8, scaled by 2^24 with
+ * the delay length factored out. Interpolated in ksGain(). A table rather than
+ * a pow() call so the C and JS engines cannot drift apart.
+ * TGW: per-synth-type loudness calibration indexed by WAVE id (0-4 basic,
+ * 5 sample, 6 fm, 7 ks, 8 drum, 9 formant). Same fixed16 constants the C engine
+ * uses, expressed as v/65536 so the two agree exactly. */
+const KSQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398];
+function ksGain(d,len){let i=d>>3,f=d&7,q=KSQ[i];q+=((KSQ[i+1]-q)*f)>>3;let a=(q*len)>>8;return a>=65535?0:65535-a;}
+const TGW=[29819,29819,29819,29819,29819,23127,15360,38838,61580,149078].map(v=>v/65536);
+/* Rational tanh — the C engine's birb_soft_sat. Replaces Math.tanh so all five
+ * render paths use one curve (Math.tanh(3) is 0.9950 where this gives 1.0). */
+function ssat(x){if(x<-3)x=-3;else if(x>3)x=3;let x2=x*x;return x*(27+x2)/(27+9*x2);}
+function relCoeff(ms){if(ms<1)ms=1;let n=44100*ms*0.001,c=1-1/n;return c<0?0:(c>0.9999?0.9999:c);}
+const MASTER_DEFAULTS = { gain:2.0, thresh:0.949, rel:50, duckRel:120 };
 const DRUM_DEFAULTS = { drumType: 0, tune: 0, decay: 180, tone: 128, snap: 128 };
 const FORMANT_DEFAULTS = { src: 2 /* saw */, duty: 2, va: 0, vb: 3, sweep: 0, res: 128 };
 const FORMANT_PRESETS = {
@@ -575,8 +612,8 @@ const DRUM_PRESETS = {
     /* One Hat preset; dial d shorter for closed (~3), longer for open (~32). */
     'hat':       { drumType:2, tune:41,  decay:140, tone:120, snap:180, vol:170, a:0, d:3,  s:0, r:8 },
     'clap':      { drumType:3, tune:0,   decay:140, tone:150, snap:140, vol:220, a:0, d:20, s:0, r:8 },
-    'crash':     { drumType:5, tune:24,  decay:200, tone:140, snap:160, vol:180, a:0, d:96, s:0, r:8 },
-    'ride':      { drumType:2, tune:24,  decay:200, tone:80,  snap:120, vol:150, a:0, d:64, s:0, r:8 },
+    'crash':     { drumType:5, tune:24,  decay:200, tone:140, snap:160, vol:64,  a:0, d:96, s:0, r:8 },
+    'ride':      { drumType:2, tune:24,  decay:200, tone:80,  snap:120, vol:64,  a:0, d:64, s:0, r:8 },
 };
 /* Synth type selector on the instrument: 0 = basic (wave 0..4), 1 = sample (wave 5), 2 = FM (wave 6).
  * The editor keeps storing `wave` as the UI dropdown value (0..6); buildJS/worklet derive synth_type from it. */
@@ -588,7 +625,7 @@ const FM_DEFAULTS = { nops:2, algo:0, fb:0, mi:64,
         {ri:1, rf:0, lv:0,   a:0, d:8, s:0,   r:8}
     ]};
 const FM_PRESETS = {
-    bass:  { nops:2, algo:0, fb:64, mi:40,
+    bass:  { vol:194, nops:2, algo:0, fb:64, mi:40,
         ops: [{ri:1,rf:0,lv:255,a:0,d:16,s:220,r:16}, {ri:1,rf:0,lv:200,a:0,d:32,s:128,r:16},
               {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}, {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8}] },
     bell:  { nops:2, algo:0, fb:0,  mi:96,
@@ -653,6 +690,7 @@ let song = {
     order: [],    // order[i] = [p0,p1,p2,p3]
     samples: [],  // [{name, data:Int16Array, baseNote, loopStart, loopEnd}]
     rev: {size:0.7, damp:0.5, wet:0.35}, // PROTOTYPE global reverb send bus params
+    master: {gain:2.0, thresh:0.949, rel:50, duckRel:120},
 };
 
 // Channel count is compile-time capped at NCH_MAX=16 in the engine.
@@ -793,6 +831,7 @@ function saveSongToStorage() {
         localStorage.setItem('birb_song', JSON.stringify({
             bpm: song.bpm, tpr: song.tpr, N: NCH,
             rev: song.rev,
+            master: song.master,
             instruments: song.instruments,
             patterns: song.patterns,
             order: song.order,
@@ -833,6 +872,7 @@ function loadSongFromStorage() {
     song.bpm = data.bpm || 140;
     song.tpr = data.tpr || 6;
     song.rev = data.rev || {size:0.7, damp:0.5, wet:0.35};
+    song.master = data.master || Object.assign({}, MASTER_DEFAULTS);
     if (typeof data.N === 'number' && data.N >= 4 && data.N <= NCH_MAX) NCH = data.N;
     else NCH = 4;
     let nchEl = document.getElementById('nch'); if (nchEl) nchEl.value = NCH;
@@ -896,7 +936,9 @@ function newSong() {
     song.samples = [];
     song.bpm = 140; song.tpr = 6;
     song.rev = {size:0.7, damp:0.5, wet:0.35};
+    song.master = Object.assign({}, MASTER_DEFAULTS);
     syncRevUI();
+    syncMasterUI();
     curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
     editInst = 0; curInst = 0;
     document.getElementById('bpm').value = 140;
@@ -1221,7 +1263,7 @@ function selectInst(i) {
     loadInstEditor();
 }
 function addInstrument() {
-    song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'',sampleIdx:0,fm:cloneFmDefault(),ksDamp:KS_DEFAULTS.damping,drumType:0,drumTune:0,drumDecay:180,drumTone:128,drumSnap:128,fmtSrc:FORMANT_DEFAULTS.src,fmtDuty:FORMANT_DEFAULTS.duty,fmtVa:FORMANT_DEFAULTS.va,fmtVb:FORMANT_DEFAULTS.vb,fmtSweep:FORMANT_DEFAULTS.sweep,fmtRes:FORMANT_DEFAULTS.res});
+    song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255,name:'',sampleIdx:0,fm:cloneFmDefault(),ksDamp:KS_DEFAULTS.damping,drumType:0,drumTune:0,drumDecay:180,drumTone:128,drumSnap:128,fmtSrc:FORMANT_DEFAULTS.src,fmtDuty:FORMANT_DEFAULTS.duty,fmtVa:FORMANT_DEFAULTS.va,fmtVb:FORMANT_DEFAULTS.vb,fmtSweep:FORMANT_DEFAULTS.sweep,fmtRes:FORMANT_DEFAULTS.res,drive:0,duckSend:0,duckAmt:0});
     editInst = song.instruments.length - 1;
     curInst = editInst;
     markDirty();
@@ -1533,7 +1575,9 @@ function applyFmPreset(name) {
     if (!preset) return;
     let ins = song.instruments[editInst];
     if (!ins) return;
-    ins.fm = JSON.parse(JSON.stringify(preset));
+    let {vol, ...fmParams} = preset;
+    ins.fm = JSON.parse(JSON.stringify(fmParams));
+    if (vol !== undefined) ins.vol = vol;
     ins.wave = 6;
     document.getElementById('ie-wave').value = 6;
     markDirty();
@@ -1947,6 +1991,10 @@ function loadInstEditor() {
     document.getElementById('ie-arp2').value = ins.arp2;
     document.getElementById('ie-vol').value = ins.vol !== undefined ? ins.vol : 255;
     document.getElementById('ie-rev').value = ins.rev || 0;
+    for (let [id, k] of [['ie-drive','drive'],['ie-ducksend','duckSend'],['ie-duckamt','duckAmt']]) {
+        document.getElementById(id).value = ins[k] || 0;
+        document.getElementById(id + '-v').textContent = ins[k] || 0;
+    }
     document.getElementById('ie-name').value = ins.name || '';
     updateInstValues();
     drawADSR();
@@ -2042,6 +2090,9 @@ function saveInstFromEditor() {
     ins.arp2 = +document.getElementById('ie-arp2').value;
     ins.vol = +document.getElementById('ie-vol').value;
     ins.rev = +document.getElementById('ie-rev').value; // reverb send (prototype)
+    ins.drive = +document.getElementById('ie-drive').value;
+    ins.duckSend = +document.getElementById('ie-ducksend').value;
+    ins.duckAmt = +document.getElementById('ie-duckamt').value;
     /* FM params — only persist when FM panel is visible */
     if (ins.wave === 6) {
         if (!ins.fm) ins.fm = cloneFmDefault();
@@ -2412,12 +2463,17 @@ function renderSong(patOnly, singlePat) {
     let rowMarkers = []; // sample positions of row boundaries
     let revS = song.rev || {size:0.7, damp:0.5, wet:0.35}; // prototype reverb send bus
     let rev = makeReverb();
+    /* master bus state: limiter peak follower + sidechain follower */
+    let limEnv = 0, duckEnv = 0;
+    let mst = song.master || MASTER_DEFAULTS;
+    let mGain = mst.gain, mThr = mst.thresh, mRel = relCoeff(mst.rel);
+    let mDuckRel = relCoeff(mst.duckRel), mCeil = ssat(mThr);
 
     let ch = [];
     for (let c = 0; c < N; c++)
         ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
             fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmR:[1,1,0,0], fmEnv:[0,0,0,0], fmStg:[0,0,0,0], fmFb:0, fmMi:64, fmNo:2, fmAlgo:0, fmPrev:0,
-            ksBuf:null, ksLen:0, ksPos:0, ksD:0,
+            ksBuf:null, ksLen:0, ksPos:0, ksD:0, ksG:0, dp:1, dn:1, ds:0, da:0,
             drAl:0, drAlOrig:0, drPhase2:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0, drStage:0, drStageT:0, drBurstLen:0, drBodyT:0,
             fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtR:128, fmtRc:0,
             fmtZ1:[0,0,0], fmtZ2:[0,0,0], fmtB0:[0,0,0], fmtA1:[0,0,0], fmtA2:[0,0,0]};
@@ -2589,6 +2645,11 @@ function renderSong(patOnly, singlePat) {
         C.q = j.pe; C.g = j.pel; C.x = j.arp1; C.y = j.arp2;
         C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255; C.k = 0; C.l = 0; C.ps = 0;
         C.rs = j.rev || 0; // reverb send amount (0..255)
+        /* per-voice dynamics: drive resolved once per note (pre gain into the
+         * saturator, norm to put the peak back where it was), duck send/amount */
+        C.dp = j.drive ? 1 + j.drive * (8 / 255) : 1;
+        C.dn = C.dp > 1 ? 1 / ssat(C.dp) : 1;
+        C.ds = j.duckSend || 0; C.da = j.duckAmt || 0;
         if (j.wave === 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
         C.sa = 0;
         if (j.wave === 5) {
@@ -2624,13 +2685,14 @@ function renderSong(patOnly, singlePat) {
             if (ln > 1024) ln = 1024;
             C.ksLen = ln; C.ksPos = 0;
             C.ksD = j.ksDamp !== undefined ? j.ksDamp : KS_DEFAULTS.damping;
+            C.ksG = ksGain(C.ksD, ln);
             if (!C.ksBuf || C.ksBuf.length < ln) C.ksBuf = new Int16Array(1024);
             let lfsr = (0x7FFF ^ ((semi * 0x1D79) & 0xFFFF)) & 0xFFFF;
             if (!lfsr) lfsr = 0x7FFF;
             for (let i = 0; i < ln; i++) {
                 let bit = (lfsr ^ (lfsr >> 1)) & 1;
                 lfsr = ((lfsr >> 1) | (bit << 14)) & 0xFFFF;
-                C.ksBuf[i] = (lfsr & 1) ? 16383 : -16383;
+                C.ksBuf[i] = (lfsr & 1) ? 32767 : -32767;
             }
         }
         if (j.wave === 8) {
@@ -2801,7 +2863,7 @@ function renderSong(patOnly, singlePat) {
             }
         }
         tc--;
-        let v = 0, revIn = 0;
+        let v = 0, revIn = 0, duckIn = 0, duckNow = duckEnv;
         for (let c = 0; c < N; c++) {
             let C = ch[c]; if (!C.t && !C.e && !C.sa && !C.drTtl) continue;
             if (channelMuted[c]) { C.p = (C.p + C.f) % F; continue; }
@@ -2853,7 +2915,7 @@ function renderSong(patOnly, singlePat) {
                     let p = C.ksPos, nx = p + 1; if (nx >= C.ksLen) nx = 0;
                     let cur = C.ksBuf[p];
                     let avg = (cur + C.ksBuf[nx]) >> 1;
-                    C.ksBuf[p] = (avg * (255 - C.ksD)) >> 8;
+                    C.ksBuf[p] = (avg * C.ksG) >> 16;
                     C.ksPos = nx;
                     s = cur / 32768;
                 }
@@ -2969,15 +3031,32 @@ function renderSong(patOnly, singlePat) {
             else if (C.w===2) s = (h*2-F)/F;
             else if (C.w===4) s = sinApprox(h);
             else { C.m++; if (C.m>=C.j){C.m=0;let z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)} s=(C.h&1)?.5:-.5; }
+            /* per-voice drive: saturate then rescale, so peak is unchanged
+             * and only RMS rises (see birb_synth.c) */
+            if (C.dp > 1) s = ssat(s * C.dp) * C.dn;
             let en = C.e + (C.tm ? C.e * C.tm / F : 0);
             if (en < 0) en = 0; if (en > F) en = F;
             let cv = s * en * (C.v || 255) * C.rv / F / 255 / 255;
+            cv *= TGW[C.w];                       /* per-type loudness calibration */
+            if (C.ds) duckIn += (cv < 0 ? -cv : cv) * C.ds / 255;
+            if (C.da && duckNow > 0) { let g = 1 - duckNow * C.da / 255; cv *= g > 0 ? g : 0; }
             v += cv;
             if (C.rs) revIn += cv * C.rs / 255;
             if (C.w !== 5 && C.w !== 8) C.p = (C.p + C.f) % F;
         }
         if (revS.wet > 0) v += rev.tick(revIn, revS.size, revS.damp, revS.wet);
-        out[i] = Math.tanh(v); /* gentle master saturation — no hard clip when reverb is drenched */
+        /* sidechain envelope for the next sample (one-sample delay keeps the
+         * mix single-pass; 23 us at 44.1 kHz) */
+        { let d = duckIn > 1 ? 1 : duckIn;
+          duckEnv = d > duckEnv ? d : d + (duckEnv - d) * mDuckRel; }
+        /* master gain -> limiter -> soft sat -> ceiling normalisation. The
+         * divide by ssat(thr) recovers the 2.4 dB the saturator would otherwise
+         * take off the top of a limited signal. */
+        v *= mGain;
+        { let a = v < 0 ? -v : v;
+          limEnv = a > limEnv ? a : a + (limEnv - a) * mRel;
+          if (limEnv > mThr) v *= mThr / limEnv; }
+        out[i] = ssat(v) / mCeil;
     }
     if (actualLen) { out = out.slice(0, actualLen); T = actualLen; }
     return {out, T, spt, rowMarkers};
@@ -3056,6 +3135,7 @@ function snapshotSongForWorklet() {
         order: song.order.map(o => o.slice()),
         samples,
         rev: song.rev || {size:0.7, damp:0.5, wet:0.35},
+        master: song.master || MASTER_DEFAULTS,
         channelMuted: channelMuted.slice()
     };
 }
@@ -3065,6 +3145,16 @@ function getWorkletCode() {
     // song state, updated via MessagePort. Each `process()` call renders
     // one quantum (128 samples) using the latest state.
     return `
+/* ---- shared mix constants — mirror of the main script's copy. The worklet is
+ * built as an isolated source string, so it cannot see the outer scope. Keep
+ * these in sync with birb_synth.c and the renderSong copy. */
+const KSQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398];
+function ksGain(d,len){let i=d>>3,f=d&7,q=KSQ[i];q+=((KSQ[i+1]-q)*f)>>3;let a=(q*len)>>8;return a>=65535?0:65535-a;}
+const TGW=[29819,29819,29819,29819,29819,23127,15360,38838,61580,149078].map(v=>v/65536);
+function ssat(x){if(x<-3)x=-3;else if(x>3)x=3;let x2=x*x;return x*(27+x2)/(27+9*x2);}
+function relCoeff(ms){if(ms<1)ms=1;let n=44100*ms*0.001,c=1-1/n;return c<0?0:(c>0.9999?0.9999:c);}
+const MASTER_DEFAULTS = { gain:2.0, thresh:0.949, rel:50, duckRel:120 };
+
 /* PROTOTYPE reverb send bus — mirror of makeReverb() in the main script. */
 function makeReverb() {
     return {
@@ -3142,12 +3232,12 @@ class BirbProcessor extends AudioWorkletProcessor {
         for (let c = 0; c < this.N; c++)
             ch.push({p:0,f:0,b:0,w:0,n:0,u:this.F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
                 fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmPrev:0,
-                ksBuf:new Int16Array(1024),ksLen:0,ksPos:0,ksD:0,
+                ksBuf:new Int16Array(1024),ksLen:0,ksPos:0,ksD:0,ksG:0,dp:1,dn:1,ds:0,da:0,
                 drAl:0,drAlOrig:0,drPhase2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClick:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0,
                 fmtSw:0,fmtLf:0x7FFF,fmtVa:0,fmtVb:0,fmtSp:0,fmtDir:1,fmtSS:0,fmtR:128,fmtRc:0,
                 fmtZ1:[0,0,0],fmtZ2:[0,0,0],fmtB0:[0,0,0],fmtA1:[0,0,0],fmtA2:[0,0,0]});
         let spt = this.S*5/((this.song.bpm||125)*2)|0;
-        return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1, jo: -1, jr: 0, rev: makeReverb() };
+        return { patOnly, ord, ol: ord.length, ch, ct: 0, cr: 0, op: 0, tc: 0, firstRow: true, spt, lastRow: -1, lastOp: -1, jo: -1, jr: 0, rev: makeReverb(), limEnv: 0, duckEnv: 0 };
     }
     sinApprox(ph) {
         let F = this.F, p = ((ph % F) + F) % F;
@@ -3279,6 +3369,11 @@ class BirbProcessor extends AudioWorkletProcessor {
         C.v = j.vol !== undefined ? j.vol : 255; C.rv = 255;
         C.k = 0; C.l = 0; C.ps = 0;
         C.rs = j.rev || 0; // reverb send amount (0..255)
+        /* per-voice dynamics: drive resolved once per note (pre gain into the
+         * saturator, norm to put the peak back where it was), duck send/amount */
+        C.dp = j.drive ? 1 + j.drive * (8 / 255) : 1;
+        C.dn = C.dp > 1 ? 1 / ssat(C.dp) : 1;
+        C.ds = j.duckSend || 0; C.da = j.duckAmt || 0;
         if (j.wave === 3) { C.h = 0x7FFF; C.m = 0; C.j = (256 >> (semi/12))||1; }
         C.sa = 0;
         if (j.wave === 5) {
@@ -3309,13 +3404,14 @@ class BirbProcessor extends AudioWorkletProcessor {
             if (ln < 4) ln = 4;
             if (ln > 1024) ln = 1024;
             C.ksLen = ln; C.ksPos = 0;
-            C.ksD = j.ksDamp !== undefined ? j.ksDamp : 40;
+            C.ksD = j.ksDamp !== undefined ? j.ksDamp : 67;
+            C.ksG = ksGain(C.ksD, ln);
             let lfsr = (0x7FFF ^ ((semi * 0x1D79) & 0xFFFF)) & 0xFFFF;
             if (!lfsr) lfsr = 0x7FFF;
             for (let i = 0; i < ln; i++) {
                 let bit = (lfsr ^ (lfsr >> 1)) & 1;
                 lfsr = ((lfsr >> 1) | (bit << 14)) & 0xFFFF;
-                C.ksBuf[i] = (lfsr & 1) ? 16383 : -16383;
+                C.ksBuf[i] = (lfsr & 1) ? 32767 : -32767;
             }
         }
         if (j.wave === 8) {
@@ -3446,6 +3542,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                  * so slider moves are audible on already-ringing notes. */
                 if (C.w === 7 && j.ksDamp !== undefined) {
                     C.ksD = j.ksDamp;
+                    C.ksG = ksGain(C.ksD, C.ksLen);
                 }
                 else if (C.w === 8) {
                     /* Drums: snap (click amp / mix), tone (HP cutoff for hat,
@@ -3536,7 +3633,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         for (let i = 0; i < out.length; i++) {
             if (st.tc <= 0) { this.doTick(st); st.tc = st.spt; }
             st.tc--;
-            let v = 0, revIn = 0;
+            let v = 0, revIn = 0, duckIn = 0, duckNow = st.duckEnv;
             for (let c = 0; c < N; c++) {
                 let C = st.ch[c];
                 if (!C.t && !C.e && !C.sa && !C.drTtl) continue;
@@ -3580,7 +3677,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                         let p = C.ksPos, nx = p + 1; if (nx >= C.ksLen) nx = 0;
                         let cur = C.ksBuf[p];
                         let avg = (cur + C.ksBuf[nx]) >> 1;
-                        C.ksBuf[p] = (avg * (255 - C.ksD)) >> 8;
+                        C.ksBuf[p] = (avg * C.ksG) >> 16;
                         C.ksPos = nx;
                         s = cur / 32768;
                     }
@@ -3696,16 +3793,27 @@ class BirbProcessor extends AudioWorkletProcessor {
                     if (C.m >= C.j) { C.m = 0; let z = (C.h ^ (C.h>>1)) & 1; C.h = (C.h>>1) | (z<<14); }
                     s = (C.h & 1) ? .5 : -.5;
                 }
+                if (C.dp > 1) s = ssat(s * C.dp) * C.dn;
                 let en = C.e + (C.tm ? C.e * C.tm / F : 0);
                 if (en < 0) en = 0; if (en > F) en = F;
                 let cv = s * en * C.v * C.rv / F / 255 / 255;
+                cv *= TGW[C.w];                   /* per-type loudness calibration */
+                if (C.ds) duckIn += (cv < 0 ? -cv : cv) * C.ds / 255;
+                if (C.da && duckNow > 0) { let g = 1 - duckNow * C.da / 255; cv *= g > 0 ? g : 0; }
                 v += cv;
                 if (C.rs) revIn += cv * C.rs / 255;
                 if (C.w !== 5 && C.w !== 8) C.p = (C.p + C.f) % F;
             }
             let rv = this.song.rev;
             if (rv && rv.wet > 0) v += st.rev.tick(revIn, rv.size, rv.damp, rv.wet);
-            out[i] = Math.tanh(v); /* gentle master saturation — no hard clip when reverb is drenched */
+            let mst = this.song.master || MASTER_DEFAULTS;
+            { let d = duckIn > 1 ? 1 : duckIn;
+              st.duckEnv = d > st.duckEnv ? d : d + (st.duckEnv - d) * relCoeff(mst.duckRel); }
+            v *= mst.gain;
+            { let a = v < 0 ? -v : v, thr = mst.thresh;
+              st.limEnv = a > st.limEnv ? a : a + (st.limEnv - a) * relCoeff(mst.rel);
+              if (st.limEnv > thr) v *= thr / st.limEnv;
+              out[i] = ssat(v) / ssat(thr); }
         }
         // Emit sync info when row/op changes
         if (st.cr !== st.lastRow || st.op !== st.lastOp) {
@@ -3837,6 +3945,35 @@ function deletePattern() {
    ================================================================ */
 document.getElementById('bpm').addEventListener('change', function() { song.bpm = +this.value; markDirty(); });
 document.getElementById('tpr').addEventListener('change', function() { song.tpr = +this.value; markDirty(); });
+/* Master bus wiring. Stored as the same byte ranges the MSTR format section
+ * uses, so what the sliders show is exactly what gets written. */
+function syncMasterUI() {
+    if (!song.master) song.master = Object.assign({}, MASTER_DEFAULTS);
+    let m = song.master;
+    let g = Math.round(m.gain * 64), t = Math.round(m.thresh * 255);
+    document.getElementById('mst-gain').value = g;
+    document.getElementById('mst-gain-v').textContent = m.gain.toFixed(2) + 'x';
+    document.getElementById('mst-thresh').value = t;
+    document.getElementById('mst-thresh-v').textContent = m.thresh.toFixed(2);
+    document.getElementById('mst-rel').value = m.rel;
+    document.getElementById('mst-rel-v').textContent = m.rel + 'ms';
+    document.getElementById('mst-duckrel').value = m.duckRel;
+    document.getElementById('mst-duckrel-v').textContent = m.duckRel + 'ms';
+}
+{
+    const wire = (id, key, fmt) =>
+        document.getElementById(id).addEventListener('input', function() {
+            if (!song.master) song.master = Object.assign({}, MASTER_DEFAULTS);
+            song.master[key] = fmt.get(+this.value);
+            document.getElementById(id + '-v').textContent = fmt.show(+this.value);
+            markDirty();
+        });
+    wire('mst-gain',   'gain',    {get:v=>v/64,  show:v=>(v/64).toFixed(2)+'x'});
+    wire('mst-thresh', 'thresh',  {get:v=>v/255, show:v=>(v/255).toFixed(2)});
+    wire('mst-rel',    'rel',     {get:v=>v,     show:v=>v+'ms'});
+    wire('mst-duckrel','duckRel', {get:v=>v,     show:v=>v+'ms'});
+}
+
 /* PROTOTYPE reverb toolbar wiring: sliders 0..100 -> song.rev 0..1, push live. */
 function syncRevUI() {
     if (!song.rev) song.rev = {size:0.7, damp:0.5, wet:0.35};
@@ -3855,6 +3992,7 @@ for (let k of ['wet','size','damp']) {
     });
 }
 syncRevUI();
+syncMasterUI();
 document.getElementById('octave').addEventListener('change', function() { curOctave = +this.value; saveSongToStorage(); updateStatus(); });
 document.getElementById('song-name').addEventListener('input', function() { saveSongToStorage(); });
 
@@ -4070,6 +4208,22 @@ async function exportBin() {
         for (let {idx, send} of revSends) { push(idx); push(send & 0xFF); }
     }
 
+    // MSTR — master bus + per-instrument dynamics. Written only when the song
+    // departs from the defaults, so simple songs cost nothing.
+    {
+        let m = song.master || MASTER_DEFAULTS;
+        let mg = Math.round(m.gain * 64) & 0xFF, mt = Math.round(m.thresh * 255) & 0xFF;
+        let dyn = song.instruments
+            .map((ins, idx) => ({idx, dv: ins.drive || 0, ds: ins.duckSend || 0, da: ins.duckAmt || 0}))
+            .filter(x => x.dv || x.ds || x.da);
+        if (dyn.length || mg !== 128 || mt !== 242 || m.rel !== 50 || m.duckRel !== 120) {
+            push(77); push(83); push(84); push(82);
+            push(mg); push(mt); push(m.rel & 0xFF); push(m.duckRel & 0xFF);
+            push(dyn.length & 0xFF);
+            for (let {idx, dv, ds, da} of dyn) { push(idx); push(dv); push(ds); push(da); }
+        }
+    }
+
     // NAME section — instrument names
     let hasNames = song.instruments.some(i => i.name);
     if (hasNames) {
@@ -4131,6 +4285,11 @@ function buildJS() {
      * unused generator code. */
     let usesFM = song.instruments.some(i => i.wave === 6);
     let usesKS = song.instruments.some(i => i.wave === 7);
+    let usesDrive = song.instruments.some(i => i.drive);
+    let mst = song.master || MASTER_DEFAULTS;
+    let mstGain = mst.gain, mstThr = mst.thresh;
+    let mstRel = relCoeff(mst.rel), mstDuckRel = relCoeff(mst.duckRel);
+    let usesDuck = song.instruments.some(i => i.duckSend || i.duckAmt);
     let usesDrum = song.instruments.some(i => i.wave === 8);
     let usesFormant = song.instruments.some(i => i.wave === 9);
     let usesSine = song.instruments.some(i => i.wave === 4);
@@ -4176,6 +4335,9 @@ function buildJS() {
     }).join(',') + '],\n';
 
     if (usesReverb) o += 'RS=[' + song.instruments.map(i => i.rev || 0).join(',') + '],\n';
+    if (usesDrive) o += 'DV=[' + song.instruments.map(i => i.drive || 0).join(',') + '],\n';
+    if (usesDuck) o += 'DS=[' + song.instruments.map(i => i.duckSend || 0).join(',') + '],\n'
+                     + 'DA=[' + song.instruments.map(i => i.duckAmt || 0).join(',') + '],\n';
 
     o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
 
@@ -4245,15 +4407,21 @@ spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,
 out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
 ${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
 function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RCP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*${rvWet.toFixed(6)}}
-` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
-${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;switch(C.fmAlgo&7){case 0:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 1:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 2:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;break;case 3:s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;break;case 4:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;break;case 5:{s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;break}case 6:{s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;break}default:{var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;break}}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%F;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
+` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
+function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}
+var TG=[29819,29819,29819,29819,29819,23127,15360,38838,61580,149078].map(v=>v/65536)
+var LE=0,MG=${mstGain.toFixed(6)},MT=${mstThr.toFixed(6)},MR=${mstRel.toFixed(6)},MC=SS(${mstThr.toFixed(6)})
+${usesKS ? `var KQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398]
+function KG(d,l){var i=d>>3,f=d&7,q=KQ[i];q+=((KQ[i+1]-q)*f)>>3;var a=(q*l)>>8;return a>=65535?0:65535-a}
+` : ''}${usesDuck ? `var DE=0,DR=${mstDuckRel.toFixed(6)}
+` : ''}${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;switch(C.fmAlgo&7){case 0:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 1:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 2:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;break;case 3:s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;break;case 4:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;break;case 5:{s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;break}case 6:{s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;break}default:{var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;break}}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%F;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}
-C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0${usesReverb?';C.rs=RS[ii]||0':''}
+C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
 if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}
 C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}${usesFM ? `
 if(j[0]===6){var fm=j[16];C.fmNo=j[12];C.fmAlgo=j[13]|0;C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
-if(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?16383:-16383}}` : ''}${usesDrum ? `
+if(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}` : ''}${usesDrum ? `
 if(j[0]===8){var dt=j[${drumBase}]&7,al=dt===4?0:dt===5?2:dt,tn=j[${drumBase+1}];if(tn>127)tn-=256;var dec=j[${drumBase+2}],tone=j[${drumBase+3}],snp=j[${drumBase+4}],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;
 if(al===0){C.drPe=df<<1;C.drPet=df>>1;C.drRate=Math.max(16,tone*256);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}
 else if(al===1){C.f=df>0?df:bf[2]<<2;C.drMix=snp;C.drBodyT=64+(tone>>1);tt=dec*120+1024}
@@ -4303,7 +4471,7 @@ else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
 else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}${usesFM ? `
 if(C.w===6){for(var k=0;k<4;k++)C.fmf[k]=Math.round(C.f*C.fmR[k]);var jj=I[C.i];if(jj){C.fmAlgo=jj[13]|0;var fm=jj[16];for(var k=0;k<4;k++){var oo=fm[k]||[1,0,0,0,8,200,8],st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}C.fmStg[k]=st;C.fmEnv[k]=en}}}` : ''}}}
 for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
-var v=0${usesReverb?',rI=0':''};for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa${usesDrum ? '&&!C.drTtl' : ''})continue
+var v=0${usesReverb?',rI=0':''}${usesDuck?',DI=0,DN=DE':''};for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa${usesDrum ? '&&!C.drTtl' : ''})continue
 var h=C.p,s=0
 if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
@@ -4323,7 +4491,7 @@ else if(C.w===2)s=(h*2-F)/F
 else if(C.w===4)s=SA_(h)
 else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
 var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F
-${usesReverb ? 'var cv=s*en*C.v*C.rv/F/255/255;v+=cv;if(C.rs)rI+=cv*C.rs/255' : 'v+=s*en*C.v*C.rv/F/255/255'};if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}${usesReverb?'v+=RV(rI);':''}out[i]=Math.tanh(v)}
+${usesDrive ? 'if(C.dp>1)s=SS(s*C.dp)*C.dn;' : ''}var cv=s*en*C.v*C.rv/F/255/255*TG[C.w];${usesDuck ? 'if(C.ds)DI+=(cv<0?-cv:cv)*C.ds/255;if(C.da&&DN>0){var dg=1-DN*C.da/255;cv*=dg>0?dg:0}' : ''}v+=cv;${usesReverb ? 'if(C.rs)rI+=cv*C.rs/255;' : ''}if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}${usesReverb?'v+=RV(rI);':''}${usesDuck ? 'var dd=DI>1?1:DI;DE=dd>DE?dd:dd+(DE-dd)*DR;' : ''}v*=MG;var la=v<0?-v:v;LE=la>LE?la:la+(LE-la)*MR;if(LE>MT)v*=MT/LE;out[i]=SS(v)/MC}
 return{o:out,spt:spt,T:T}}`;
     return o;
 }
@@ -4664,6 +4832,28 @@ function parseBin(d) {
         }
     }
 
+    // optional MSTR section (master bus + per-instrument dynamics). Absent →
+    // engine defaults, which is what every song rendered before it existed.
+    song.master = Object.assign({}, MASTER_DEFAULTS);
+    if (p + 4 <= d.length && d[p]===77 && d[p+1]===83 && d[p+2]===84 && d[p+3]===82) {
+        p += 4;
+        if (p + 4 <= d.length) {
+            song.master = { gain: d[p]/64, thresh: d[p+1]/255, rel: d[p+2], duckRel: d[p+3] };
+            p += 4;
+            let mcount = d[p++];
+            for (let k = 0; k < mcount; k++) {
+                if (p + 4 > d.length) break;
+                let idx = d[p];
+                if (idx < song.instruments.length) {
+                    song.instruments[idx].drive    = d[p+1];
+                    song.instruments[idx].duckSend = d[p+2];
+                    song.instruments[idx].duckAmt  = d[p+3];
+                }
+                p += 4;
+            }
+        }
+    }
+
     // optional NAME section
     if (p + 4 <= d.length && d[p]===78 && d[p+1]===65 && d[p+2]===77 && d[p+3]===69) {
         p += 4;
@@ -4799,6 +4989,7 @@ function toggleFx() {
 function renderAll() {
     renderInstList(); loadInstEditor(); renderOrder(); renderGrid(); renderSamplesList();
     if (typeof syncRevUI === 'function') syncRevUI();
+    if (typeof syncMasterUI === 'function') syncMasterUI();
 }
 
 /* ================================================================

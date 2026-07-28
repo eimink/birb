@@ -543,6 +543,44 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
 #endif
     }
 
+    /* optional MSTR section — master bus + per-instrument dynamics.
+     * 4 global bytes (master gain, limiter threshold, limiter release ms,
+     * sidechain release ms) then a count-prefixed [inst_idx, drive, duck_send,
+     * duck_amt] table (same attach-by-index shape as KSIN/REVB). Absent section
+     * leaves the struct zeroed; birb_init then fills in the defaults, so a song
+     * without this section still gets the standard gain structure. */
+    if (pos + 4 <= len && data[pos] == 'M' && data[pos+1] == 'S' &&
+        data[pos+2] == 'T' && data[pos+3] == 'R') {
+        pos += 4;
+#ifdef BIRB_NO_MASTER
+        if (pos + 4 > len) return -1;
+        pos += 4;                        /* skip 4 global bytes */
+        if (pos >= len) return -1;
+        int mcount = data[pos++];
+        if (pos + 4 * mcount > len) return -1;
+        pos += 4 * mcount;               /* skip the per-instrument table */
+#else
+        if (pos + 4 > len) return -1;
+        song->master_gain   = data[pos];
+        song->limit_thresh  = data[pos + 1];
+        song->limit_release = data[pos + 2];
+        song->duck_release  = data[pos + 3];
+        pos += 4;
+        if (pos >= len) return -1;
+        int mcount = data[pos++];
+        for (int k = 0; k < mcount; k++) {
+            if (pos + 4 > len) return -1;
+            uint8_t idx = data[pos];
+            if (idx < BIRB_MAX_INSTRUMENTS) {
+                song->instruments[idx].drive     = data[pos + 1];
+                song->instruments[idx].duck_send = data[pos + 2];
+                song->instruments[idx].duck_amt  = data[pos + 3];
+            }
+            pos += 4;
+        }
+#endif
+    }
+
     /* optional NAME section */
     if (pos + 4 <= len && data[pos] == 'N' && data[pos+1] == 'A' &&
         data[pos+2] == 'M' && data[pos+3] == 'E') {
