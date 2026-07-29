@@ -307,6 +307,11 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <option value="brass">Brass</option>
                         <option value="violin">Violin</option>
                         <option value="piano">Piano</option>
+                        <option value="braamdark">Braam (dark)</option>
+                        <option value="subdrone">Sub Drone</option>
+                        <option value="metal">Metal</option>
+                        <option value="shimmer">Shimmer</option>
+                        <option value="riser">Riser</option>
                         <option value="braaam">BRAAAAM</option>
                     </select>
                 </div>
@@ -361,6 +366,7 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
                         <option value="ohpad">Oh Pad</option>
                         <option value="eebuzz">Ee Buzz</option>
                         <option value="sweep">Vowel Sweep (A→O)</option>
+                        <option value="scream">Scream (vocal)</option>
                     </select>
                 </div>
                 <div class="row"><label>Source</label>
@@ -623,6 +629,11 @@ const FORMANT_PRESETS = {
     ohpad:  { src:2, duty:2, va:3, vb:3, sweep:0,  res:128, vol:180 },
     eebuzz: { src:0, duty:1, va:2, vb:2, sweep:0,  res:160, vol:160 },
     sweep:  { src:2, duty:2, va:0, vb:3, sweep:64, res:128, vol:160 },
+    /* Vocal shriek: 97% of its energy sits off the harmonic grid and it reads
+     * as a voice rather than a synth. Dark though (691 Hz centroid) because the
+     * highest vowel formant is only ~2.4 kHz — layer it UNDER the FM `scream`
+     * rather than instead of it. Pair with vibrato 438. */
+    scream: { src:2, duty:2, va:2, vb:0, sweep:220, res:255, vol:200, drive:220, rev:150 },
 };
 const VOWEL_NAMES = ['A','E','I','O','U'];
 /* Each preset sets drumType + Tune/Decay/Tone/Snap + amplitude ADSR + volume.
@@ -762,6 +773,72 @@ const FM_PRESETS = {
               {ri:1, rf:0,lv:200,a:0,d:16,s:30,r:12},  /* body mod — fast decay = brightness falls */
               {ri:1, rf:0,lv:150,a:0,d:36,s:0, r:14},  /* tine carrier */
               {ri:14,rf:0,lv:190,a:0,d:7, s:0, r:10}]  /* tine mod — the hammer strike */ },
+    /* ---- dark cinematic set (Blade Runner / CP2077 / NIN territory) ----
+     * All algo 4 except shimmer. Drive and reverb send are part of the patch:
+     * saturation is what makes these read as industrial rather than as clean
+     * FM, and the send is where the space comes from. Set the global reverb
+     * wide to suit (size ~200, damp ~120, wet ~110).
+     *
+     * Measured character (spectral centroid / share of energy off the harmonic
+     * grid / share below 120 Hz), at the voicings noted: */
+
+    /* 3515 Hz, 75% inharmonic, 41% sub. Voice as root+fifth+octave from C-2.
+     * Heavier and dirtier than the older `braaam`, which is kept as-is. */
+    braamdark: { vol:255, a:28, d:0, s:255, r:72, drive:90, rev:140,
+        nops:4, algo:4, fb:190, mi:210,
+        ops: [{ri:1,rf:0,lv:255,a:28,d:0, s:255,r:72},
+              {ri:5,rf:0,lv:190,a:24,d:8, s:240,r:64},
+              {ri:3,rf:0,lv:170,a:24,d:8, s:240,r:64},
+              {ri:7,rf:0,lv:120,a:28,d:12,s:200,r:64}] },
+
+    /* 51 Hz centroid, 96% of energy under 120 Hz, 1% above the 8th harmonic —
+     * a sub, not a buzz. Even modulator ratios on a ratio-1 carrier give odd
+     * harmonics only, so it stays hollow and leaves room for the bass.
+     * ModIdx is deliberately LOW: at 235 this measured 17% above the 8th
+     * harmonic and read as a distorted buzz rather than a drone. C-1 + C-2. */
+    subdrone: { vol:255, a:6, d:0, s:255, r:64, drive:30, rev:90,
+        nops:4, algo:4, fb:0, mi:70,
+        ops: [{ri:1,rf:0,lv:255,a:6, d:0,s:255,r:64},
+              {ri:2,rf:0,lv:190,a:6, d:0,s:255,r:64},
+              {ri:4,rf:0,lv:50, a:24,d:0,s:255,r:64},
+              {ri:6,rf:0,lv:20, a:48,d:0,s:255,r:64}] },
+
+    /* Fractional ratios deliberately off the harmonic grid — that inharmonicity
+     * IS the metal. Feedback stays at 0: measured spectral flatness goes from
+     * 0.000 at fb 0 to 0.090 by fb 60 and plateaus around 0.13, i.e. the
+     * partials smear into broadband noise almost immediately. Feedback is only
+     * safe on HARMONIC ratios (see braamdark at fb 190, still tonal) because
+     * the result stays periodic. */
+    metal: { vol:255, a:4, d:0, s:255, r:48, drive:0, rev:170,
+        nops:4, algo:4, fb:0, mi:150,
+        ops: [{ri:1, rf:0,lv:255,a:4, d:0,s:255,r:48},
+              {ri:3, rf:7,lv:180,a:4, d:0,s:255,r:48},
+              {ri:6, rf:5,lv:140,a:8, d:0,s:255,r:48},
+              {ri:11,rf:3,lv:90, a:12,d:0,s:255,r:48}] },
+
+    /* 3074 Hz, glassy, 0.2 Hz drift. Algo 7 is four parallel carriers, so the
+     * staggered long attacks make partials fade in at different times rather
+     * than modulating each other. No drive — this one wants to stay clean.
+     * C-5 + G-5 + E-6. */
+    shimmer: { vol:220, a:48, d:0, s:255, r:96, drive:0, rev:200,
+        nops:4, algo:7, fb:0, mi:120,
+        ops: [{ri:1,rf:0,lv:200,a:48,d:0,s:255,r:96},
+              {ri:4,rf:1,lv:170,a:56,d:0,s:255,r:96},
+              {ri:6,rf:2,lv:150,a:64,d:0,s:255,r:96},
+              {ri:9,rf:3,lv:130,a:72,d:0,s:255,r:96}] },
+
+    /* A riser has to BUILD. The staggered long attacks (40/72/104 ticks) open
+     * the timbre over seconds: centroid climbs 374 -> 4106 Hz, +20.8 dB. The
+     * first attempt sat at full brightness and merely slid in pitch, measuring
+     * +1.5 dB of build — a slide, not a riser. Harmonic ratios so it stays a
+     * tone while it climbs. Put 2xx in the pattern, e.g. 202 from C-2. */
+    riser: { vol:255, a:0, d:0, s:255, r:32, drive:30, rev:180,
+        nops:4, algo:4, fb:20, mi:200,
+        ops: [{ri:1,rf:0,lv:255,a:0,  d:0,s:255,r:32},
+              {ri:2,rf:0,lv:220,a:40, d:0,s:255,r:32},
+              {ri:4,rf:0,lv:200,a:72, d:0,s:255,r:32},
+              {ri:8,rf:0,lv:180,a:104,d:0,s:255,r:32}] },
+
     /* Inception BRAAAAM. Algo 4 (3,2,1 → 0): three independent modulators
      * all driving the carrier, inharmonic ratios for the torn-brass timbre.
      * Maxed feedback (220) wraps op3's output back into its own phase for
@@ -1619,6 +1696,8 @@ function applyFormantPreset(name) {
     ins.fmtVa = p.va; ins.fmtVb = p.vb;
     ins.fmtSweep = p.sweep; ins.fmtRes = p.res;
     ins.vol = p.vol;
+    if (p.drive !== undefined) ins.drive = p.drive;
+    if (p.rev !== undefined) ins.rev = p.rev;
     document.getElementById('ie-wave').value = 9;
     markDirty();
     updateFormantPanelVisibility();
@@ -1689,13 +1768,17 @@ function applyFmPreset(name) {
     if (!preset) return;
     let ins = song.instruments[editInst];
     if (!ins) return;
-    let {vol, a, d, s, r, ...fmParams} = preset;
+    let {vol, a, d, s, r, drive, rev, ...fmParams} = preset;
     ins.fm = JSON.parse(JSON.stringify(fmParams));
     if (vol !== undefined) ins.vol = vol;
     if (a !== undefined) ins.a = a;
     if (d !== undefined) ins.d = d;
     if (s !== undefined) ins.s = s;
     if (r !== undefined) ins.r = r;
+    /* the ambience patches are defined as much by saturation and space as by
+     * their operators, so a preset has to be able to set these */
+    if (drive !== undefined) ins.drive = drive;
+    if (rev !== undefined) ins.rev = rev;
     ins.wave = 6;
     document.getElementById('ie-wave').value = 6;
     markDirty();
