@@ -1291,12 +1291,15 @@ static int write_js(const char *filename, birb_song *song) {
     int uses_reverb = 0;
 #ifndef BIRB_NO_REVERB
     double rv_fb = 0, rv_dc = 0, rv_wet = 0;
-    if (song->rev_wet > 0) uses_reverb = 1;
+    int rev_any_send = 0;
     for (int i = 0; i < song->num_instruments; i++)
-        if (song->instruments[i].reverb_send) uses_reverb = 1;
+        if (song->instruments[i].reverb_send) rev_any_send = 1;
     rv_fb  = 0.7 + 0.28 * (song->rev_size / 255.0);  /* baked: params are static in an export */
     rv_dc  = 0.4 * (song->rev_damp / 255.0);
     rv_wet = song->rev_wet / 255.0;
+    /* both halves are needed for anything to be heard: a wet bus with no sends
+     * receives nothing, and sends into a dry bus return nothing. */
+    uses_reverb = (song->rev_wet > 0) && rev_any_send;
 #endif
 
     /* Instruments. Base 11 fields (wave duty a d s r pe pel arp1 arp2 vol).
@@ -1530,9 +1533,15 @@ static int write_js(const char *filename, birb_song *song) {
     /* reverb send bus (mirror of the editor's makeReverb; coefficients baked). */
     if (uses_reverb)
         fprintf(f,
-            "var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]\n"
-            "function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*%.6f+RCL[k]*%.6f;b[p]=x+RCL[k]*%.6f;RCP[k]=p+1<b.length?p+1:0;o+=y}o*=%.6f;for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*%.6f}\n",
-            1.0 - rv_dc, rv_dc, rv_fb, (1.0 - rv_fb) * 5.5, rv_wet);
+            "var RB=[1116,1188,1277,1356%s].map(n=>new Float32Array(n)),RP=[0,0,0,0%s],RCL=[0,0,0,0]\n"
+            "function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RB[k];p=RP[k];y=b[p];"
+            "RCL[k]=y*%.6f+RCL[k]*%.6f;b[p]=x+RCL[k]*%.6f;RP[k]=p+1<b.length?p+1:0;o+=y}"
+            "o*=%.6f;%sreturn o*%.6f}\n",
+            birb_smol ? "" : ",556,441", birb_smol ? "" : ",0,0",
+            1.0 - rv_dc, rv_dc, rv_fb, (1.0 - rv_fb) * 5.5,
+            birb_smol ? "" : "for(k=4;k<6;k++){b=RB[k];p=RP[k];y=b[p];var ou=-o+y;"
+                                "b[p]=o+y*0.5;RP[k]=p+1<b.length?p+1:0;o=ou}",
+            rv_wet);
 #endif
     snprintf(fm_trig, sizeof fm_trig,
         "\nif(j[0]===6){var fm=j[15];%s%sC.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<%d;k++){"
@@ -2301,13 +2310,10 @@ static int write_smol_c(const char *filename, birb_song *song) {
         fprintf(f, "};\n");
         bc_st(f, "float rc0[1116],rc1[1188],rc2[1277],rc3[1356],rcl[4];", "rc0,rc1,rc2,rc3,rcl");
         bc_st(f, "i32 rcp[4];", "rcp");
-        bc_st(f, "float ra0[556],ra1[441];", "ra0,ra1");
-        bc_st(f, "i32 rap[2];", "rap");
         fprintf(f,
             "static float *const rcb[4]={rc0,rc1,rc2,rc3};\n"
             "static const i32 rcn[4]={1116,1188,1277,1356};\n"
-            "static float *const rab[2]={ra0,ra1};\n"
-            "static const i32 ran[2]={556,441};\n");
+            "");
         {   double size = song->rev_size / 255.0, damp = song->rev_damp / 255.0;
             double wet = song->rev_wet / 255.0;
             double fb = 0.7 + 0.28 * size, dc = 0.4 * damp;
@@ -2316,9 +2322,8 @@ static int write_smol_c(const char *filename, birb_song *song) {
                 " for(i32 k=0;k<4;k++){ i32 L=rcn[k],pp=rcp[k]; float y=rcb[k][pp];\n"
                 "  rcl[k]=y*%.6ff+rcl[k]*%.6ff; rcb[k][pp]=x+rcl[k]*%.6ff;\n"
                 "  rcp[k]=(pp+1<L)?pp+1:0; o+=y; }\n"
+                /* the C player is always smol, so the diffusers are never emitted */
                 " o*=%.6ff;\n"
-                " for(i32 k=0;k<2;k++){ i32 L=ran[k],pp=rap[k]; float y=rab[k][pp];\n"
-                "  float ou=-o+y; rab[k][pp]=o+y*0.5f; rap[k]=(pp+1<L)?pp+1:0; o=ou; }\n"
                 " return o*%.6ff; }\n",
                 1.0 - dc, dc, fb, (1.0 - fb) * 5.5, wet);
         }
@@ -2337,8 +2342,6 @@ static int write_smol_c(const char *filename, birb_song *song) {
     if (c_slide)   bc_st(f, "i32 sl[N];", "sl");
     if (c_fm) {
         int NO = c_fm4 ? 4 : 2;
-        fprintf(f,
-            "", NO, NO, NO, NO);
         { char d1[96], d2[96];
           snprintf(d1, sizeof d1, "i32 fp[N][%d],ff[N][%d],fst[N][%d];", NO, NO, NO);
           snprintf(d2, sizeof d2, "float fe[N][%d],fpv[N];", NO);

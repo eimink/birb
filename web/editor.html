@@ -567,7 +567,7 @@ s.start();</pre>
         </p>
 
         <div class="section desc">
-            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v4.1.1</span> is part of the birb chiptune synth project.<br><br>
+            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v4.2.0</span> is part of the birb chiptune synth project.<br><br>
             &copy; 2026 eimink / Wide Load ^ KVG
         </div>
     </div>
@@ -2630,7 +2630,9 @@ function makeReverb() {
                 o += y;
             }
             o *= (1 - fb) * 5.5; /* normalize level off feedback (Size = decay only) + makeup gain */
-            for (let k = 0; k < 2; k++) {
+            /* smol birb drops the diffusers: combs alone are more metallic, and
+             * the export does the same so the two still agree. */
+            if (!smolMode) for (let k = 0; k < 2; k++) {
                 let b = this.ab[k], p = this.ap[k], y = b[p];
                 let out = -o + y;
                 b[p] = o + y*0.5;
@@ -3420,7 +3422,7 @@ function makeReverb() {
         cb: [new Float32Array(1116), new Float32Array(1188), new Float32Array(1277), new Float32Array(1356)],
         cp: [0,0,0,0], cl: [0,0,0,0],
         ab: [new Float32Array(556), new Float32Array(441)], ap: [0,0],
-        tick: function(x, size, damp, wet) {
+        tick: function(x, size, damp, wet, smol) {
             let fb = 0.7 + 0.28*size, dc = 0.4*damp, o = 0;
             for (let k = 0; k < 4; k++) {
                 let b = this.cb[k], p = this.cp[k], y = b[p];
@@ -3430,7 +3432,9 @@ function makeReverb() {
                 o += y;
             }
             o *= (1 - fb) * 5.5; /* normalize level off feedback (Size = decay only) + makeup gain */
-            for (let k = 0; k < 2; k++) {
+            /* smol birb drops the diffusers: combs alone are more metallic, and
+             * the export does the same so the two still agree. */
+            if (!smol) for (let k = 0; k < 2; k++) {
                 let b = this.ab[k], p = this.ap[k], y = b[p];
                 let out = -o + y;
                 b[p] = o + y*0.5;
@@ -4088,7 +4092,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                 if (C.w !== 5 && C.w !== 8) C.p = (C.p + C.f) % F;
             }
             let rv = this.song.rev;
-            if (rv && rv.wet > 0) v += st.rev.tick(revIn, rv.size, rv.damp, rv.wet);
+            if (rv && rv.wet > 0) v += st.rev.tick(revIn, rv.size, rv.damp, rv.wet, this.smol);
             let mst = this.song.master || MASTER_DEFAULTS;
             { let d = duckIn > 1 ? 1 : duckIn;
               st.duckEnv = d > st.duckEnv ? d : d + (st.duckEnv - d) * relCoeff(mst.duckRel); }
@@ -4585,6 +4589,7 @@ function smolPlan(smol) {
     let chInst = chSet.map(sr => sr.size === 1 ? [...sr][0] : 0);
     let m = song.master || MASTER_DEFAULTS;
     let loudInst = song.instruments.some(i => (i.vol === undefined ? 255 : i.vol) !== 255);
+    const usesReverbForReport = (song.rev && song.rev.wet > 0) && song.instruments.some(i => i.rev);
     /* `smol` is normally just a flag, but an object selects transforms
      * individually - which is how each one gets tested on its own. A transform the
      * song can't take stays off however it was asked for. */
@@ -4606,6 +4611,7 @@ function smolPlan(smol) {
         changes: !on ? [] : [
             (pick('noInstVol') && loudInst) ? 'per-instrument volume is dropped (row volume still applies) - instruments not at 255 get louder' : null,
             pick('noMaster') ? 'master limiter is dropped, hard clip instead - peaks distort where they used to be caught' : null,
+            (on && usesReverbForReport) ? 'reverb diffusers are dropped - the tail is more metallic' : null,
         ].filter(Boolean),
     };
 }
@@ -4712,7 +4718,9 @@ function buildJS(smol) {
     /* Reverb emitted only when used (wet>0 or some instrument sends) — gives the
      * export its with/without-reverb variants. Coefficients baked (static export). */
     let rev = song.rev || {size:0, damp:0, wet:0};
-    let usesReverb = rev.wet > 0 || song.instruments.some(i => i.rev);
+    /* both halves are needed for anything to be heard: a wet bus with no
+     * sends receives nothing, and sends into a dry bus return nothing. */
+    let usesReverb = rev.wet > 0 && song.instruments.some(i => i.rev);
     let usesSamples = song.instruments.some(i => i.wave === 5) && song.samples.length > 0;
     /* Only the wave types past 4 have distinct gains, so a basic-wave-only song
      * can inline the single constant at the mix site instead of carrying the
@@ -4899,8 +4907,8 @@ ${(usesPulse||usesFormant) ? `dv=[8192,16384,32768,49152],
 ` : ``}nf=n=>(n=n<0?0:n>95?95:n,((bf[n%12]<<(n/12))+128)>>8),
 spt=S*5/((bpm||125)*2)|0,${LOCK ? `T=${WALK ? WALK.T : 0}` : SM.fixedLen ? `T=ol*${SM.rows}*tpr*spt` : `W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt`},
 out=new Float32Array(T),ch=[]${LOCK ? `` : `,ct=0,cr=0,op=0`},tc=0
-${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
-function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RCP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*${rvWet.toFixed(6)}}
+${usesReverb ? `var RB=[1116,1188,1277,1356${SM.on ? `` : `,556,441`}].map(n=>new Float32Array(n)),RP=[0,0,0,0${SM.on ? `` : `,0,0`}],RCL=[0,0,0,0]
+function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RB[k];p=RP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};${SM.on ? `` : `for(k=4;k<6;k++){b=RB[k];p=RP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RP[k]=p+1<b.length?p+1:0;o=ou}`}return o*${rvWet.toFixed(6)}}
 ` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,${SM.noInstVol ? `` : `v:255,`}rv:255${usesSamples ? `,sp:0,ss:0,si:0,sa:0` : ``}${usesPitchEnv?',q:0,g:0':''}${usesArp?',x:0,y:0,k:0':''}${usesSlide?',l:0':''}${usesPorta?',pt:0,ps:0':''}${fxUsed[6]?',ri:0':''}${usesNoteCut?',nc:0':''}${usesNoteDelay?',nd:0,dn:0,di:0':''}${usesVib?',vp:0,vs:0,vd:0':''}${usesTrem?',tp:0,ts:0,td:0,tm:0':''}${usesNoise?',h:0x7FFF,j:16,m:0':''}${usesReverb?',rs:0':''}${usesFM?`,fmp:${fmZ},fmf:${fmZ},fmL:${fmZ},fmR:${usesFM4?`[1,1,0,0]`:`[1,1]`},fmEnv:${fmZ},fmStg:${fmZ},fmMi:64,fmFb:0`+((usesFM4&&usesFM2)?',fmNo:2':'')+(usesFM4?',fmAlgo:0':'')+',fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
 ${(!SM.noMaster || usesDrive) ? `function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}` : ``}
 ${usesLFO ? `function LT(p){p&=65535;var t=p<32768?p:65536-p;return((t<<2)-65536)>>7}
