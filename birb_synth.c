@@ -21,13 +21,19 @@ static float birb_soft_sat(float x);
  * oscillators to opposite phase within a second. Do NOT reintroduce a
  * per-build note table — parity depends on there being only this one.
  */
+/* Increments in 1/256 units, shifted down after the octave shift. The old
+ * integer table quantised at octave 0, where one step is 40-72 cents, and that
+ * error rode up into every octave: notes sat up to 26 cents off with a 47.5
+ * cent spread, so intervals were audibly wrong. Eight fractional bits bring
+ * octave 2 and up inside 6.6 cents and octave 4 and up inside 1.6. Octaves 0-1
+ * stay coarse because the phase increment itself is an integer. */
 static const fixed16 octave_base[12] = {
-    24, 26, 27, 29, 31, 32, 34, 36, 38, 41, 43, 46,
+    6221, 6591, 6983, 7398, 7838, 8304, 8797, 9321, 9875, 10462, 11084, 11743,
 };
 fixed16 birb_note_to_freq(int note) {
     if (note < 0) note = 0;
     if (note > 95) note = 95;
-    return octave_base[note % 12] << (note / 12);
+    return ((octave_base[note % 12] << (note / 12)) + 128) >> 8;
 }
 
 /* ---------- sine approximation ---------- *

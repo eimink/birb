@@ -1518,9 +1518,9 @@ static int write_js(const char *filename, birb_song *song) {
 
     /* synth engine */
     fprintf(f,
-        "var bf=[24,26,27,29,31,32,34,36,38,41,43,46],\n"
+        "var bf=[6221,6591,6983,7398,7838,8304,8797,9321,9875,10462,11084,11743],\n"
         "dv=[8192,16384,32768,49152],\n"
-        "nf=n=>(n=n<0?0:n>95?95:n,bf[n%%12]<<(n/12)),\n"
+        "nf=n=>(n=n<0?0:n>95?95:n,((bf[n%%12]<<(n/12))+128)>>8),\n"
         "spt=S*5/((bpm||125)*2)|0,%s\n"
         "out=new Float32Array(T),ch=[]%s,tc=0\n",
         LOCK ? smol_span : s_fixedlen ? smol_span
@@ -1710,7 +1710,7 @@ static int write_js(const char *filename, birb_song *song) {
         uses_drum
             ? "\nif(j[0]===8){var dt=j[17]&7,al=dt===4?0:dt===5?2:dt,tn=j[18];if(tn>127)tn-=256;var dec=j[19],tone=j[20],snp=j[21],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;"
               "if(al===0){C.drPe=(df<<3)<<8;C.drPet=(df>>1)<<8;C.drRate=KC(tone);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}"
-              "else if(al===1){C.f=df>0?df:bf[2]<<2;C.b=C.f;C.drMix=snp;C.drPet=SC(tone);C.drPe=F;C.drRate=65460;C.drZ1=0;tt=dec*120+1024;C.drP2=F;C.drNz=F-Math.min(4096,(301466/(tt||1))|0)}"
+              "else if(al===1){C.f=df>0?df:nf(26);C.b=C.f;C.drMix=snp;C.drPet=SC(tone);C.drPe=F;C.drRate=65460;C.drZ1=0;tt=dec*120+1024;C.drP2=F;C.drNz=F-Math.min(4096,(301466/(tt||1))|0)}"
               "else if(al===2){var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;C.drZ1=0;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}"
               "else{C.drBurstLen=80+(snp>>1);C.drStage=0;C.drStageT=C.drBurstLen;tt=dec*160+2048}"
               "if(tt>0xFFFFFF)tt=0xFFFFFF;C.drTtl=tt}"
@@ -2286,8 +2286,10 @@ static int write_smol_c(const char *filename, birb_song *song) {
     fprintf(f, "};\n#define NEV %d\n", bc_nev * ev_w);
 
     fprintf(f,
-        "static const i32 BF[12]={24,26,27,29,31,32,34,36,38,41,43,46};\n"
-        "static i32 nf(i32 n){ if(n<0)n=0; if(n>95)n=95; return BF[n%%12]<<(n/12); }\n"
+        "/* increments in 1/256 units, shifted down after the octave shift */\n"
+        "static const i32 BF[12]={6221,6591,6983,7398,7838,8304,8797,9321,9875,10462,11084,11743};\n"
+        "static i32 nf(i32 n){ if(n<0)n=0; if(n>95)n=95;\n"
+        " return ((BF[n%%12]<<(n/12))+128)>>8; }\n"
         "");
     bc_st(f, "i32 ph[N],bs[N],st[N],rv[N];", "ph,bs,st,rv");
     bc_st(f, "float ev_[N];", "ev_");
@@ -2531,7 +2533,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
                 "   dsn[c]=snp; dclk[c]=384; tt=dec*200+1024; if(dt==4) tt*=2; }\n");
         if (c_drum_mask & 2)
             fprintf(f,
-                "  %sif(al==1){ bs[c]=df>0?df:(BF[2]<<2); dmix[c]=snp; dpt[c]=SC(tone);\n"
+                "  %sif(al==1){ bs[c]=df>0?df:nf(26); dmix[c]=snp; dpt[c]=SC(tone);\n"
                 "   dpe[c]=F; drt[c]=65460; dz1[c]=0; tt=dec*120+1024; dp2[c]=F;\n"
                 "   i32 q=301466/(tt?tt:1); dnz[c]=F-(q<4096?q:4096); }\n",
                 (c_drum_mask & 1) ? "else " : "");

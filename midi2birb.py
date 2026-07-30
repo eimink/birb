@@ -233,7 +233,7 @@ def write_bsb(filename, bpm, tpr, instruments, patterns, order):
 
 # ---- Main ----
 
-BIRB_VERSION = '3.5.0'
+BIRB_VERSION = '4.0.0'
 
 def main():
     parser = argparse.ArgumentParser(description='Convert MIDI to birb .bsb')
