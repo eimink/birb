@@ -563,7 +563,7 @@ s.start();</pre>
         </p>
 
         <div class="section desc">
-            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.2.0</span> is part of the birb chiptune synth project.<br><br>
+            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.3.0</span> is part of the birb chiptune synth project.<br><br>
             &copy; 2026 eimink / Wide Load ^ KVG
         </div>
     </div>
@@ -4644,12 +4644,40 @@ function buildJS(smol) {
      * export its with/without-reverb variants. Coefficients baked (static export). */
     let rev = song.rev || {size:0, damp:0, wet:0};
     let usesReverb = rev.wet > 0 || song.instruments.some(i => i.rev);
+    let usesSamples = song.instruments.some(i => i.wave === 5) && song.samples.length > 0;
     /* Only the wave types past 4 have distinct gains, so a basic-wave-only song
      * can inline the single constant at the mix site instead of carrying the
      * table. Kept as the exact ratio so birbc's emit matches bit for bit. */
     let usesJump = !!fxUsed[0xB] || !!fxUsed[0xD];
+    /* Oscillator dispatch carries only the waveforms the instruments actually
+     * use. birbc has gated these since the size pass; this template still
+     * emitted pulse, triangle, saw and sine unconditionally. Mirrors birbc:
+     * a single waveform needs no test at all, and noise takes the trailing
+     * else because it is the only arm with no cheap condition. */
+    let usesPulse = song.instruments.some(i => i.wave === 0);
+    let usesTri   = song.instruments.some(i => i.wave === 1);
+    let usesSaw   = song.instruments.some(i => i.wave === 2);
     let usesTypeGainTable = usesFM || usesKS || usesDrum || usesFormant;
     let tgain = usesTypeGainTable ? 'TG[C.w]' : '(29819/65536)';
+    /* Whether each arm opens the chain or continues it. The sample arm used to
+     * be emitted unconditionally purely so the arms after it could say `else`. */
+    const preFM      = usesSamples ? 'else ' : '';
+    const preKS      = (usesSamples||usesFM) ? 'else ' : '';
+    const preDrum    = (usesSamples||usesFM||usesKS) ? 'else ' : '';
+    const preFormant = (usesSamples||usesFM||usesKS||usesDrum) ? 'else ' : '';
+    const anyPreArm  = usesSamples||usesFM||usesKS||usesDrum||usesFormant;
+    const BASIC_ARMS = [
+        [usesPulse, '!C.w',    's=h<C.u?.5:-.5'],
+        [usesTri,   'C.w===1', 's=h<F/2?(h*4-F)/F:(F*3-h*4)/F'],
+        [usesSaw,   'C.w===2', 's=(h*2-F)/F'],
+        [usesSine,  'C.w===4', 's=SA_(h)'],
+        [usesNoise, null,      '{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}'],
+    ].filter(a => a[0]);
+    let basicDispatch =
+        !BASIC_ARMS.length      ? ''
+      : BASIC_ARMS.length === 1 ? '\n' + (anyPreArm ? 'else ' : '') + BASIC_ARMS[0][2]
+      : BASIC_ARMS.map((a, k) => '\n' + ((k || anyPreArm) ? 'else ' : '')
+            + (a[1] === null ? a[2] : 'if(' + a[1] + ')' + a[2])).join('');
     let rvFb = 0.7 + 0.28 * rev.size, rvDc = 0.4 * rev.damp, rvWet = rev.wet;
     /* Track which drum algorithms are used — unused ones are skipped in output. */
     let drumAlgos = new Set();
@@ -4716,7 +4744,6 @@ function buildJS(smol) {
     }
 
     // sample bank — only emit if used
-    let usesSamples = song.instruments.some(i => i.wave === 5) && song.samples.length > 0;
     if (usesSamples) {
         // Emit samples as [{b:baseNote,l:length,ls:loopStart,le:loopEnd,d:"base64adpcm"}, ...]
         let sArr = song.samples.map(s => {
@@ -4730,8 +4757,6 @@ function buildJS(smol) {
             return `{b:${bn},l:${s.data.length},ls:${ls},le:${le},d:"${b64}"}`;
         });
         o += 'SA=[' + sArr.join(',') + '],\n';
-    } else {
-        o += 'SA=[],\n';
     }
 
     // offset table + accessor for variable-length patterns
@@ -4754,7 +4779,7 @@ var out=new Int16Array(q.l),pr=0,si=0;
 for(var k=0;k<q.l;k++){var by=a[k>>1],nb=(k&1)?(by>>4):(by&15),st=AST[si],df=st>>3;
 if(nb&1)df+=st>>2;if(nb&2)df+=st>>1;if(nb&4)df+=st;if(nb&8)df=-df;pr+=df;
 if(pr>32767)pr=32767;if(pr<-32768)pr=-32768;si+=AIA[nb];if(si<0)si=0;if(si>88)si=88;out[k]=pr}
-return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}}),
+return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}})
 `;
     }
     /* Instrument field indices in I[n] depend on which synth types the song
@@ -4769,7 +4794,7 @@ spt=S*5/((bpm||125)*2)|0,${SM.fixedLen ? `T=ol*${SM.rows}*tpr*spt` : `W=pl.reduc
 out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
 ${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
 function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RCP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*${rvWet.toFixed(6)}}
-` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,${SM.noInstVol ? `` : `v:255,`}rv:255,sp:0,ss:0,si:0,sa:0${usesPitchEnv?',q:0,g:0':''}${usesArp?',x:0,y:0,k:0':''}${usesSlide?',l:0':''}${usesPorta?',pt:0,ps:0':''}${fxUsed[6]?',ri:0':''}${usesNoteCut?',nc:0':''}${usesNoteDelay?',nd:0,dn:0,di:0':''}${usesVib?',vp:0,vs:0,vd:0':''}${usesTrem?',tp:0,ts:0,td:0,tm:0':''}${usesNoise?',h:0x7FFF,j:16,m:0':''}${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
+` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,${SM.noInstVol ? `` : `v:255,`}rv:255${usesSamples ? `,sp:0,ss:0,si:0,sa:0` : ``}${usesPitchEnv?',q:0,g:0':''}${usesArp?',x:0,y:0,k:0':''}${usesSlide?',l:0':''}${usesPorta?',pt:0,ps:0':''}${fxUsed[6]?',ri:0':''}${usesNoteCut?',nc:0':''}${usesNoteDelay?',nd:0,dn:0,di:0':''}${usesVib?',vp:0,vs:0,vd:0':''}${usesTrem?',tp:0,ts:0,td:0,tm:0':''}${usesNoise?',h:0x7FFF,j:16,m:0':''}${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
 ${(!SM.noMaster || usesDrive) ? `function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}` : ``}
 ${usesLFO ? `function LT(p){p&=65535;var t=p<32768?p:65536-p;return((t<<2)-65536)>>7}
 ` : ''}${usesTypeGainTable
@@ -4788,7 +4813,7 @@ C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}
 C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];${SM.noInstVol ? `` : `C.v=j[10]||255;`}C.rv=255;C.k=0;C.l=0;C.ps=0${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
 if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}
-C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}${usesFM ? `
+${usesSamples ? `C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}` : ''}${usesFM ? `
 if(j[0]===6){var fm=j[16];C.fmNo=j[12];C.fmAlgo=j[13]|0;C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
 if(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}` : ''}${usesDrum ? `
 if(j[0]===8){var dt=j[${drumBase}]&7,al=dt===4?0:dt===5?2:dt,tn=j[${drumBase+1}];if(tn>127)tn-=256;var dec=j[${drumBase+2}],tone=j[${drumBase+3}],snp=j[${drumBase+4}],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;
@@ -4845,25 +4870,20 @@ else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
 else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}${usesFM ? `
 if(C.w===6){for(var k=0;k<4;k++)C.fmf[k]=Math.round(C.f*C.fmR[k]);var jj=I[C.i];if(jj){C.fmAlgo=jj[13]|0;var fm=jj[16];for(var k=0;k<4;k++){var oo=fm[k]||[1,0,0,0,8,200,8],st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}C.fmStg[k]=st;C.fmEnv[k]=en}}}` : ''}}}
 for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
-var v=0${usesReverb?',rI=0':''}${usesDuck?',DI=0,DN=DE':''};for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e&&!C.sa${usesDrum ? '&&!C.drTtl' : ''})continue
+var v=0${usesReverb?',rI=0':''}${usesDuck?',DI=0,DN=DE':''};for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e${usesSamples ? '&&!C.sa' : ''}${usesDrum ? '&&!C.drTtl' : ''})continue
 var h=C.p,s=0
-if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
+${usesSamples ? `if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
-if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}${usesFM ? `
-else if(C.w===6){if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}}` : ''}${usesKS ? `
-else if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*C.kg)>>16;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
-else if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
+if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}` : ''}${usesFM ? `
+${preFM}if(C.w===6){if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}}` : ''}${usesKS ? `
+${preKS}if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*C.kg)>>16;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
+${preDrum}if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
 ${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8))%F;var tri=C.p<F/2?(C.p*4-F):(F*3-C.p*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}` : ''}
 ${drumAlgos.has(1) ? `${drumAlgos.has(0) ? 'else ' : ''}if(C.drAl===1){var nn=lfn();var sr_=(nn&1)?26000:-26000;var y_=sr_-C.drZ1;C.drZ1+=(y_*C.drPet)>>16;var noi=Math.floor(y_*C.drP2/65536);C.drP2=Math.floor(C.drP2*C.drNz/65536);C.p=(C.p+C.f)%F;var tr_=C.p<F/2?(C.p*4-F):(F*3-C.p*4);var bd=(tr_*22000)>>16;bd=Math.floor(bd*C.drPe/65536);C.drPe=Math.floor(C.drPe*C.drRate/65536);var mxB=C.drMix,mxN=255-mxB;o_=((noi*mxN+bd*mxB)/255)|0}` : ''}
 ${drumAlgos.has(2) ? `${(drumAlgos.has(0)||drumAlgos.has(1)) ? 'else ' : ''}if(C.drAl===2){var nn=lfn();var src2=(nn&1)?24000:-24000;var yh=src2-C.drZ1;C.drZ1+=(yh*C.drPet)>>16;o_=yh;if(C.drAlOrig===5){var lf=SA_((C.drTtl<<3)&0xFFFF);o_=(o_*(1+lf*0.5))|0}}` : ''}
 ${drumAlgos.has(3) ? `${(drumAlgos.has(0)||drumAlgos.has(1)||drumAlgos.has(2)) ? 'else ' : ''}if(C.drAl===3){var amp=0;if(C.drStage<3){var bL=C.drBurstLen||96;var into=bL-C.drStageT;var hf=bL/2;var env=(into<hf)?(into*256/hf):((bL-into)*256/hf);if(env<0)env=0;if(env>256)env=256;var nn=lfn();var sc=(nn&1)?26000:-26000;amp=(sc*env)>>8}else{var nn=lfn();amp=(nn&1)?9000:-9000}if(C.drStageT>0)C.drStageT--;else if(C.drStage<3){C.drStage++;C.drStageT=(C.drStage===3)?0xFFFF:(C.drBurstLen||96)}o_=amp}` : ''}
 s=o_/32768;if(s>1)s=1;else if(s<-1)s=-1}}` : ''}${usesFormant ? `
-else if(C.w===9){var src;if(C.ftSw===3){var fv=C.ftLf,fb=(fv^(fv>>1))&1;fv=((fv>>1)|(fb<<14))&0xFFFF;if(!fv)fv=0x7FFF;C.ftLf=fv;src=(fv&1)?16383:-16383}else if(C.ftSw===0){src=h<C.u?16383:-16383}else{src=(h*2-F)*32767/F|0}var sm=0;for(var fi=0;fi<3;fi++){var b0=C.ftB0[fi],a1=C.ftA1[fi],a2=C.ftA2[fi];var yy=(b0*src/65536|0)+C.ftZ1[fi];C.ftZ1[fi]=(-(a1*yy/65536|0))+C.ftZ2[fi];C.ftZ2[fi]=(-b0*src/65536|0)-(a2*yy/65536|0);sm+=yy}if(sm>32767)sm=32767;else if(sm<-32767)sm=-32767;s=sm/32768;if(C.ftSS){C.ftRc=(C.ftRc+1)&0xFF;if((C.ftRc&0x1F)===0){var st=C.ftSS>>3;if(!st)st=1;var sp=C.ftSp+C.ftDr*st;if(sp>=255){sp=255;C.ftDr=-1}else if(sp<=0){sp=0;C.ftDr=1}C.ftSp=sp;FI(C)}}}` : ''}
-else if(!C.w)s=h<C.u?.5:-.5
-else if(C.w===1)s=h<F/2?(h*4-F)/F:(F*3-h*4)/F
-else if(C.w===2)s=(h*2-F)/F
-else if(C.w===4)s=SA_(h)
-else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
+${preFormant}if(C.w===9){var src;if(C.ftSw===3){var fv=C.ftLf,fb=(fv^(fv>>1))&1;fv=((fv>>1)|(fb<<14))&0xFFFF;if(!fv)fv=0x7FFF;C.ftLf=fv;src=(fv&1)?16383:-16383}else if(C.ftSw===0){src=h<C.u?16383:-16383}else{src=(h*2-F)*32767/F|0}var sm=0;for(var fi=0;fi<3;fi++){var b0=C.ftB0[fi],a1=C.ftA1[fi],a2=C.ftA2[fi];var yy=(b0*src/65536|0)+C.ftZ1[fi];C.ftZ1[fi]=(-(a1*yy/65536|0))+C.ftZ2[fi];C.ftZ2[fi]=(-b0*src/65536|0)-(a2*yy/65536|0);sm+=yy}if(sm>32767)sm=32767;else if(sm<-32767)sm=-32767;s=sm/32768;if(C.ftSS){C.ftRc=(C.ftRc+1)&0xFF;if((C.ftRc&0x1F)===0){var st=C.ftSS>>3;if(!st)st=1;var sp=C.ftSp+C.ftDr*st;if(sp>=255){sp=255;C.ftDr=-1}else if(sp<=0){sp=0;C.ftDr=1}C.ftSp=sp;FI(C)}}}` : ''}${basicDispatch}
 var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F
 ${usesDrive ? 'if(C.dp>1)s=SS(s*C.dp)*C.dn;' : ''}var cv=s*en*${SM.noInstVol ? `C.rv/F/255` : `C.v*C.rv/F/255/255`}*${tgain};${usesDuck ? 'if(C.ds)DI+=(cv<0?-cv:cv)*C.ds/255;if(C.da&&DN>0){var dg=1-DN*C.da/255;cv*=dg>0?dg:0}' : ''}v+=cv;${usesReverb ? 'if(C.rs)rI+=cv*C.rs/255;' : ''}if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}${usesReverb?'v+=RV(rI);':''}${usesDuck ? 'var dd=DI>1?1:DI;DE=dd>DE?dd:dd+(DE-dd)*DR;' : ''}${SM.noMaster ? `v*=MG;out[i]=v>1?1:v<-1?-1:v` : `v*=MG;var la=v<0?-v:v;LE=la>LE?la:la+(LE-la)*MR;if(LE>MT)v*=MT/LE;out[i]=SS(v)/MC`}}
 return{o:out,spt:spt,T:T}}`;
@@ -4871,8 +4891,12 @@ return{o:out,spt:spt,T:T}}`;
 }
 
 function minifyJS(src) {
-    // Strip comments and collapse whitespace
-    let o = src.replace(/\/\/[^\n]*/g, '');
+    /* No comment stripping: buildJS emits none, and the pass was not
+     * string-aware. Sample banks are base64, whose alphabet includes '/', so a
+     * '//' inside the payload ate the rest of that line and left the string
+     * literal unterminated - every minified export of a song with samples was
+     * unparseable. Only whitespace collapsing happens here. */
+    let o = src;
     // Collapse newlines — but preserve them after statements that need ASI
     // Safe approach: replace newlines with semicolons where needed
     let lines = o.split('\n').map(l => l.trim()).filter(l => l);
@@ -4900,12 +4924,24 @@ function packJS(src) {
     // JSCrush-style packing: find repeated substrings and replace with single chars
     // Use unused ASCII chars as replacement tokens
     let s = src;
-    // Available token chars (not used in the source)
+    /* A token char has to be absent from the source AND legal inside the
+     * single-quoted literal the packed data ends up in. LF and CR terminate a
+     * string literal outright; quote and backslash escape out of it. Minified
+     * source has no newlines, so 0x0a and 0x0d passed the "absent from source"
+     * test and got handed out as tokens #10 and #13 - which meant every packed
+     * export that reached 13 tokens did not parse as JavaScript at all. */
     let tokens = [];
     for (let i = 1; i < 127; i++) {
         let c = String.fromCharCode(i);
-        if (s.indexOf(c) === -1 && c !== "'" && c !== '\\') tokens.push(c);
+        if (c === '\n' || c === '\r' || c === "'" || c === '\\') continue;
+        if (s.indexOf(c) === -1) tokens.push(c);
     }
+    /* Reserve the table separator from the same pool rather than hardcoding '|':
+     * a replacement string can contain '|' (minified JS is full of '||'), which
+     * would split one table entry into two. Anything left in this pool is absent
+     * from the source, so no substring of it can contain the separator. */
+    if (tokens.length < 2) return src;
+    let sep = tokens.shift();
 
     let replacements = [];
     // Find repeated substrings worth replacing (saves > 3 bytes)
@@ -4938,13 +4974,13 @@ function packJS(src) {
 
     // Encode replacements as: tok1|str1|tok2|str2|...
     // Unpacker replaces in reverse order
-    let repStr = replacements.map(r => r[0] + r[1]).join('|');
+    let repStr = replacements.map(r => r[0] + r[1]).join(sep);
 
     // Wrap as self-extracting: assigns birb function
     let ss = s.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     let rs = repStr.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     return "var _='" + ss + "',_r='" + rs +
-           "';_r.split('|').reverse().forEach(function(p){_=_.split(p[0]).join(p.slice(1))});" +
+           "';_r.split('" + sep + "').reverse().forEach(function(p){_=_.split(p[0]).join(p.slice(1))});" +
            "eval(_)";
 }
 

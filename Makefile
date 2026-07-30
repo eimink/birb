@@ -205,10 +205,14 @@ web/birb4k.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 # Named tiers map synth feature sets to predictable Brotli sizes. Use these
 # for intros/4K where the song only exercises a subset of the engine.
 
-# Minimal: basic synth only. Target: smallest.
+# Minimal: basic synth only, and the smol birb feature set - no master bus, so
+# no drive, no ducking, no limiter. Without BIRB_NO_MASTER the channel carries
+# drive_pre/drive_norm/duck_send/duck_amt and lands at 120 bytes, over the
+# 112-byte wasm cap, so this tier did not build at all. Target: smallest.
 web/birb_minimal.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi
 	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_SAMPLES -DBIRB_NO_FM -DBIRB_NO_KS -DBIRB_NO_DRUM -DBIRB_NO_FORMANT \
+	    -DBIRB_NO_MASTER \
 	    birb_synth.c birb_wasm.c -o web/birb_minimal.wasm
 	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_minimal.wasm -o web/birb_minimal.wasm; fi
 	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_minimal.wasm -o web/birb_minimal.wasm.br; fi

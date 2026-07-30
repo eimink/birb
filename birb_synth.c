@@ -1584,7 +1584,6 @@ static float birb_reverb_tick(birb_state *st, float x, float size, float damp, f
 }
 #endif /* BIRB_NO_REVERB */
 
-#ifndef BIRB_NO_MASTER
 /* ---------- per-synth-type loudness calibration ----------
  * Indexed by birb_synth_type. Before these gains existed, an instrument at
  * volume 255 measured anywhere from -0.4 LUFS (FM bass) to -24.7 LUFS (formant
@@ -1610,6 +1609,7 @@ static const fixed16 birb_type_gain[6] = {
    149078,   /* SYNTH_FORMANT x2.275  (keyed to eebuzz,   -20.14)      */
 };
 
+#ifndef BIRB_NO_MASTER
 /* Feedback peak limiter. Instantaneous attack, one-pole release: the envelope
  * jumps straight to any new peak and decays back over `rel`. Gain reduction is
  * thresh/env whenever env exceeds the threshold. This replaces relying on the
@@ -1690,13 +1690,13 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             int32_t out = ((int32_t)sample * FX_TO_INT(env * 256)) >> 8;
             out = out * vol / 255;
             out = out * rvol / 255;
-#ifndef BIRB_NO_MASTER
             /* per-synth-type loudness calibration (see birb_type_gain) */
             {
                 uint8_t t = ch->synth_type;
                 if (t < 6)
                     out = (int32_t)(((int64_t)out * birb_type_gain[t]) >> FX_SHIFT);
             }
+#ifndef BIRB_NO_MASTER
             /* this voice feeds the sidechain bus before being ducked itself */
             if (ch->duck_send) {
                 int32_t a = out < 0 ? -out : out;
