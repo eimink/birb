@@ -1034,6 +1034,85 @@ static void emit_u8_array(FILE *f, const uint8_t *data, int len) {
     fprintf(f, "]");
 }
 
+/* smol birb ships an event list produced by walking the song here, instead of
+ * pattern planes plus a runtime sequencer. Mirrors the editor's walkSong exactly:
+ * row 0 is applied before ct is ever reset (so it runs tpr-1 ticks and later rows
+ * run tpr), Bxx/Dxx are followed and never shipped, Fxx stays an event because it
+ * retunes spt, and a volume cell that restates the channel's current value emits
+ * nothing. Any divergence here shows up as an audible mismatch with the editor. */
+typedef struct { int t, c, n, rv, fx, pm, ins; } bc_event;
+static bc_event *bc_ev = NULL;
+static int bc_nev = 0, bc_any_fx = 0;
+static long bc_walk_T = 0;
+
+/* mutable walk state, so the row emit can be shared by both call sites the way
+ * the editor's nested emit() closure is */
+typedef struct { int tpr; long spt; int jo, jr; int rv_now[BIRB_NUM_CHANNELS]; int cap; } bc_wst;
+
+static void bc_emit_row(const birb_song *song, int nch, int eo, int er, long tk, bc_wst *st) {
+    for (int c = 0; c < nch; c++) {
+        int q = song->order[eo][c];
+        if (q == 255) continue;
+        int pl = song->pattern_lengths[q]; if (!pl) pl = 16;
+        if (er >= pl) continue;
+        const birb_row *cell = &song->patterns[q][er][c];
+        int n = cell->note, rv = cell->volume, fx = cell->effect, pm = cell->param;
+        if (fx == FX_POS_JUMP) { st->jo = pm; st->jr = 0; }
+        else if (fx == FX_PAT_BREAK) { if (st->jo < 0) st->jo = eo + 1; st->jr = pm; }
+        if (fx == FX_SET_SPEED && pm) {
+            if (pm < 0x20) st->tpr = pm; else st->spt = 44100L * 5 / (pm * 2);
+        }
+        int keep_fx = (fx && fx != FX_POS_JUMP && fx != FX_PAT_BREAK) ? fx : 0;
+        if (n >= 2 && fx != FX_TONE_PORTA) st->rv_now[c] = 255;
+        int rv_out = 0;
+        if (rv && rv != st->rv_now[c]) { rv_out = rv; st->rv_now[c] = rv; }
+        if (n || rv_out || keep_fx) {
+            if (bc_nev >= st->cap) return;
+            bc_ev[bc_nev].t = (int)tk; bc_ev[bc_nev].c = c;
+            bc_ev[bc_nev].n = n; bc_ev[bc_nev].rv = rv_out;
+            bc_ev[bc_nev].fx = keep_fx; bc_ev[bc_nev].pm = keep_fx ? pm : 0;
+            bc_ev[bc_nev].ins = (cell->instrument == 0xFF) ? -1 : cell->instrument;
+            if (keep_fx) bc_any_fx = 1;
+            bc_nev++;
+        }
+    }
+}
+
+static void bc_walk(const birb_song *song, int nch) {
+    bc_wst st;
+    st.tpr = song->ticks_per_row ? song->ticks_per_row : 6;
+    st.spt = 44100L * 5 / ((song->bpm ? song->bpm : 125) * 2);
+    st.jo = -1; st.jr = 0;
+    for (int c = 0; c < BIRB_NUM_CHANNELS; c++) st.rv_now[c] = 255;
+
+    const int ol = song->order_length;
+    int ct = 0, cr = 0, op = 0, first = 1, done = 0, guard = 0;
+    long tk = 0, samples = 0;
+
+    st.cap = (ol ? ol : 1) * BIRB_MAX_ROWS * (nch ? nch : 1) + 16;
+    bc_ev = (bc_event *)malloc(sizeof(bc_event) * st.cap);
+    bc_nev = 0; bc_any_fx = 0;
+    if (!bc_ev) { bc_walk_T = 0; return; }
+
+    while (!done && guard++ < 200000) {
+        if (first) { first = 0; bc_emit_row(song, nch, op, cr, tk, &st); }
+        ct++;
+        if (ct >= st.tpr) {
+            ct = 0;
+            if (st.jo >= 0) { op = st.jo < ol ? st.jo : 0; cr = st.jr; st.jo = -1; st.jr = 0; }
+            else {
+                cr++;
+                int pl = song->pattern_lengths[song->order[op][0]];
+                if (!pl) pl = 16;
+                if (cr >= pl) { cr = 0; if (++op >= ol) { done = 1; op = 0; } }
+            }
+            if (!done) bc_emit_row(song, nch, op, cr, tk, &st);
+        }
+        tk++; samples += st.spt;
+    }
+    bc_walk_T = samples;
+}
+
 static int write_js(const char *filename, birb_song *song) {
     FILE *f = fopen(filename, "w");
     if (!f) {
@@ -1041,13 +1120,18 @@ static int write_js(const char *filename, birb_song *song) {
         return -1;
     }
 
+    const int nch_js = BIRB_NUM_CHANNELS;
+    const int LOCK = birb_smol;
+    if (LOCK) bc_walk(song, nch_js);
+
     fprintf(f, "function birb(X){\n");
     fprintf(f, "var S=44100,N=4,F=65536,\n");
     fprintf(f, "bpm=%d,tpr=%d,ni=%d,np=%d,ol=%d,\n",
             song->bpm, song->ticks_per_row, song->num_instruments,
             song->num_patterns, song->order_length);
 
-    /* order — single flat array, 4 per position */
+    /* order — superseded by the event list under smol */
+    if (!LOCK) {
     fprintf(f, "O=[");
     for (int i = 0; i < song->order_length; i++) {
         if (i) fprintf(f, ",");
@@ -1055,6 +1139,7 @@ static int write_js(const char *filename, birb_song *song) {
                 song->order[i][2], song->order[i][3]);
     }
     fprintf(f, "],\n");
+    }
 
     /* Detect which synth types we emit. */
     int uses_fm = 0, uses_ks = 0, uses_drum = 0, uses_formant = 0, uses_sine = 0;
@@ -1160,7 +1245,8 @@ static int write_js(const char *filename, birb_song *song) {
     for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
         if (smol_ch_inst[c] < 0) smol_ch_inst[c] = 0;   /* channel never names one */
     char smol_span[64];
-    snprintf(smol_span, sizeof smol_span, "T=ol*%d*tpr*spt,", smol_rows);
+    if (birb_smol) snprintf(smol_span, sizeof smol_span, "T=%ld,", bc_walk_T);
+    else snprintf(smol_span, sizeof smol_span, "T=ol*%d*tpr*spt,", smol_rows);
     int s_fixedlen = birb_smol && smol_same_len;
     int s_perch    = birb_smol && smol_per_ch;
     int s_novol    = birb_smol;
@@ -1316,8 +1402,8 @@ static int write_js(const char *filename, birb_song *song) {
         fprintf(f, "],\n");
     }
 
-    /* pattern lengths (a single stride needs no table) */
-    if (!s_fixedlen) {
+    /* pattern lengths (a single stride needs no table; none at all under smol) */
+    if (!s_fixedlen && !LOCK) {
         fprintf(f, "pl=[");
         for (int p = 0; p < song->num_patterns; p++) {
             if (p) fprintf(f, ",");
@@ -1328,7 +1414,7 @@ static int write_js(const char *filename, birb_song *song) {
 
     /* 5 flat arrays with offset table for variable-length patterns */
     const char *pnames[] = {"pn", "pi", "pv", "pf", "pp"};
-    for (int plane = 0; plane < 5; plane++) {
+    for (int plane = 0; plane < (LOCK ? 0 : 5); plane++) {
         /* check if this plane is entirely empty/default */
         int all_empty = 1;
         uint8_t empty_val = (plane == 1) ? 0xFF : 0; /* inst plane default is 0xFF */
@@ -1392,7 +1478,23 @@ static int write_js(const char *filename, birb_song *song) {
     /* offset table + accessor. Equal-length patterns index off a constant
      * stride, so neither table has to exist. Continues the declaration chain
      * above, hence no `var`. */
-    if (s_fixedlen)
+    if (LOCK) {
+        /* delta-encoded tick first, so the numbers stay one or two digits.
+         * inst rides along only when a channel is not bound to one instrument,
+         * fx/param only when some non-structural effect survives the walk. */
+        const int with_inst = !s_perch, with_fx = bc_any_fx;
+        int prev = 0;
+        fprintf(f, "EV=[");
+        for (int k = 0; k < bc_nev; k++) {
+            const bc_event *e = &bc_ev[k];
+            fprintf(f, "%s%d,%d,%d,%d", k ? "," : "", e->t - prev, e->c, e->n, e->rv);
+            prev = e->t;
+            if (with_inst) fprintf(f, ",%d", e->ins < 0 ? 255 : e->ins);
+            if (with_fx)   fprintf(f, ",%d,%d", e->fx, e->pm);
+        }
+        fprintf(f, "],ei=0,tk=0,et=0,i,c,r\n");
+    }
+    else if (s_fixedlen)
         fprintf(f,
             "i,c,r\n"
             "function P(a,p,c,r){return a.length?a[(p*N+c)*%d+r]||0:0}\n", smol_rows);
@@ -1409,8 +1511,10 @@ static int write_js(const char *filename, birb_song *song) {
         "dv=[8192,16384,32768,49152],\n"
         "nf=n=>(n=n<0?0:n>95?95:n,bf[n%%12]<<(n/12)),\n"
         "spt=S*5/((bpm||125)*2)|0,%s\n"
-        "out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0\n",
-        s_fixedlen ? smol_span : "W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,");
+        "out=new Float32Array(T),ch=[]%s,tc=0\n",
+        LOCK ? smol_span : s_fixedlen ? smol_span
+             : "W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,",
+        LOCK ? "" : ",ct=0,cr=0,op=0");
 #ifndef BIRB_NO_REVERB
     /* reverb send bus (mirror of the editor's makeReverb; coefficients baked). */
     if (uses_reverb)
@@ -1577,17 +1681,34 @@ static int write_js(const char *filename, birb_song *song) {
     );
     (void)ks_idx; (void)drum_base; /* indices used via hardcoded layout above */
     (void)formant_base;
+    char rhead[320];
+    if (LOCK) {
+        const int with_inst = !s_perch, with_fx = bc_any_fx;
+        int k = 4;
+        char inst[24], fxp[48];
+        if (with_inst) { snprintf(inst, sizeof inst, "EV[ei+%d]", k++); }
+        else           { snprintf(inst, sizeof inst, "IC[c]"); }
+        if (with_fx) { snprintf(fxp, sizeof fxp, "fx=EV[ei+%d],pm=EV[ei+%d]", k, k+1); k += 2; }
+        else         { snprintf(fxp, sizeof fxp, "fx=0,pm=0"); }
+        snprintf(rhead, sizeof rhead,
+            "function R(){while(ei<EV.length&&et+EV[ei]<=tk){et+=EV[ei];c=EV[ei+1];"
+            "var C=ch[c],n=EV[ei+2],rv=EV[ei+3],%s,ii=%s;ei+=%d\n", fxp, inst, k);
+    } else {
+        snprintf(rhead, sizeof rhead,
+            "function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue\n"
+            "var n=P(pn,q,c,cr),ii=%s,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)\n",
+            s_perch ? "IC[c]" : "pi.length?P(pi,q,c,cr):255");
+    }
     fprintf(f,
-        "function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue\n"
+        "%s"
         /* pi.length?...:255 — NOT `P(pi..)||255`: P returns 0 for inst0, and
          * `0||255` would turn an explicit inst0 into "keep current instrument". */
-        "var n=P(pn,q,c,cr),ii=%s,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)\n"
         "%s%s%s%s%s"
         "%sif(n==1){C.t=4;%s}else if(n>=2){%s"
         "%s}\n"
         "if(rv)C.rv=rv\n"
         "%s%s%s%s%s%s%s%s%s%s%s}}\n",
-        s_perch ? "IC[c]" : "pi.length?P(pi,q,c,cr):255",
+        rhead,
         fx_used[FX_RETRIGGER]  ? "C.ri=0;" : "",
         uses_notecut           ? "C.nc=0;" : "",
         uses_notedelay         ? "C.nd=0;" : "",
@@ -1609,17 +1730,19 @@ static int write_js(const char *filename, birb_song *song) {
         uses_notecut           ? "if(fx==7&&(pm>>4)==0xC)C.nc=pm&15\n" : "",
         fx_used[FX_TREMOLO]    ? "if(fx==8){C.ts=F/64*(pm>>4);C.td=(pm&15)<<4}\n" : "",
         fx_used[FX_SAMPLE_OFFSET] ? "if(fx==9&&C.w===5)C.sp=(pm<<8)<<16\n" : "",
-        fx_used[FX_POS_JUMP]   ? "if(fx==0xB){jo=pm;jr=0}\n" : "",
-        (fx_used[FX_PAT_BREAK] ? "if(fx==0xD){if(jo<0)jo=op+1;jr=pm}\n" : ""),
+        (fx_used[FX_POS_JUMP] && !LOCK) ? "if(fx==0xB){jo=pm;jr=0}\n" : "",
+        ((fx_used[FX_PAT_BREAK] && !LOCK) ? "if(fx==0xD){if(jo<0)jo=op+1;jr=pm}\n" : ""),
         (fx_used[FX_SET_SPEED]
             ? "if(fx==0xF&&pm){if(pm<0x20)tpr=pm;else{bpm=pm;spt=S*5/(pm*2)|0}}\n" : "")
     );
     fprintf(f,
-        "R()\n"
-        "function K(){ct++;if(ct>=tpr){ct=0\n"
+        "%s"
+        "function K(){%s"
         "%s"
         "for(c=0;c<N;c++){var C=ch[c]\n%s",
-        smol_advance,
+        LOCK ? "" : "R()\n",
+        LOCK ? "R();tk++\n" : "ct++;if(ct>=tpr){ct=0\n",
+        LOCK ? "" : smol_advance,
         uses_notedelay ? "if(C.nd&&ct==C.nd){if(C.di<ni)TR(C,C.dn,C.di);C.nd=0}\n" : "");
     fprintf(f, "%s%s%s%s%s%s%s%s",
         uses_notecut  ? "if(C.nc&&ct==C.nc){C.e=0;C.t=0}\n" : "",
@@ -1771,6 +1894,7 @@ static int write_js(const char *filename, birb_song *song) {
                 "return{o:out,spt:spt,T:T}}\n", drv, tgain, dsend, padv, dtick, master);
     }
 
+    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
     fclose(f);
 
     /* measure output size */

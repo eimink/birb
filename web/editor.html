@@ -563,7 +563,7 @@ s.start();</pre>
         </p>
 
         <div class="section desc">
-            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.3.0</span> is part of the birb chiptune synth project.<br><br>
+            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.4.0</span> is part of the birb chiptune synth project.<br><br>
             &copy; 2026 eimink / Wide Load ^ KVG
         </div>
     </div>
@@ -4597,14 +4597,70 @@ function smolPlan(smol) {
     };
 }
 
+/* Run the sequencer at export time and record what happens, so the export ships
+ * a list of events instead of a tracker. Mirrors renderSong's doTick cadence
+ * exactly, including that row 0 is applied by firstRow before ct is ever reset
+ * (so row 0 runs tpr-1 ticks and later rows run tpr). Bxx/Dxx are followed here
+ * and never reach the export; Fxx stays an event because it retunes spt. */
+function walkSong(N) {
+    const S = 44100;
+    let tpr = song.tpr || 6, bpm = song.bpm || 125;
+    let spt = S * 5 / ((bpm || 125) * 2) | 0;
+    const ol = song.order.length;
+    const plen = o => { const p = song.patterns[song.order[o][0]]; return p ? p.length : 16; };
+    let ct = 0, cr = 0, op = 0, first = true, jo = -1, jr = 0;
+    const rvNow = new Array(N).fill(255);
+    let tk = 0, samples = 0, done = false, guard = 0;
+    const ev = [];
+    const emit = (o2, r2, t) => {
+        for (let c = 0; c < N; c++) {
+            const q = song.order[o2][c];
+            if (q === 255 || q === undefined) continue;
+            const pat = song.patterns[q];
+            if (!pat || r2 >= pat.length) continue;
+            const cell = pat[r2][c];
+            const n = cell.note | 0, rv = cell.vol | 0, fx = cell.fx | 0, pm = cell.prm | 0;
+            /* structural effects are resolved here, not shipped */
+            if (fx === 0xB) { jo = pm; jr = 0; }
+            else if (fx === 0xD) { if (jo < 0) jo = o2 + 1; jr = pm; }
+            if (fx === 0xF && pm) { if (pm < 0x20) tpr = pm; else spt = S * 5 / (pm * 2) | 0; }
+            const keepFx = (fx && fx !== 0xB && fx !== 0xD) ? fx : 0;
+            const ins = (cell.inst === 255 || cell.inst === undefined) ? -1 : (cell.inst|0);
+            /* a real note-on resets row volume to full before the column applies */
+            if (n >= 2 && fx !== 5) rvNow[c] = 255;
+            let rvOut = 0;
+            if (rv && rv !== rvNow[c]) { rvOut = rv; rvNow[c] = rv; }
+            if (n || rvOut || keepFx) ev.push({t, c, n, rv: rvOut, fx: keepFx, pm: keepFx ? pm : 0, ins});
+        }
+    };
+    while (!done && guard++ < 200000) {
+        if (first) { first = false; emit(op, cr, tk); }
+        ct++;
+        if (ct >= tpr) {
+            ct = 0;
+            if (jo >= 0) { op = jo < ol ? jo : 0; cr = jr; jo = -1; jr = 0; }
+            else { cr++; if (cr >= plen(op)) { cr = 0; if (++op >= ol) { done = true; op = 0; } } }
+            if (!done) emit(op, cr, tk);
+        }
+        tk++; samples += spt;
+    }
+    /* any non-structural effect anywhere decides whether fx/pm ride along */
+    const anyFx = ev.some(e => e.fx);
+    return { ev, T: samples, anyFx };
+}
+
 function buildJS(smol) {
     const SM = smolPlan(smol);
+    /* smol ships an event list from walkSong instead of patterns + a sequencer */
+    const WALK = smol ? walkSong(NCH) : null;
+    const LOCK = !!WALK;
+
     let N = NCH, o = '';
 
     o += `function birb(X){\nvar S=44100,N=${NCH},F=65536,\n`;
     o += `bpm=${song.bpm},tpr=${song.tpr},ni=${song.instruments.length},np=${song.patterns.length},ol=${song.order.length},\n`;
 
-    o += 'O=[' + song.order.map(r => '[' + r.join(',') + ']').join(',') + '],\n';
+    if (!LOCK) o += 'O=[' + song.order.map(r => '[' + r.join(',') + ']').join(',') + '],\n';
 
     /* Detect which synth types are actually used so the export can strip
      * unused generator code. */
@@ -4648,7 +4704,7 @@ function buildJS(smol) {
     /* Only the wave types past 4 have distinct gains, so a basic-wave-only song
      * can inline the single constant at the mix site instead of carrying the
      * table. Kept as the exact ratio so birbc's emit matches bit for bit. */
-    let usesJump = !!fxUsed[0xB] || !!fxUsed[0xD];
+    let usesJump = !LOCK && (!!fxUsed[0xB] || !!fxUsed[0xD]);
     /* Oscillator dispatch carries only the waveforms the instruments actually
      * use. birbc has gated these since the size pass; this template still
      * emitted pulse, triangle, saw and sine unconditionally. Mirrors birbc:
@@ -4721,10 +4777,10 @@ function buildJS(smol) {
     if (usesDuck) o += 'DS=[' + song.instruments.map(i => i.duckSend || 0).join(',') + '],\n'
                      + 'DA=[' + song.instruments.map(i => i.duckAmt || 0).join(',') + '],\n';
 
-    if (!SM.fixedLen) o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
+    if (!LOCK && !SM.fixedLen) o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
 
     // 5 flat arrays — strip entirely empty planes
-    let planes = ['pn','pi','pv','pf','pp'];
+    let planes = LOCK ? [] : ['pn','pi','pv','pf','pp'];
     let keys = ['note','inst','vol','fx','prm'];
     let defaults = [0, 255, 0, 0, 0]; // empty value per plane
     for (let pl = 0; pl < 5; pl++) {
@@ -4762,7 +4818,18 @@ function buildJS(smol) {
     // offset table + accessor for variable-length patterns
     /* Equal-length patterns index straight off a constant stride, so neither the
      * length table nor the per-pattern offset table has to exist. */
-    o += SM.fixedLen
+    o += LOCK
+      ? (() => {
+            const withInst = !SM.instPerCh, withFx = WALK.anyFx;
+            let prev = 0; const flat = [];
+            for (const e of WALK.ev) {
+                flat.push(e.t - prev, e.c, e.n, e.rv); prev = e.t;
+                if (withInst) flat.push(e.ins < 0 ? 255 : e.ins);
+                if (withFx) flat.push(e.fx, e.pm);
+            }
+            return `EV=[${flat.join(',')}],ei=0,tk=0,et=0,i,c,r\n`;
+        })()
+      : SM.fixedLen
       ? `i,c,r
 function P(a,p,c,r){return a.length?a[(p*N+c)*${SM.rows}+r]||0:0}
 `
@@ -4790,8 +4857,8 @@ return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}})
     o += `var bf=[24,26,27,29,31,32,34,36,38,41,43,46],
 dv=[8192,16384,32768,49152],
 nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
-spt=S*5/((bpm||125)*2)|0,${SM.fixedLen ? `T=ol*${SM.rows}*tpr*spt` : `W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt`},
-out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
+spt=S*5/((bpm||125)*2)|0,${LOCK ? `T=${WALK ? WALK.T : 0}` : SM.fixedLen ? `T=ol*${SM.rows}*tpr*spt` : `W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt`},
+out=new Float32Array(T),ch=[]${LOCK ? `` : `,ct=0,cr=0,op=0`},tc=0
 ${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
 function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RCP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*${rvWet.toFixed(6)}}
 ` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,${SM.noInstVol ? `` : `v:255,`}rv:255${usesSamples ? `,sp:0,ss:0,si:0,sa:0` : ``}${usesPitchEnv?',q:0,g:0':''}${usesArp?',x:0,y:0,k:0':''}${usesSlide?',l:0':''}${usesPorta?',pt:0,ps:0':''}${fxUsed[6]?',ri:0':''}${usesNoteCut?',nc:0':''}${usesNoteDelay?',nd:0,dn:0,di:0':''}${usesVib?',vp:0,vs:0,vd:0':''}${usesTrem?',tp:0,ts:0,td:0,tm:0':''}${usesNoise?',h:0x7FFF,j:16,m:0':''}${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
@@ -4827,8 +4894,14 @@ ${usesFormant ? `var FCO=[${song.instruments.map(i => i.wave === 9
     ? '[['+bakeFormant(i.fmtVa, i.fmtRes|0).join(',')+'],['+bakeFormant(i.fmtVb, i.fmtRes|0).join(',')+']]'
     : '0').join(',')}]
 function FI(C){var A=FCO[C.i][0],B=FCO[C.i][1],t=C.ftSp,o=255-t;for(var i=0;i<3;i++){C.ftB0[i]=(A[i*3]*o+B[i*3]*t)/255|0;C.ftA1[i]=(A[i*3+1]*o+B[i*3+1]*t)/255|0;C.ftA2[i]=(A[i*3+2]*o+B[i*3+2]*t)/255|0}}` : ''}
-function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue
-var n=P(pn,q,c,cr),ii=${SM.instPerCh ? `IC[c]` : `pi.length?P(pi,q,c,cr):255`},rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)
+${LOCK ? (() => {
+    const withInst = !SM.instPerCh, withFx = WALK.anyFx;
+    let k = 4, inst, fxp;
+    inst = withInst ? `EV[ei+${k++}]` : `IC[c]`;
+    fxp  = withFx ? `fx=EV[ei+${k++}],pm=EV[ei+${k++}]` : `fx=0,pm=0`;
+    return `function R(){while(ei<EV.length&&et+EV[ei]<=tk){et+=EV[ei];c=EV[ei+1];var C=ch[c],n=EV[ei+2],rv=EV[ei+3],${fxp},ii=${inst};ei+=${k}`;
+  })() : `function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue
+var n=P(pn,q,c,cr),ii=${SM.instPerCh ? `IC[c]` : `pi.length?P(pi,q,c,cr):255`},rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)`}
 C.ri=0;C.nc=0;C.nd=0
 var itp=fx==5,ind=fx==7&&(pm>>4)==0xD
 if(ind&&n>=2){C.dn=n;C.di=${SM.instPerCh ? `ii` : `ii==255?C.i:ii`};C.nd=pm&15}
@@ -4847,12 +4920,12 @@ ${fxUsed[1] ? `if(fx==1){C.x=pm>>4;C.y=pm&15;C.k=0}
 ` : ''}${fxUsed[0xD] ? `if(fx==0xD){if(jo<0)jo=op+1;jr=pm}
 ` : ''}${fxUsed[0xF] ? `if(fx==0xF&&pm){if(pm<0x20)tpr=pm;else{bpm=pm;spt=S*5/(pm*2)|0}}
 ` : ''}}}
-${usesJump ? `var jo=-1,jr=0
+${LOCK ? `function K(){R();tk++` : `${usesJump ? `var jo=-1,jr=0
 ` : ``}R()
 function K(){ct++;if(ct>=tpr){ct=0
 ${usesJump ? `if(jo>=0){op=jo<ol?jo:0;cr=jr;jo=-1;jr=0}else{cr++
 if(cr>=${SM.fixedLen ? SM.rows : `pl[O[op][0]]`}){cr=0;if(++op>=ol)op=0}}` : `cr++
-if(cr>=${SM.fixedLen ? SM.rows : `pl[O[op][0]]`}){cr=0;if(++op>=ol)op=0}`}R()}
+if(cr>=${SM.fixedLen ? SM.rows : `pl[O[op][0]]`}){cr=0;if(++op>=ol)op=0}`}R()}`}
 for(c=0;c<N;c++){var C=ch[c]
 ${usesNoteDelay ? `if(C.nd&&ct==C.nd){if(C.di<ni)TR(C,C.dn,C.di);C.nd=0}
 ` : ''}${usesNoteCut ? `if(C.nc&&ct==C.nc){C.e=0;C.t=0}
