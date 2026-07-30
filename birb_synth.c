@@ -572,18 +572,14 @@ static int16_t generate_drum(birb_channel *ch) {
 #endif /* BIRB_NO_DRUM */
 
 #ifndef BIRB_NO_FORMANT
-/* ---------- vowel formant frequency table ----------
- * Vowel formant centre frequencies (Peterson & Barney) in Hz; coefficients are
- * computed at runtime from these so the resonance slider can actually steer Q.
- * Per-formant gain bakes into b0: F1=1.0, F2=0.7, F3=0.4 (formant_gains[]). */
-static const uint16_t formant_freqs[5][3] = {
-    /* A */ { 730, 1090, 2440 },
-    /* E */ { 530, 1840, 2480 },
-    /* I */ { 270, 2290, 3010 },
-    /* O */ { 570,  840, 2410 },
-    /* U */ { 300,  870, 2240 },
-};
-static const fixed16 formant_gains[3] = { FX_ONE, FX_ONE * 7 / 10, FX_ONE * 4 / 10 };
+/* ---------- vowel formants ----------
+ * The biquad coefficients arrive baked in the instrument (birbc computes them
+ * with host doubles), so this engine carries no frequency table and does no
+ * runtime trig. For reference, the centre frequencies birbc bakes from
+ * (Peterson & Barney, Hz) and the per-formant gains folded into b0:
+ *     A 730/1090/2440   E 530/1840/2480   I 270/2290/3010
+ *     O 570/ 840/2410   U 300/ 870/2240      gains F1 1.0, F2 0.7, F3 0.4
+ * They live in birbc.c as bc_formant_freqs[]/bc_formant_gains[]. */
 
 
 

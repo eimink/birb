@@ -223,6 +223,9 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
     <div class="sep"></div>
     <button onclick="exportJS(false)">Export .js</button>
     <button onclick="exportJS(true)">Export .min.js</button>
+    <label id="smol-label" title="smol birb - minimal export. Drops engine code this song never reaches, and trades the master limiter for a hard clip. Playback follows the toggle, so the tracker keeps matching the export. The size report says what it dropped." style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--fg2);cursor:pointer;user-select:none">
+        <input type="checkbox" id="smol-birb" onchange="toggleSmol()" style="margin:0;cursor:pointer"> smol birb
+    </label>
 </div>
 
 <div class="main">
@@ -560,7 +563,7 @@ s.start();</pre>
         </p>
 
         <div class="section desc">
-            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.1.0</span> is part of the birb chiptune synth project.<br><br>
+            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.2.0</span> is part of the birb chiptune synth project.<br><br>
             &copy; 2026 eimink / Wide Load ^ KVG
         </div>
     </div>
@@ -619,7 +622,11 @@ function KC(t){let i=t>>3,f=t&7,c=KSW[i];return c+(((KSW[i+1]-c)*f)>>3);}
 /* SNARE noise high-pass — see birb_snare_hp in birb_synth.c */
 const SHP=[1386,1545,1722,1920,2139,2383,2655,2956,3291,3663,4076,4533,5039,5600,6219,6903,7657,8487,9400,10401,11498,12697,14004,15424,16964,18627,20416,22332,24376,26543,28828,31221,33392];
 function SC(t){let i=t>>3,f=t&7,c=SHP[i];return c+(((SHP[i+1]-c)*f)>>3);}
-const MASTER_DEFAULTS = { gain:2.0, thresh:0.949, rel:50, duckRel:120 };
+const MASTER_DEFAULTS = { gain:2.0, thresh:242/255, rel:50, duckRel:120 };  /* 242 = birb_init's default byte */
+/* smol birb. An export-size mode, but two of its transforms change the sound
+ * (no per-instrument volume, no master limiter), so playback honours it too -
+ * otherwise the tracker would stop matching its own export. */
+let smolMode = false;
 /* drumType 0 is KICK, so tune -12 gives a fresh drum instrument a ~65 Hz
  * body at C-4 rather than the 129 Hz that tune 0 produced. */
 const DRUM_DEFAULTS = { drumType: 0, tune: -12, decay: 180, tone: 128, snap: 128 };
@@ -2680,6 +2687,7 @@ function renderSong(patOnly, singlePat) {
             fmtZ1:[0,0,0], fmtZ2:[0,0,0], fmtB0:[0,0,0], fmtA1:[0,0,0], fmtA2:[0,0,0]};
 
     let ct = 0, cr = 0, op = 0, tc = 0, firstRow = true;
+    let jo = -1, jr = 0;   /* pending Bxx/Dxx target, as in birb_synth.c */
 
     /* 5th-order minimax sine approximation. Peak error ~0.05% vs ~5% for
      * the previous parabolic. Input phase 0..F (= 0..2π), returns -1..1.
@@ -2988,7 +2996,12 @@ function renderSong(patOnly, singlePat) {
             else if(fx===7&&((pm>>4)&0xF)===0xC)C.nc=pm&15;
             else if(fx===8){C.ts=F/64*(pm>>4);C.td=(pm&15)<<4}
             else if(fx===9&&C.w===5)C.sp=(pm<<8)<<16;
-            /* Song-structure (BXX/DXX/FXX) skipped in offline preview */
+            /* Song structure. These were skipped here for a long time, so the
+             * offline render walked a different path through the song than the
+             * worklet, the C engine and the exported JS all did. */
+            else if(fx===0xB){jo=pm;jr=0}
+            else if(fx===0xD){if(jo<0)jo=op+1;jr=pm}
+            else if(fx===0xF&&pm){if(pm<0x20)tpr=pm;else{bpm=pm;spt=S*5/(pm*2)|0}}
         }
     }
 
@@ -3000,12 +3013,18 @@ function renderSong(patOnly, singlePat) {
         }
         ct++;
         if (ct >= tpr) {
-            ct = 0; cr++;
-            let pat = song.patterns[ord[op][0]];
-            let plen = pat ? pat.length : 16;
-            if (cr >= plen) {
-                cr = 0; op++;
-                if (op >= ol) { songDone = true; op = 0; return; }
+            ct = 0;
+            if (jo >= 0) {
+                /* out-of-range target restarts the song, matching birb_synth.c */
+                op = jo >= ol ? 0 : jo; cr = jr; jo = -1; jr = 0;
+            } else {
+                cr++;
+                let pat = song.patterns[ord[op][0]];
+                let plen = pat ? pat.length : 16;
+                if (cr >= plen) {
+                    cr = 0; op++;
+                    if (op >= ol) { songDone = true; op = 0; return; }
+                }
             }
             doRow();
         }
@@ -3250,7 +3269,8 @@ function renderSong(patOnly, singlePat) {
             if (C.dp > 1) s = ssat(s * C.dp) * C.dn;
             let en = C.e + (C.tm ? C.e * C.tm / F : 0);
             if (en < 0) en = 0; if (en > F) en = F;
-            let cv = s * en * (C.v || 255) * C.rv / F / 255 / 255;
+            let cv = smolMode ? s * en * C.rv / F / 255
+                              : s * en * (C.v || 255) * C.rv / F / 255 / 255;
             cv *= TGW[C.w];                       /* per-type loudness calibration */
             if (C.ds) duckIn += (cv < 0 ? -cv : cv) * C.ds / 255;
             if (C.da && duckNow > 0) { let g = 1 - duckNow * C.da / 255; cv *= g > 0 ? g : 0; }
@@ -3267,10 +3287,13 @@ function renderSong(patOnly, singlePat) {
          * divide by ssat(thr) recovers the 2.4 dB the saturator would otherwise
          * take off the top of a limited signal. */
         v *= mGain;
-        { let a = v < 0 ? -v : v;
-          limEnv = a > limEnv ? a : a + (limEnv - a) * mRel;
-          if (limEnv > mThr) v *= mThr / limEnv; }
-        out[i] = ssat(v) / mCeil;
+        if (smolMode) { out[i] = v > 1 ? 1 : v < -1 ? -1 : v; }
+        else {
+          { let a = v < 0 ? -v : v;
+            limEnv = a > limEnv ? a : a + (limEnv - a) * mRel;
+            if (limEnv > mThr) v *= mThr / limEnv; }
+          out[i] = ssat(v) / mCeil;
+        }
     }
     if (actualLen) { out = out.slice(0, actualLen); T = actualLen; }
     return {out, T, spt, rowMarkers};
@@ -3323,6 +3346,7 @@ function togglePlayPat() {
 /* Snapshot the current song into a plain-data message for the worklet.
  * Samples use transferable buffers to avoid copying. */
 function snapshotSongForWorklet() {
+    /* smolMode rides along so live playback matches the smol export */
     // Serialize samples as {baseNote, loopStart, loopEnd, buf:ArrayBuffer}
     let samples = song.samples.map(s => {
         // Copy into a fresh ArrayBuffer so we can transfer it without breaking the source
@@ -3343,7 +3367,7 @@ function snapshotSongForWorklet() {
         })))
     );
     return {
-        bpm: song.bpm, tpr: song.tpr, N: NCH,
+        bpm: song.bpm, tpr: song.tpr, N: NCH, smol: smolMode,
         instruments: song.instruments.map(i => Object.assign({}, i)),
         patterns,
         order: song.order.map(o => o.slice()),
@@ -3376,7 +3400,7 @@ function KC(t){let i=t>>3,f=t&7,c=KSW[i];return c+(((KSW[i+1]-c)*f)>>3);}
 /* SNARE noise high-pass — see birb_snare_hp in birb_synth.c */
 const SHP=[1386,1545,1722,1920,2139,2383,2655,2956,3291,3663,4076,4533,5039,5600,6219,6903,7657,8487,9400,10401,11498,12697,14004,15424,16964,18627,20416,22332,24376,26543,28828,31221,33392];
 function SC(t){let i=t>>3,f=t&7,c=SHP[i];return c+(((SHP[i+1]-c)*f)>>3);}
-const MASTER_DEFAULTS = { gain:2.0, thresh:0.949, rel:50, duckRel:120 };
+const MASTER_DEFAULTS = { gain:2.0, thresh:242/255, rel:50, duckRel:120 };  /* 242 = birb_init's default byte */
 
 /* PROTOTYPE reverb send bus — mirror of makeReverb() in the main script. */
 function makeReverb() {
@@ -3437,6 +3461,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         }));
         // sender passes N on the song payload; default to 4 for legacy
         if (s.N) this.N = s.N;
+        this.smol = !!s.smol;   /* smol birb: no instrument volume, no limiter */
         return {
             bpm: s.bpm, tpr: s.tpr || 6,
             instruments: s.instruments,
@@ -3747,7 +3772,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         if (st.ct >= tpr) {
             st.ct = 0;
             if (st.jo !== undefined && st.jo >= 0) {
-                st.op = st.jo % st.ol;
+                st.op = st.jo >= st.ol ? 0 : st.jo;   /* clamp, as birb_synth.c does */
                 st.cr = st.jr;
                 st.jo = -1; st.jr = 0;
                 this.doRow(st);
@@ -4041,7 +4066,8 @@ class BirbProcessor extends AudioWorkletProcessor {
                 if (C.dp > 1) s = ssat(s * C.dp) * C.dn;
                 let en = C.e + (C.tm ? C.e * C.tm / F : 0);
                 if (en < 0) en = 0; if (en > F) en = F;
-                let cv = s * en * C.v * C.rv / F / 255 / 255;
+                let cv = this.smol ? s * en * C.rv / F / 255
+                                   : s * en * C.v * C.rv / F / 255 / 255;
                 cv *= TGW[C.w];                   /* per-type loudness calibration */
                 if (C.ds) duckIn += (cv < 0 ? -cv : cv) * C.ds / 255;
                 if (C.da && duckNow > 0) { let g = 1 - duckNow * C.da / 255; cv *= g > 0 ? g : 0; }
@@ -4055,7 +4081,8 @@ class BirbProcessor extends AudioWorkletProcessor {
             { let d = duckIn > 1 ? 1 : duckIn;
               st.duckEnv = d > st.duckEnv ? d : d + (st.duckEnv - d) * relCoeff(mst.duckRel); }
             v *= mst.gain;
-            { let a = v < 0 ? -v : v, thr = mst.thresh;
+            if (this.smol) { out[i] = v > 1 ? 1 : v < -1 ? -1 : v; }
+            else { let a = v < 0 ? -v : v, thr = mst.thresh;
               st.limEnv = a > st.limEnv ? a : a + (st.limEnv - a) * relCoeff(mst.rel);
               if (st.limEnv > thr) v *= thr / st.limEnv;
               out[i] = ssat(v) / ssat(thr); }
@@ -4525,7 +4552,53 @@ async function exportBin() {
     console.log('Exported ' + arr.length + ' bytes');
 }
 
-function buildJS() {
+/* smol birb: decide which size transforms this song can take. Each one either drops
+ * engine code the song provably never reaches (hard-safe) or trades sound for
+ * size (listed as a change so the UI can say so out loud). */
+function smolPlan(smol) {
+    let fx = new Array(16).fill(false);
+    let chSet = [], allLen = song.patterns.length ? song.patterns[0].length : 16, sameLen = true;
+    for (let c = 0; c < NCH; c++) chSet.push(new Set());
+    for (let pat of song.patterns) {
+        if (pat.length !== allLen) sameLen = false;
+        for (let r = 0; r < pat.length; r++)
+            for (let c = 0; c < NCH; c++) {
+                let cell = pat[r][c];
+                if (cell.fx) fx[cell.fx & 15] = true;
+                if (cell.note >= 2 && cell.inst !== 255 && cell.inst !== undefined) chSet[c].add(cell.inst);
+            }
+    }
+    let perCh = chSet.every(sr => sr.size <= 1);
+    let chInst = chSet.map(sr => sr.size === 1 ? [...sr][0] : 0);
+    let m = song.master || MASTER_DEFAULTS;
+    let loudInst = song.instruments.some(i => (i.vol === undefined ? 255 : i.vol) !== 255);
+    /* `smol` is normally just a flag, but an object selects transforms
+     * individually - which is how each one gets tested on its own. A transform the
+     * song can't take stays off however it was asked for. */
+    const opt = (smol && typeof smol === 'object') ? smol : {};
+    const on = !!smol;
+    const pick = (k) => (k in opt) ? !!opt[k] : on;
+    return {
+        on,
+        fixedLen:  pick('fixedLen') && sameLen,   rows: allLen,
+        instPerCh: pick('instPerCh') && perCh,    chInst,
+        noInstVol: pick('noInstVol'),
+        noMaster:  pick('noMaster'),
+        /* reasons a transform had to be skipped */
+        blocked: !on ? [] : [
+            !sameLen ? 'patterns have different lengths - kept the length table' : null,
+            !perCh   ? 'a channel plays more than one instrument - kept the instrument column' : null,
+        ].filter(Boolean),
+        /* transforms that change how it sounds */
+        changes: !on ? [] : [
+            (pick('noInstVol') && loudInst) ? 'per-instrument volume is dropped (row volume still applies) - instruments not at 255 get louder' : null,
+            pick('noMaster') ? 'master limiter is dropped, hard clip instead - peaks distort where they used to be caught' : null,
+        ].filter(Boolean),
+    };
+}
+
+function buildJS(smol) {
+    const SM = smolPlan(smol);
     let N = NCH, o = '';
 
     o += `function birb(X){\nvar S=44100,N=${NCH},F=65536,\n`;
@@ -4537,6 +4610,28 @@ function buildJS() {
      * unused generator code. */
     let usesFM = song.instruments.some(i => i.wave === 6);
     let usesKS = song.instruments.some(i => i.wave === 7);
+    /* Which effects the song actually uses. Roughly 40% of a basic-oscillator
+     * export used to be effect code emitted regardless — see birbc.c. */
+    let fxUsed = {};
+    let usesNoteCut = false, usesNoteDelay = false;
+    for (let pat of song.patterns)
+        for (let row of pat)
+            for (let cell of row) {
+                if (!cell.fx) continue;
+                fxUsed[cell.fx] = true;
+                if (cell.fx === 7) {
+                    let sub = (cell.prm >> 4) & 0xF;
+                    if (sub === 0xC) usesNoteCut = true;
+                    if (sub === 0xD) usesNoteDelay = true;
+                }
+            }
+    let usesPitchEnv = song.instruments.some(i => i.pe && i.pel);
+    let usesArp   = !!fxUsed[1] || song.instruments.some(i => i.arp1 || i.arp2);
+    let usesVib   = !!fxUsed[4], usesTrem = !!fxUsed[8];
+    let usesLFO   = usesVib || usesTrem;
+    let usesSlide = !!fxUsed[2] || !!fxUsed[3];
+    let usesPorta = !!fxUsed[5];
+    let usesNoise = song.instruments.some(i => i.wave === 3);
     let usesDrive = song.instruments.some(i => i.drive);
     let mst = song.master || MASTER_DEFAULTS;
     let mstGain = mst.gain, mstThr = mst.thresh;
@@ -4549,6 +4644,12 @@ function buildJS() {
      * export its with/without-reverb variants. Coefficients baked (static export). */
     let rev = song.rev || {size:0, damp:0, wet:0};
     let usesReverb = rev.wet > 0 || song.instruments.some(i => i.rev);
+    /* Only the wave types past 4 have distinct gains, so a basic-wave-only song
+     * can inline the single constant at the mix site instead of carrying the
+     * table. Kept as the exact ratio so birbc's emit matches bit for bit. */
+    let usesJump = !!fxUsed[0xB] || !!fxUsed[0xD];
+    let usesTypeGainTable = usesFM || usesKS || usesDrum || usesFormant;
+    let tgain = usesTypeGainTable ? 'TG[C.w]' : '(29819/65536)';
     let rvFb = 0.7 + 0.28 * rev.size, rvDc = 0.4 * rev.damp, rvWet = rev.wet;
     /* Track which drum algorithms are used — unused ones are skipped in output. */
     let drumAlgos = new Set();
@@ -4586,12 +4687,13 @@ function buildJS() {
         return base + ']';
     }).join(',') + '],\n';
 
+    if (SM.instPerCh) o += 'IC=[' + SM.chInst.join(',') + '],\n';
     if (usesReverb) o += 'RS=[' + song.instruments.map(i => i.rev || 0).join(',') + '],\n';
     if (usesDrive) o += 'DV=[' + song.instruments.map(i => i.drive || 0).join(',') + '],\n';
     if (usesDuck) o += 'DS=[' + song.instruments.map(i => i.duckSend || 0).join(',') + '],\n'
                      + 'DA=[' + song.instruments.map(i => i.duckAmt || 0).join(',') + '],\n';
 
-    o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
+    if (!SM.fixedLen) o += 'pl=[' + song.patterns.map(p => p.length).join(',') + '],\n';
 
     // 5 flat arrays — strip entirely empty planes
     let planes = ['pn','pi','pv','pf','pp'];
@@ -4607,6 +4709,8 @@ function buildJS() {
                     vals.push(v);
                     if (v !== def) allEmpty = false;
                 }
+        /* the instrument column is dead weight once every channel is bound to one */
+        if (SM.instPerCh && planes[pl] === 'pi') continue;
         if (allEmpty) o += planes[pl] + '=[],\n';
         else o += planes[pl] + '=[' + vals.join(',') + '],\n';
     }
@@ -4631,7 +4735,13 @@ function buildJS() {
     }
 
     // offset table + accessor for variable-length patterns
-    o += `po=[0],i,c,r
+    /* Equal-length patterns index straight off a constant stride, so neither the
+     * length table nor the per-pattern offset table has to exist. */
+    o += SM.fixedLen
+      ? `i,c,r
+function P(a,p,c,r){return a.length?a[(p*N+c)*${SM.rows}+r]||0:0}
+`
+      : `po=[0],i,c,r
 for(i=1;i<np;i++)po[i]=po[i-1]+pl[i-1]*N
 function P(a,p,c,r){return a.length?a[po[p]+c*pl[p]+r]||0:0}
 `;
@@ -4655,21 +4765,28 @@ return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}}),
     o += `var bf=[24,26,27,29,31,32,34,36,38,41,43,46],
 dv=[8192,16384,32768,49152],
 nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
-spt=S*5/((bpm||125)*2)|0,W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,
+spt=S*5/((bpm||125)*2)|0,${SM.fixedLen ? `T=ol*${SM.rows}*tpr*spt` : `W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt`},
 out=new Float32Array(T),ch=[],ct=0,cr=0,op=0,tc=0
 ${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
 function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RCP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*${rvWet.toFixed(6)}}
-` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
-function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}
-var TG=[29819,29819,29819,29819,29819,23127,15360,38838,61580,149078].map(v=>v/65536)
-var LE=0,MG=${mstGain.toFixed(6)},MT=${mstThr.toFixed(6)},MR=${mstRel.toFixed(6)},MC=SS(${mstThr.toFixed(6)})
-${usesKS ? `var KQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398]
+` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,${SM.noInstVol ? `` : `v:255,`}rv:255,sp:0,ss:0,si:0,sa:0${usesPitchEnv?',q:0,g:0':''}${usesArp?',x:0,y:0,k:0':''}${usesSlide?',l:0':''}${usesPorta?',pt:0,ps:0':''}${fxUsed[6]?',ri:0':''}${usesNoteCut?',nc:0':''}${usesNoteDelay?',nd:0,dn:0,di:0':''}${usesVib?',vp:0,vs:0,vd:0':''}${usesTrem?',tp:0,ts:0,td:0,tm:0':''}${usesNoise?',h:0x7FFF,j:16,m:0':''}${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
+${(!SM.noMaster || usesDrive) ? `function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}` : ``}
+${usesLFO ? `function LT(p){p&=65535;var t=p<32768?p:65536-p;return((t<<2)-65536)>>7}
+` : ''}${usesTypeGainTable
+  ? `var TG=[29819,29819,29819,29819,29819,23127,15360,38838,61580,149078].map(v=>v/65536)`
+  : ``}
+${SM.noMaster ? `var MG=${mstGain.toFixed(6)}` : `var LE=0,MG=${mstGain.toFixed(6)},MT=${mstThr.toFixed(6)},MR=${mstRel.toFixed(6)},MC=SS(${mstThr.toFixed(6)})`}
+${usesDrum ? `var KSW=[65518,65516,65512,65509,65505,65500,65495,65489,65482,65474,65465,65454,65442,65428,65412,65393,65372,65348,65320,65287,65251,65208,65160,65104,65040,64966,64882,64785,64674,64546,64400,64233,64067]
+function KC(t){var i=t>>3,f=t&7,c=KSW[i];return c+(((KSW[i+1]-c)*f)>>3)}
+var SHP=[1386,1545,1722,1920,2139,2383,2655,2956,3291,3663,4076,4533,5039,5600,6219,6903,7657,8487,9400,10401,11498,12697,14004,15424,16964,18627,20416,22332,24376,26543,28828,31221,33392]
+function SC(t){var i=t>>3,f=t&7,c=SHP[i];return c+(((SHP[i+1]-c)*f)>>3)}
+` : ''}${usesKS ? `var KQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398]
 function KG(d,l){var i=d>>3,f=d&7,q=KQ[i];q+=((KQ[i+1]-q)*f)>>3;var a=(q*l)>>8;return a>=65535?0:65535-a}
 ` : ''}${usesDuck ? `var DE=0,DR=${mstDuckRel.toFixed(6)}
 ` : ''}${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;switch(C.fmAlgo&7){case 0:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 1:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 2:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;break;case 3:s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;break;case 4:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;break;case 5:{s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;break}case 6:{s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;break}default:{var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;break}}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%F;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}
-C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];C.v=j[10]||255;C.rv=255;C.k=0;C.l=0;C.ps=0${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
+C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];${SM.noInstVol ? `` : `C.v=j[10]||255;`}C.rv=255;C.k=0;C.l=0;C.ps=0${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
 if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}
 C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}${usesFM ? `
 if(j[0]===6){var fm=j[16];C.fmNo=j[12];C.fmAlgo=j[13]|0;C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
@@ -4686,39 +4803,43 @@ ${usesFormant ? `var FCO=[${song.instruments.map(i => i.wave === 9
     : '0').join(',')}]
 function FI(C){var A=FCO[C.i][0],B=FCO[C.i][1],t=C.ftSp,o=255-t;for(var i=0;i<3;i++){C.ftB0[i]=(A[i*3]*o+B[i*3]*t)/255|0;C.ftA1[i]=(A[i*3+1]*o+B[i*3+1]*t)/255|0;C.ftA2[i]=(A[i*3+2]*o+B[i*3+2]*t)/255|0}}` : ''}
 function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue
-var n=P(pn,q,c,cr),ii=pi.length?P(pi,q,c,cr):255,rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)
+var n=P(pn,q,c,cr),ii=${SM.instPerCh ? `IC[c]` : `pi.length?P(pi,q,c,cr):255`},rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)
 C.ri=0;C.nc=0;C.nd=0
 var itp=fx==5,ind=fx==7&&(pm>>4)==0xD
-if(ind&&n>=2){C.dn=n;C.di=ii==255?C.i:ii;C.nd=pm&15}
+if(ind&&n>=2){C.dn=n;C.di=${SM.instPerCh ? `ii` : `ii==255?C.i:ii`};C.nd=pm&15}
 else if(n==1)C.t=4;else if(n>=2){if(itp){C.pt=nf(n-2)}
-else{if(ii==255)ii=C.i;if(ii<ni)TR(C,n,ii)}}
+else{${SM.instPerCh ? `TR(C,n,ii)` : `if(ii==255)ii=C.i;if(ii<ni)TR(C,n,ii)`}}}
 if(rv)C.rv=rv
-if(fx==1){C.x=pm>>4;C.y=pm&15;C.k=0}
-else if(fx==2)C.l=pm<<2;else if(fx==3)C.l=-(pm<<2)
-else if(fx==4){C.vs=F/64*(pm>>4);C.vd=(pm&15)<<4}
-else if(fx==5)C.ps=pm<<2
-else if(fx==6)C.ri=pm
-else if(fx==7&&(pm>>4)==0xC)C.nc=pm&15
-else if(fx==8){C.ts=F/64*(pm>>4);C.td=(pm&15)<<4}
-else if(fx==9&&C.w===5)C.sp=(pm<<8)<<16
-else if(fx==0xB){jo=pm;jr=0}
-else if(fx==0xD){if(jo<0)jo=op+1;jr=pm}
-else if(fx==0xF&&pm){if(pm<0x20)tpr=pm;else{bpm=pm;spt=S*5/(pm*2)|0}}}}
-var jo=-1,jr=0
-R()
+${fxUsed[1] ? `if(fx==1){C.x=pm>>4;C.y=pm&15;C.k=0}
+` : ''}${usesSlide ? `if(fx==2)C.l=pm<<2;else if(fx==3)C.l=-(pm<<2)
+` : ''}${usesVib ? `if(fx==4){C.vs=F/64*(pm>>4);C.vd=(pm&15)<<4}
+` : ''}${usesPorta ? `if(fx==5)C.ps=pm<<2
+` : ''}${fxUsed[6] ? `if(fx==6)C.ri=pm
+` : ''}${usesNoteCut ? `if(fx==7&&(pm>>4)==0xC)C.nc=pm&15
+` : ''}${usesTrem ? `if(fx==8){C.ts=F/64*(pm>>4);C.td=(pm&15)<<4}
+` : ''}${fxUsed[9] ? `if(fx==9&&C.w===5)C.sp=(pm<<8)<<16
+` : ''}${fxUsed[0xB] ? `if(fx==0xB){jo=pm;jr=0}
+` : ''}${fxUsed[0xD] ? `if(fx==0xD){if(jo<0)jo=op+1;jr=pm}
+` : ''}${fxUsed[0xF] ? `if(fx==0xF&&pm){if(pm<0x20)tpr=pm;else{bpm=pm;spt=S*5/(pm*2)|0}}
+` : ''}}}
+${usesJump ? `var jo=-1,jr=0
+` : ``}R()
 function K(){ct++;if(ct>=tpr){ct=0
-if(jo>=0){op=jo%ol;cr=jr;jo=-1;jr=0}else{cr++
-if(cr>=pl[O[op][0]]){cr=0;if(++op>=ol)op=0}}R()}
+${usesJump ? `if(jo>=0){op=jo<ol?jo:0;cr=jr;jo=-1;jr=0}else{cr++
+if(cr>=${SM.fixedLen ? SM.rows : `pl[O[op][0]]`}){cr=0;if(++op>=ol)op=0}}` : `cr++
+if(cr>=${SM.fixedLen ? SM.rows : `pl[O[op][0]]`}){cr=0;if(++op>=ol)op=0}`}R()}
 for(c=0;c<N;c++){var C=ch[c]
-if(C.nd&&ct==C.nd){if(C.di<ni)TR(C,C.dn,C.di);C.nd=0}
-if(C.nc&&ct==C.nc){C.e=0;C.t=0}
-if(C.ri&&ct>0&&ct%C.ri==0){C.p=0;C.t=1;C.e=0;if(C.w>=3){C.h=0x7FFF;C.m=0}}
-if(C.g){C.b+=C.q<<2;if(C.b<1)C.b=1;C.g--}
-if(C.l){C.b+=C.l;if(C.b<1)C.b=1}
-if(C.pt&&C.ps){if(C.b<C.pt){C.b+=C.ps;if(C.b>C.pt)C.b=C.pt}else if(C.b>C.pt){C.b-=C.ps;if(C.b<C.pt)C.b=C.pt}}
-if(C.x|C.y){var n=C.n,t=C.k%3;C.f=nf(t==1?n+C.x:t==2?n+C.y:n);C.k++}else C.f=C.b
-if(C.vd){C.f+=LT(C.vp)*C.vd/F;C.vp+=C.vs}
-            if(C.td){C.tm=(LT(C.tp)*C.td)>>1;C.tp+=C.ts}else C.tm=0
+${usesNoteDelay ? `if(C.nd&&ct==C.nd){if(C.di<ni)TR(C,C.dn,C.di);C.nd=0}
+` : ''}${usesNoteCut ? `if(C.nc&&ct==C.nc){C.e=0;C.t=0}
+` : ''}${fxUsed[6] ? `if(C.ri&&ct>0&&ct%C.ri==0){C.p=0;C.t=1;C.e=0;if(C.w>=3){C.h=0x7FFF;C.m=0}}
+` : ''}${usesPitchEnv ? `if(C.g){C.b+=C.q<<2;if(C.b<1)C.b=1;C.g--}
+` : ''}${usesSlide ? `if(C.l){C.b+=C.l;if(C.b<1)C.b=1}
+` : ''}${usesPorta ? `if(C.pt&&C.ps){if(C.b<C.pt){C.b+=C.ps;if(C.b>C.pt)C.b=C.pt}else if(C.b>C.pt){C.b-=C.ps;if(C.b<C.pt)C.b=C.pt}}
+` : ''}${usesArp ? `if(C.x|C.y){var n=C.n,t=C.k%3;C.f=nf(t==1?n+C.x:t==2?n+C.y:n);C.k++}else C.f=C.b
+` : `C.f=C.b
+`}${usesVib ? `if(C.vd){C.f+=LT(C.vp)*C.vd/F;C.vp+=C.vs}
+` : ''}${usesTrem ? `if(C.td){C.tm=(LT(C.tp)*C.td)>>1;C.tp+=C.ts}else C.tm=0
+` : ''}
 var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
 else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
 else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}${usesFM ? `
@@ -4730,7 +4851,7 @@ if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
 if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}${usesFM ? `
 else if(C.w===6){if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}}` : ''}${usesKS ? `
-else if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*(255-C.kd))>>8;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
+else if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*C.kg)>>16;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
 else if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
 ${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8))%F;var tri=C.p<F/2?(C.p*4-F):(F*3-C.p*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}` : ''}
 ${drumAlgos.has(1) ? `${drumAlgos.has(0) ? 'else ' : ''}if(C.drAl===1){var nn=lfn();var sr_=(nn&1)?26000:-26000;var y_=sr_-C.drZ1;C.drZ1+=(y_*C.drPet)>>16;var noi=Math.floor(y_*C.drP2/65536);C.drP2=Math.floor(C.drP2*C.drNz/65536);C.p=(C.p+C.f)%F;var tr_=C.p<F/2?(C.p*4-F):(F*3-C.p*4);var bd=(tr_*22000)>>16;bd=Math.floor(bd*C.drPe/65536);C.drPe=Math.floor(C.drPe*C.drRate/65536);var mxB=C.drMix,mxN=255-mxB;o_=((noi*mxN+bd*mxB)/255)|0}` : ''}
@@ -4744,7 +4865,7 @@ else if(C.w===2)s=(h*2-F)/F
 else if(C.w===4)s=SA_(h)
 else{C.m++;if(C.m>=C.j){C.m=0;var z=(C.h^(C.h>>1))&1;C.h=(C.h>>1)|(z<<14)}s=(C.h&1)?.5:-.5}
 var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F
-${usesDrive ? 'if(C.dp>1)s=SS(s*C.dp)*C.dn;' : ''}var cv=s*en*C.v*C.rv/F/255/255*TG[C.w];${usesDuck ? 'if(C.ds)DI+=(cv<0?-cv:cv)*C.ds/255;if(C.da&&DN>0){var dg=1-DN*C.da/255;cv*=dg>0?dg:0}' : ''}v+=cv;${usesReverb ? 'if(C.rs)rI+=cv*C.rs/255;' : ''}if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}${usesReverb?'v+=RV(rI);':''}${usesDuck ? 'var dd=DI>1?1:DI;DE=dd>DE?dd:dd+(DE-dd)*DR;' : ''}v*=MG;var la=v<0?-v:v;LE=la>LE?la:la+(LE-la)*MR;if(LE>MT)v*=MT/LE;out[i]=SS(v)/MC}
+${usesDrive ? 'if(C.dp>1)s=SS(s*C.dp)*C.dn;' : ''}var cv=s*en*${SM.noInstVol ? `C.rv/F/255` : `C.v*C.rv/F/255/255`}*${tgain};${usesDuck ? 'if(C.ds)DI+=(cv<0?-cv:cv)*C.ds/255;if(C.da&&DN>0){var dg=1-DN*C.da/255;cv*=dg>0?dg:0}' : ''}v+=cv;${usesReverb ? 'if(C.rs)rI+=cv*C.rs/255;' : ''}if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}${usesReverb?'v+=RV(rI);':''}${usesDuck ? 'var dd=DI>1?1:DI;DE=dd>DE?dd:dd+(DE-dd)*DR;' : ''}${SM.noMaster ? `v*=MG;out[i]=v>1?1:v<-1?-1:v` : `v*=MG;var la=v<0?-v:v;LE=la>LE?la:la+(LE-la)*MR;if(LE>MT)v*=MT/LE;out[i]=SS(v)/MC`}}
 return{o:out,spt:spt,T:T}}`;
     return o;
 }
@@ -4827,8 +4948,18 @@ function packJS(src) {
            "eval(_)";
 }
 
+/* Flipping smol birb changes what you hear, so re-push the engine state and
+ * mark the label. Nothing is regenerated on export beyond the usual build. */
+function toggleSmol() {
+    smolMode = !!document.getElementById('smol-birb').checked;
+    let lab = document.getElementById('smol-label');
+    if (lab) lab.style.color = smolMode ? 'var(--note-off)' : 'var(--fg2)';
+    pushLiveUpdate();
+}
+
 function exportJS(minified) {
-    let o = buildJS();
+    let plan = smolPlan(smolMode);
+    let o = buildJS(smolMode);
     let filename = 'song.js';
 
     let songName = document.getElementById('song-name').value || 'song';
@@ -4851,10 +4982,10 @@ function exportJS(minified) {
     a.click();
 
     // Estimate compressed size using CompressionStream (gzip) → estimate Brotli
-    estimateSize(o, filename);
+    estimateSize(o, filename, plan);
 }
 
-async function estimateSize(str, filename) {
+async function estimateSize(str, filename, plan) {
     let raw = str.length;
     let msg = `${filename}: ${raw} bytes raw`;
     try {
@@ -4867,6 +4998,15 @@ async function estimateSize(str, filename) {
         msg += `, ~${gz}b gzip, ~${brEst}b brotli (est)`;
     } catch(e) {
         msg += ' (compression estimate unavailable)';
+    }
+    if (plan && plan.on) {
+        let did = [ plan.fixedLen  ? 'fixed pattern length' : null,
+                    plan.instPerCh ? 'one instrument per channel' : null,
+                    plan.noInstVol ? 'no per-instrument volume' : null,
+                    plan.noMaster  ? 'no master limiter' : null ].filter(Boolean);
+        msg += '\n\nsmol birb dropped: ' + (did.length ? did.join(', ') : 'nothing');
+        if (plan.blocked.length) msg += '\n\nkept, this song needs it:\n  ' + plan.blocked.join('\n  ');
+        if (plan.changes.length) msg += '\n\nsounds different:\n  ' + plan.changes.join('\n  ');
     }
     console.log(msg);
     alert(msg);
