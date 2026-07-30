@@ -567,7 +567,7 @@ s.start();</pre>
         </p>
 
         <div class="section desc">
-            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v4.1.0</span> is part of the birb chiptune synth project.<br><br>
+            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v4.1.1</span> is part of the birb chiptune synth project.<br><br>
             &copy; 2026 eimink / Wide Load ^ KVG
         </div>
     </div>
@@ -973,16 +973,11 @@ function setChannelCount(n) {
             for (let r = 0; r < pat.length; r++)
                 while (pat[r].length < n) pat[r].push({note:0,inst:255,vol:0,fx:0,prm:0});
         }
-        for (let o = 0; o < song.order.length; o++) {
-            let row = song.order[o];
-            let inherit = 0;
-            for (let c = 0; c < row.length; c++)
-                if (row[c] !== 0xFF && row[c] !== undefined) { inherit = row[c]; break; }
-            while (row.length < n) row.push(inherit);
-        }
+        /* order rows are widened by fixOrderWidth once NCH is set below */
         while (channelMuted.length < n) channelMuted.push(false);
     }
     NCH = n;
+    fixOrderWidth();
     document.getElementById('nch').value = NCH;
     /* Cursor + bank fix-up. */
     if (curCh >= NCH) curCh = NCH - 1;
@@ -990,6 +985,24 @@ function setChannelCount(n) {
     renderOrder();
     renderGrid();
 }
+/* Every order row has to cover every channel. A short row leaves the trailing
+ * channels with no pattern, so they stay silent however many notes are written
+ * into them - which is what happened after raising the channel count, and again
+ * whenever a row was created at the old width. Call this after anything that
+ * loads or appends an order row. */
+function fixOrderWidth() {
+    for (let o = 0; o < song.order.length; o++) {
+        let row = song.order[o];
+        if (!Array.isArray(row)) { song.order[o] = new Array(NCH).fill(0); continue; }
+        let inherit = 0;
+        for (let c = 0; c < row.length; c++)
+            if (row[c] !== 0xFF && row[c] !== undefined) { inherit = row[c]; break; }
+        for (let c = 0; c < NCH; c++)
+            if (row[c] === undefined) row[c] = inherit;
+        row.length = NCH;
+    }
+}
+
 function makePattern(rows) {
     let p = [];
     for (let r = 0; r < rows; r++) p.push(makeRow());
@@ -1005,7 +1018,7 @@ function initSong() {
     // is never a half-state (default patterns paired with stale instruments).
     song.instruments = defaultInstruments();
     song.patterns = [makePattern(rows)];
-    song.order = [[0,0,0,0]];
+    song.order = [new Array(NCH).fill(0)];
     song.samples = [];
     curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
     editInst = 0; curInst = 0;
@@ -1078,7 +1091,8 @@ function loadSongFromStorage() {
     channelMuted = new Array(NCH).fill(false);
     song.instruments = data.instruments;
     song.patterns = data.patterns;
-    song.order = (Array.isArray(data.order) && data.order.length) ? data.order : [[0,0,0,0]];
+    song.order = (Array.isArray(data.order) && data.order.length) ? data.order : [new Array(NCH).fill(0)];
+    fixOrderWidth();
     song.samples = [];
     if (Array.isArray(data.samples)) {
         for (let s of data.samples) {
@@ -1130,13 +1144,14 @@ function newSong() {
     let el = document.getElementById('pat-rows');
     let rows = el ? +el.value || 16 : 16;
     song.patterns = [makePattern(rows)];
-    song.order = [[0,0,0,0]];
+    song.order = [new Array(NCH).fill(0)];
     song.samples = [];
     song.bpm = 140; song.tpr = 6;
     song.rev = {size:0.7, damp:0.5, wet:0.35};
     song.master = Object.assign({}, MASTER_DEFAULTS);
     syncRevUI();
     syncMasterUI();
+    syncSmolUI();
     curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
     editInst = 0; curInst = 0;
     document.getElementById('bpm').value = 140;
@@ -1355,7 +1370,7 @@ function bindOrderDrag() {
         let data = e.dataTransfer.getData('text/plain');
         if (data.startsWith('pat:')) {
             let patIdx = +data.split(':')[1];
-            song.order.push([patIdx, patIdx, patIdx, patIdx]);
+            song.order.push(new Array(NCH).fill(patIdx));
             markDirty();
             renderOrder(); renderGrid();
         } else if (data.startsWith('order:')) {
@@ -1399,7 +1414,8 @@ function selectOrder(i) {
     document.getElementById('grid').focus();
 }
 function addOrderPos() {
-    let last = song.order.length > 0 ? song.order[song.order.length-1].slice() : [0,0,0,0];
+    let last = song.order.length > 0 ? song.order[song.order.length-1].slice()
+                                     : new Array(NCH).fill(0);
     song.order.push(last);
     markDirty();
     renderOrder();
@@ -3308,7 +3324,7 @@ function previewNote(note, instIdx) {
     prevPat[0][0] = {note: note, inst: instIdx, fx: 0, prm: 0};
     prevPat[6][0] = {note: 1, inst: 255, fx: 0, prm: 0}; // note off at row 6
     song.patterns = [prevPat];
-    song.order = [[0,0,0,0]];
+    song.order = [new Array(NCH).fill(0)];
     let m = renderSong(true, 0);
     song.patterns = saved.patterns;
     song.order = saved.order;
@@ -4199,7 +4215,7 @@ function deletePattern() {
             else if (refs[c] === removed) refs[c] = Math.min(removed, song.patterns.length - 1);
         }
     }
-    if (!song.order.length) song.order = [[0,0,0,0]];
+    if (!song.order.length) song.order = [new Array(NCH).fill(0)];
     if (curPat >= song.patterns.length) curPat = song.patterns.length - 1;
     if (curOrderPos >= song.order.length) curOrderPos = song.order.length - 1;
     curRow = 0;
@@ -4261,6 +4277,7 @@ for (let k of ['wet','size','damp']) {
 }
 syncRevUI();
 syncMasterUI();
+syncSmolUI();
 document.getElementById('octave').addEventListener('change', function() { curOctave = +this.value; saveSongToStorage(); updateStatus(); });
 document.getElementById('song-name').addEventListener('input', function() { saveSongToStorage(); });
 
@@ -5084,9 +5101,19 @@ function packJS(src) {
  * mark the label. Nothing is regenerated on export beyond the usual build. */
 function toggleSmol() {
     smolMode = !!document.getElementById('smol-birb').checked;
+    syncSmolUI();
+    pushLiveUpdate();
+}
+
+/* Drive the checkbox and its label from smolMode, never the other way round.
+ * Browsers restore form state across a refresh, so the box came back ticked
+ * while smolMode had reset to false - the toggle then claimed a mode the
+ * player was not in. */
+function syncSmolUI() {
+    let cb = document.getElementById('smol-birb');
+    if (cb) cb.checked = smolMode;
     let lab = document.getElementById('smol-label');
     if (lab) lab.style.color = smolMode ? 'var(--note-off)' : 'var(--fg2)';
-    pushLiveUpdate();
 }
 
 function exportJS(minified) {
@@ -5389,7 +5416,7 @@ function parseBin(d) {
             song.instruments[i].name = name;
         }
     }
-    if (!song.order.length) song.order = [[0,0,0,0]];
+    if (!song.order.length) song.order = [new Array(NCH).fill(0)];
     curPat = 0; curRow = 0; curCh = 0; curCol = 0; curOrderPos = 0;
     editInst = 0; curInst = 0;
     document.getElementById('bpm').value = song.bpm;
@@ -5475,7 +5502,7 @@ function parseBirb(text) {
         }
     }
 
-    if (!song.order.length) song.order = [[0,0,0,0]];
+    if (!song.order.length) song.order = [new Array(NCH).fill(0)];
     if (!song.instruments.length) song.instruments.push({wave:0,duty:2,a:0,d:8,s:180,r:8,pe:0,pel:0,arp1:0,arp2:0,vol:255});
     if (!song.patterns.length) song.patterns.push(makePattern(16));
 
@@ -5514,6 +5541,7 @@ function renderAll() {
     renderInstList(); loadInstEditor(); renderOrder(); renderGrid(); renderSamplesList();
     if (typeof syncRevUI === 'function') syncRevUI();
     if (typeof syncMasterUI === 'function') syncMasterUI();
+    if (typeof syncSmolUI === 'function') syncSmolUI();
 }
 
 /* ================================================================
