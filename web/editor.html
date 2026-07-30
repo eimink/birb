@@ -162,7 +162,11 @@ body { background: var(--bg); color: var(--fg); font-family: 'SF Mono','Menlo','
 .grid-table td { padding: 1px 0; white-space: nowrap; height: 20px; }
 .grid-row { }
 .grid-row.beat { background: var(--row-hi); }
-.row-num { color: var(--dim); text-align: right; padding-right: 6px !important; width: 24px; user-select: none; }
+.row-num { color: var(--dim); text-align: right; padding-right: 6px !important; width: 24px; user-select: none;
+  position: sticky; left: 0; z-index: 2; background: var(--bg); }
+.grid-row.beat .row-num { background: var(--bg1); }
+.grid-row.playing-row .row-num, .grid-row.sel-row .row-num { background: var(--bg1); }
+.grid-table th:first-child { position: sticky; left: 0; z-index: 3; background: var(--bg1); }
 .cell { padding: 0 2px !important; cursor: default; min-width: 20px; text-align: center; }
 .cell.cursor { background: var(--cursor); outline: 1px solid var(--acc); }
 .cell.selected { background: #88bbff18; }
@@ -563,7 +567,7 @@ s.start();</pre>
         </p>
 
         <div class="section desc">
-            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v4.0.0</span> is part of the birb chiptune synth project.<br><br>
+            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v4.1.0</span> is part of the birb chiptune synth project.<br><br>
             &copy; 2026 eimink / Wide Load ^ KVG
         </div>
     </div>
@@ -896,9 +900,7 @@ let song = {
 // pager to show 4 channels at a time. For now every song is authored at
 // NCH=4 — multi-bank authoring comes once more channels are actually used.
 const NCH_MAX = 16;
-const BANK_WIDTH = 4;
 let NCH = 4;                 // per-song channel count (4..NCH_MAX)
-let currentBank = 0;         // which 4-channel bank is visible
 let curPat = 0, curRow = 0, curCh = 0, curCol = 0; // cursor
 let curInst = 0, curOctave = 4, curOrderPos = 0;
 let channelMuted = new Array(NCH).fill(false);
@@ -913,23 +915,18 @@ function makeRow() {
     for (let c = 0; c < NCH; c++) r.push({note:0,inst:255,vol:0,fx:0,prm:0});
     return r;
 }
-function banksTotal() { return Math.max(1, Math.ceil(NCH / BANK_WIDTH)); }
-function bankStart() { return currentBank * BANK_WIDTH; }
-function bankEnd() { return Math.min(NCH, bankStart() + BANK_WIDTH); }
-function setBank(b) {
-    let n = banksTotal();
-    if (b < 0) b = 0; if (b >= n) b = n - 1;
-    if (b === currentBank) return;
-    currentBank = b;
-    // keep cursor inside visible bank
-    if (curCh < bankStart() || curCh >= bankEnd()) curCh = bankStart();
-    saveSongToStorage();
-    renderGrid();
-}
-// Keep the visible bank aligned to curCh. Call after any curCh change.
+/* Channels are laid out all at once; the grid scrolls horizontally rather
+ * than paging four at a time. */
+/* Scroll the cursor's channel into view. Call after any curCh change. */
 function ensureCurChVisible() {
-    let target = Math.floor(curCh / BANK_WIDTH);
-    if (target !== currentBank) { currentBank = target; }
+    let g = document.getElementById('grid');
+    if (!g) return;
+    let cell = g.querySelector('td.cell.cursor');
+    if (!cell) return;
+    let cl = cell.offsetLeft, cr = cl + cell.offsetWidth;
+    const rowNumW = 28;                  /* the sticky row-number column */
+    if (cl - rowNumW < g.scrollLeft) g.scrollLeft = Math.max(0, cl - rowNumW - 8);
+    else if (cr > g.scrollLeft + g.clientWidth) g.scrollLeft = cr - g.clientWidth + 8;
 }
 /* Resize the song to a new channel count. The .bsb format stores N in the
  * high 3 bits of the tpr byte (encoding 4..16 in steps of 2), so values
@@ -976,15 +973,19 @@ function setChannelCount(n) {
             for (let r = 0; r < pat.length; r++)
                 while (pat[r].length < n) pat[r].push({note:0,inst:255,vol:0,fx:0,prm:0});
         }
-        for (let o = 0; o < song.order.length; o++)
-            while (song.order[o].length < n) song.order[o].push(0xFF);
+        for (let o = 0; o < song.order.length; o++) {
+            let row = song.order[o];
+            let inherit = 0;
+            for (let c = 0; c < row.length; c++)
+                if (row[c] !== 0xFF && row[c] !== undefined) { inherit = row[c]; break; }
+            while (row.length < n) row.push(inherit);
+        }
         while (channelMuted.length < n) channelMuted.push(false);
     }
     NCH = n;
     document.getElementById('nch').value = NCH;
     /* Cursor + bank fix-up. */
     if (curCh >= NCH) curCh = NCH - 1;
-    if (currentBank * BANK_WIDTH >= NCH) currentBank = Math.max(0, banksTotal() - 1);
     markDirty();
     renderOrder();
     renderGrid();
@@ -1038,7 +1039,7 @@ function saveSongToStorage() {
         let songName = document.getElementById('song-name').value || 'song';
         localStorage.setItem('birb_editor', JSON.stringify({
             curPat, curRow, curCh, curCol, curOrderPos, curInst, curOctave, editInst, songName,
-            channelMuted, currentBank
+            channelMuted
         }));
     } catch(e) {
         // Was silently swallowed before — a quota/serialization failure here means
@@ -1109,7 +1110,6 @@ function loadSongFromStorage() {
             if (ed.songName) document.getElementById('song-name').value = ed.songName;
             if (Array.isArray(ed.channelMuted)) channelMuted = ed.channelMuted.slice(0, NCH);
             while (channelMuted.length < NCH) channelMuted.push(false);
-            if (typeof ed.currentBank === 'number') currentBank = Math.max(0, Math.min(banksTotal() - 1, ed.currentBank));
         }
         // Clamp restored cursors against the loaded song (editor state can be stale).
         if (curPat >= song.patterns.length) curPat = 0;
@@ -1185,19 +1185,8 @@ function hexStr(v) {
 function renderGrid() {
     let pat = song.patterns[curPat];
     if (!pat) return;
-    let bs = bankStart(), be = bankEnd(), nTot = banksTotal();
+    let bs = 0, be = NCH;
     let html = '';
-    // Channel bank pager — hide entirely when the song has no extra banks,
-    // otherwise show prev/next arrows and a "CH a-b / CH c-d" indicator.
-    if (nTot > 1) {
-        let prevDis = currentBank <= 0 ? ' disabled' : '';
-        let nextDis = currentBank >= nTot - 1 ? ' disabled' : '';
-        html += '<div class="ch-bank-pager" style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;color:var(--fg2)">';
-        html += `<button class="order-btn" onclick="setBank(currentBank - 1)"${prevDis}>&larr;</button>`;
-        html += `<span>CH ${bs+1}-${be} / ${NCH}</span>`;
-        html += `<button class="order-btn" onclick="setBank(currentBank + 1)"${nextDis}>&rarr;</button>`;
-        html += '</div>';
-    }
     html += '<table class="grid-table"><tr><th></th>';
     for (let c = bs; c < be; c++) {
         let muteCls = channelMuted[c] ? ' muted' : '';
@@ -5199,7 +5188,6 @@ function parseBin(d) {
     let nchEl = document.getElementById('nch'); if (nchEl) nchEl.value = NCH;
     // resize mute array to match
     channelMuted = new Array(NCH).fill(false);
-    currentBank = 0;
     let ni = d[6], np = d[7], p = 8;
     let ol = d[p++];
     for (let i = 0; i < ol; i++) {
