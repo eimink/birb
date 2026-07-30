@@ -2010,11 +2010,65 @@ static const char *bc_phase_guard(int fm, int drum, int smp) {
     return b;
 }
 
+/* Mutable player state is registered as it is emitted, so the dev block can
+ * mirror it without the hot path knowing anything about it. */
+static char bc_st_decls[8192];
+static char bc_st_names[4096];
+
+static void bc_st_reset_reg(void) { bc_st_decls[0] = 0; bc_st_names[0] = 0; }
+
+/* decl: the declaration without `static`, e.g. "i32 ph[N],bs[N];"
+ * names: comma-separated field names to snapshot, e.g. "ph,bs" */
+static void bc_st(FILE *f, const char *decl, const char *names) {
+    fprintf(f, "static %s\n", decl);
+    strncat(bc_st_decls, "  ", sizeof bc_st_decls - strlen(bc_st_decls) - 1);
+    strncat(bc_st_decls, decl, sizeof bc_st_decls - strlen(bc_st_decls) - 1);
+    strncat(bc_st_decls, "\n", sizeof bc_st_decls - strlen(bc_st_decls) - 1);
+    if (bc_st_names[0]) strncat(bc_st_names, ",", sizeof bc_st_names - strlen(bc_st_names) - 1);
+    strncat(bc_st_names, names, sizeof bc_st_names - strlen(bc_st_names) - 1);
+}
+
+/* the dev block: a state mirror, snapshot/restore and rewind. Compiled out
+ * unless BIRB_DEV is defined, so the distributable carries none of it. */
+static void bc_emit_dev(FILE *f) {
+    fprintf(f,
+        "\n#ifdef BIRB_DEV\n"
+        "/* Editor support: snapshot, restore and rewind. The player keeps its\n"
+        " * state in globals, so a host that wants several logical players swaps\n"
+        " * snapshots around each render call. Seeking is reset() then rendering\n"
+        " * forward and discarding. None of this exists without BIRB_DEV. */\n"
+        "typedef struct {\n%s} BirbState;\n"
+        "static void dcpy(void *d, const void *s, i32 n){\n"
+        " char *a=(char*)d; const char *b=(const char*)s; while(n--) *a++=*b++; }\n"
+        "static void dzero(void *d, i32 n){ char *a=(char*)d; while(n--) *a++=0; }\n"
+        "i32 birb_state_size(void){ return (i32)sizeof(BirbState); }\n",
+        bc_st_decls);
+
+    /* save / load / reset, generated from the registered names */
+    const char *dirs[3] = { "birb_save", "birb_load", "birb_reset" };
+    for (int d = 0; d < 3; d++) {
+        if (d == 0) fprintf(f, "void birb_save(BirbState *s){\n");
+        else if (d == 1) fprintf(f, "void birb_load(const BirbState *s){\n");
+        else fprintf(f, "void birb_reset(void){\n");
+        char buf[4096];
+        snprintf(buf, sizeof buf, "%s", bc_st_names);
+        for (char *tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
+            if (d == 0)      fprintf(f, " dcpy(&s->%s, &%s, (i32)sizeof %s);\n", tok, tok, tok);
+            else if (d == 1) fprintf(f, " dcpy(&%s, &s->%s, (i32)sizeof %s);\n", tok, tok, tok);
+            else             fprintf(f, " dzero(&%s, (i32)sizeof %s);\n", tok, tok);
+        }
+        fprintf(f, "}\n");
+        (void)dirs;
+    }
+    fprintf(f, "#endif /* BIRB_DEV */\n");
+}
+
 static int write_smol_c(const char *filename, birb_song *song) {
     FILE *f = fopen(filename, "w");
     if (!f) { fprintf(stderr, "Error: cannot write '%s'\n", filename); return -1; }
 
     const int nch = BIRB_NUM_CHANNELS;
+    bc_st_reset_reg();
     bc_walk(song, nch);
 
     /* which instrument each channel plays */
@@ -2234,17 +2288,20 @@ static int write_smol_c(const char *filename, birb_song *song) {
     fprintf(f,
         "static const i32 BF[12]={24,26,27,29,31,32,34,36,38,41,43,46};\n"
         "static i32 nf(i32 n){ if(n<0)n=0; if(n>95)n=95; return BF[n%%12]<<(n/12); }\n"
-        "static i32 ph[N],bs[N],st[N],rv[N];\nstatic float ev_[N];\n");
-    if (c_arp) fprintf(f, "static i32 fq[N];\n");
+        "");
+    bc_st(f, "i32 ph[N],bs[N],st[N],rv[N];", "ph,bs,st,rv");
+    bc_st(f, "float ev_[N];", "ev_");
+    if (c_arp) bc_st(f, "i32 fq[N];", "fq");
     if (c_rev) {
         fprintf(f, "static const i32 RS[N]={");
         for (int c = 0; c < nch; c++)
             fprintf(f, "%s%d", c ? "," : "", song->instruments[ch_inst[c]].reverb_send);
+        fprintf(f, "};\n");
+        bc_st(f, "float rc0[1116],rc1[1188],rc2[1277],rc3[1356],rcl[4];", "rc0,rc1,rc2,rc3,rcl");
+        bc_st(f, "i32 rcp[4];", "rcp");
+        bc_st(f, "float ra0[556],ra1[441];", "ra0,ra1");
+        bc_st(f, "i32 rap[2];", "rap");
         fprintf(f,
-            "};\n"
-            "static float rc0[1116],rc1[1188],rc2[1277],rc3[1356],rcl[4];\n"
-            "static i32 rcp[4];\n"
-            "static float ra0[556],ra1[441]; static i32 rap[2];\n"
             "static float *const rcb[4]={rc0,rc1,rc2,rc3};\n"
             "static const i32 rcn[4]={1116,1188,1277,1356};\n"
             "static float *const rab[2]={ra0,ra1};\n"
@@ -2264,9 +2321,9 @@ static int write_smol_c(const char *filename, birb_song *song) {
                 1.0 - dc, dc, fb, (1.0 - fb) * 5.5, wet);
         }
     }
-    if (uses_pe)   fprintf(f, "static i32 pet[N];\n");
+    if (uses_pe)   bc_st(f, "i32 pet[N];", "pet");
     if (c_arp) {
-        fprintf(f, "static i32 a1[N],a2[N],at[N],bn[N];\n");
+        bc_st(f, "i32 a1[N],a2[N],at[N],bn[N];", "a1,a2,at,bn");
         fprintf(f, "static const i32 IA1[N]={");
         for (int c = 0; c < nch; c++)
             fprintf(f, "%s%d", c ? "," : "", song->instruments[ch_inst[c]].arp_note1);
@@ -2275,12 +2332,15 @@ static int write_smol_c(const char *filename, birb_song *song) {
             fprintf(f, "%s%d", c ? "," : "", song->instruments[ch_inst[c]].arp_note2);
         fprintf(f, "};\n");
     }
-    if (c_slide)   fprintf(f, "static i32 sl[N];\n");
+    if (c_slide)   bc_st(f, "i32 sl[N];", "sl");
     if (c_fm) {
         int NO = c_fm4 ? 4 : 2;
         fprintf(f,
-            "static i32 fp[N][%d],ff[N][%d],fst[N][%d];\n"
-            "static float fe[N][%d],fpv[N];\n", NO, NO, NO, NO);
+            "", NO, NO, NO, NO);
+        { char d1[96], d2[96];
+          snprintf(d1, sizeof d1, "i32 fp[N][%d],ff[N][%d],fst[N][%d];", NO, NO, NO);
+          snprintf(d2, sizeof d2, "float fe[N][%d],fpv[N];", NO);
+          bc_st(f, d1, "fp,ff,fst"); bc_st(f, d2, "fe,fpv"); }
     }
     if (c_fm || c_drum_lfo)
         fprintf(f,
@@ -2302,7 +2362,9 @@ static int write_smol_c(const char *filename, birb_song *song) {
             "static i32 KG(i32 d,i32 l){ i32 i=d>>3,fr=d&7,q=KQ[i];\n"
             " q+=((KQ[i+1]-q)*fr)>>3; i32 a=(i32)(((long long)q*l)>>8);\n"
             " return a>=65535?0:65535-a; }\n"
-            "static i16 kb[N][1024]; static i32 kl[N],kp[N],kg[N];\n");
+            "");
+        bc_st(f, "i16 kb[N][1024];", "kb");
+        bc_st(f, "i32 kl[N],kp[N],kg[N];", "kl,kp,kg");
     }
     if (c_smp) {
         fprintf(f, "static const i16 SPOOL[]={");
@@ -2329,7 +2391,8 @@ static int write_smol_c(const char *filename, birb_song *song) {
             fprintf(f, "%s%d", c ? "," : "",
                     in->synth_type == SYNTH_SAMPLE ? in->sample_idx : 0);
         }
-        fprintf(f, "};\nstatic i32 sp_[N],ss_[N],si_[N],sa_on[N];\n");
+        fprintf(f, "};\n");
+        bc_st(f, "i32 sp_[N],ss_[N],si_[N],sa_on[N];", "sp_,ss_,si_,sa_on");
     }
     if (c_fmt) {
         fprintf(f, "static const i32 FCO[N][2][9]={");
@@ -2371,9 +2434,11 @@ static int write_smol_c(const char *filename, birb_song *song) {
             }
             fprintf(f, "};\n");
         }
+        bc_st(f, "i32 ftz1[N][3],ftz2[N][3],ftb0[N][3],fta1[N][3],fta2[N][3];",
+                 "ftz1,ftz2,ftb0,fta1,fta2");
+        bc_st(f, "i32 ftlf[N],ftsp[N],ftdr[N],ftrc[N],CUv[N];",
+                 "ftlf,ftsp,ftdr,ftrc,CUv");
         fprintf(f,
-            "static i32 ftz1[N][3],ftz2[N][3],ftb0[N][3],fta1[N][3],fta2[N][3];\n"
-            "static i32 ftlf[N],ftsp[N],ftdr[N],ftrc[N],CUv[N];\n"
             "static void FI(i32 c){ i32 t=ftsp[c], o=255-t;\n"
             " for(i32 i=0;i<3;i++){\n"
             "  ftb0[c][i]=(FCO[c][0][i*3+0]*o+FCO[c][1][i*3+0]*t)/255;\n"
@@ -2400,9 +2465,10 @@ static int write_smol_c(const char *filename, birb_song *song) {
             }
             fprintf(f, "};\n");
         }
+        bc_st(f, "i32 dal[N],dor[N],dp2[N],dnz[N],dpe[N],dpt[N],drt[N],dsn[N],"
+                 "dclk[N],dz1[N],dlf[N],dttl[N],dmix[N],dstg[N],dstt[N],dbl[N];",
+                 "dal,dor,dp2,dnz,dpe,dpt,drt,dsn,dclk,dz1,dlf,dttl,dmix,dstg,dstt,dbl");
         fprintf(f,
-            "static i32 dal[N],dor[N],dp2[N],dnz[N],dpe[N],dpt[N],drt[N],dsn[N],\n"
-            "  dclk[N],dz1[N],dlf[N],dttl[N],dmix[N],dstg[N],dstt[N],dbl[N];\n"
             "static i32 dlfn(i32 c){ i32 b=(dlf[c]^(dlf[c]>>1))&1;\n"
             "  dlf[c]=((dlf[c]>>1)|(b<<14))&0xFFFF; if(!dlf[c]) dlf[c]=0x7FFF; return dlf[c]; }\n");
         if (c_drum_mask & 1)
@@ -2414,9 +2480,9 @@ static int write_smol_c(const char *filename, birb_song *song) {
                 "static const i32 SHP[33]={1386,1545,1722,1920,2139,2383,2655,2956,3291,3663,4076,4533,5039,5600,6219,6903,7657,8487,9400,10401,11498,12697,14004,15424,16964,18627,20416,22332,24376,26543,28828,31221,33392};\n"
                 "static i32 SC(i32 t){ i32 i=t>>3,fr=t&7,c=SHP[i]; return c+(((SHP[i+1]-c)*fr)>>3); }\n");
     }
-    if (w_used[3]) fprintf(f, "static i32 lf[N],lc[N],lp[N];\n");
+    if (w_used[3]) bc_st(f, "i32 lf[N],lc[N],lp[N];", "lf,lc,lp");
+    bc_st(f, "i32 ei,tk,et,tc;", "ei,tk,et,tc");
     fprintf(f,
-        "static i32 ei=0,tk=0,et=0,tc=0;\n"
         "static i16 out[4096];\n"
         "i16 *outPtr(void){ return out; }\n"
         "u32 getOutputBuf(void){ return (u32)(unsigned long)out; }\n"
@@ -2703,6 +2769,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
         bc_phase_guard(c_fm, c_drum, c_smp), c_arp ? "fq[c]" : "bs[c]",
         c_rev ? "  v += rev_(ri);\n" : "");
 
+    bc_emit_dev(f);
     fclose(f);
     fprintf(stderr, "Wrote %s (%d events, %ld samples)\n", filename, bc_nev, (long)bc_walk_T);
     if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
