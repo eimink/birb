@@ -563,7 +563,7 @@ s.start();</pre>
         </p>
 
         <div class="section desc">
-            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.4.0</span> is part of the birb chiptune synth project.<br><br>
+            <strong style="color:var(--acc)">birb tracker</strong> <span style="color:var(--dim)">v3.4.1</span> is part of the birb chiptune synth project.<br><br>
             &copy; 2026 eimink / Wide Load ^ KVG
         </div>
     </div>
@@ -4710,6 +4710,33 @@ function buildJS(smol) {
      * emitted pulse, triangle, saw and sine unconditionally. Mirrors birbc:
      * a single waveform needs no test at all, and noise takes the trailing
      * else because it is the only arm with no cheap condition. */
+    /* FM4 carries all eight algorithms and every FM song shipped all of them,
+     * even a 2-op patch that never calls it. Emit only the operator count and
+     * the algorithms the instruments actually use. */
+    const fmInsts = song.instruments.filter(i => i.wave === 6 && i.fm);
+    const usesFM4 = fmInsts.some(i => (i.fm.nops|0) >= 4);
+    const usesFM2 = fmInsts.some(i => (i.fm.nops|0) < 4);
+    const fmOps = usesFM4 ? 4 : 2;   /* 2-op never touches operators 2 and 3 */
+    const fmZ = '[' + new Array(fmOps).fill(0).join(',') + ']';
+    const fmAlgos = [...new Set(fmInsts.filter(i => (i.fm.nops|0) >= 4)
+                                       .map(i => (i.fm.algo|0) & 7))].sort((a,b)=>a-b);
+    const FM_ALG = [
+      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;`,
+      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;`,
+      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;`,
+      `s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;`,
+      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;`,
+      `s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;`,
+      `s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;`,
+      `var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;`,
+    ];
+    /* one algorithm needs no switch; with several, the last arm is the default
+     * so an out-of-range value can never fall through with s undefined */
+    const fmBody = fmAlgos.length === 1
+        ? FM_ALG[fmAlgos[0]]
+        : 'switch(C.fmAlgo&7){' + fmAlgos.map((a,k) =>
+            (k === fmAlgos.length - 1 ? 'default:{' : 'case ' + a + ':{')
+            + FM_ALG[a] + 'break}').join('') + '}';
     let usesPulse = song.instruments.some(i => i.wave === 0);
     let usesTri   = song.instruments.some(i => i.wave === 1);
     let usesSaw   = song.instruments.some(i => i.wave === 2);
@@ -4861,7 +4888,7 @@ spt=S*5/((bpm||125)*2)|0,${LOCK ? `T=${WALK ? WALK.T : 0}` : SM.fixedLen ? `T=ol
 out=new Float32Array(T),ch=[]${LOCK ? `` : `,ct=0,cr=0,op=0`},tc=0
 ${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
 function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*${(1-rvDc).toFixed(6)}+RCL[k]*${rvDc.toFixed(6)};b[p]=x+RCL[k]*${rvFb.toFixed(6)};RCP[k]=p+1<b.length?p+1:0;o+=y}o*=${((1-rvFb)*5.5).toFixed(6)};for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*${rvWet.toFixed(6)}}
-` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,${SM.noInstVol ? `` : `v:255,`}rv:255${usesSamples ? `,sp:0,ss:0,si:0,sa:0` : ``}${usesPitchEnv?',q:0,g:0':''}${usesArp?',x:0,y:0,k:0':''}${usesSlide?',l:0':''}${usesPorta?',pt:0,ps:0':''}${fxUsed[6]?',ri:0':''}${usesNoteCut?',nc:0':''}${usesNoteDelay?',nd:0,dn:0,di:0':''}${usesVib?',vp:0,vs:0,vd:0':''}${usesTrem?',tp:0,ts:0,td:0,tm:0':''}${usesNoise?',h:0x7FFF,j:16,m:0':''}${usesReverb?',rs:0':''}${usesFM?',fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmMi:64,fmFb:0,fmNo:2,fmAlgo:0,fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
+` : ''}for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,${SM.noInstVol ? `` : `v:255,`}rv:255${usesSamples ? `,sp:0,ss:0,si:0,sa:0` : ``}${usesPitchEnv?',q:0,g:0':''}${usesArp?',x:0,y:0,k:0':''}${usesSlide?',l:0':''}${usesPorta?',pt:0,ps:0':''}${fxUsed[6]?',ri:0':''}${usesNoteCut?',nc:0':''}${usesNoteDelay?',nd:0,dn:0,di:0':''}${usesVib?',vp:0,vs:0,vd:0':''}${usesTrem?',tp:0,ts:0,td:0,tm:0':''}${usesNoise?',h:0x7FFF,j:16,m:0':''}${usesReverb?',rs:0':''}${usesFM?`,fmp:${fmZ},fmf:${fmZ},fmL:${fmZ},fmR:${usesFM4?`[1,1,0,0]`:`[1,1]`},fmEnv:${fmZ},fmStg:${fmZ},fmMi:64,fmFb:0`+((usesFM4&&usesFM2)?',fmNo:2':'')+(usesFM4?',fmAlgo:0':'')+',fmPrev:0':''}${usesKS?',kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0':''}${usesDrive?',dp:1,dn:1':''}${usesDuck?',ds:0,da:0':''}${usesDrum?',drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drBodyT:0,drStage:0,drStageT:0,drBurstLen:0':''}${usesFormant?',ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0],_ftCA:[0,0,0,0,0,0,0,0,0],_ftCB:[0,0,0,0,0,0,0,0,0]':''}}
 ${(!SM.noMaster || usesDrive) ? `function SS(x){if(x<-3)x=-3;else if(x>3)x=3;var x2=x*x;return x*(27+x2)/(27+9*x2)}` : ``}
 ${usesLFO ? `function LT(p){p&=65535;var t=p<32768?p:65536-p;return((t<<2)-65536)>>7}
 ` : ''}${usesTypeGainTable
@@ -4875,13 +4902,13 @@ function SC(t){var i=t>>3,f=t&7,c=SHP[i];return c+(((SHP[i+1]-c)*f)>>3)}
 ` : ''}${usesKS ? `var KQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398]
 function KG(d,l){var i=d>>3,f=d&7,q=KQ[i];q+=((KQ[i+1]-q)*f)>>3;var a=(q*l)>>8;return a>=65535?0:65535-a}
 ` : ''}${usesDuck ? `var DE=0,DR=${mstDuckRel.toFixed(6)}
-` : ''}${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;switch(C.fmAlgo&7){case 0:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 1:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 2:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;break;case 3:s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;break;case 4:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;break;case 5:{s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;break}case 6:{s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;break}default:{var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;break}}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%F;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
+` : ''}${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM4 ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;${fmBody}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%F;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0]${(usesPulse||usesFormant) ? `;C.u=dv[j[1]&3]` : ``}
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}
 ${usesPitchEnv ? `C.q=j[6];C.g=j[7];` : ``}${usesArp ? `C.x=j[8];C.y=j[9];` : ``}${SM.noInstVol ? `` : `C.v=j[10]||255;`}C.rv=255${usesArp ? `;C.k=0` : ``}${usesSlide ? `;C.l=0` : ``}${usesPorta ? `;C.ps=0` : ``}${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
 ${usesNoise ? `if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}` : ``}
 ${usesSamples ? `C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}` : ''}${usesFM ? `
-if(j[0]===6){var fm=j[16];C.fmNo=j[12];C.fmAlgo=j[13]|0;C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
+if(j[0]===6){var fm=j[16];${(usesFM4&&usesFM2) ? `C.fmNo=j[12];` : ``}${usesFM4 ? `C.fmAlgo=j[13]|0;` : ``}C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<${fmOps};k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
 if(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}` : ''}${usesDrum ? `
 if(j[0]===8){var dt=j[${drumBase}]&7,al=dt===4?0:dt===5?2:dt,tn=j[${drumBase+1}];if(tn>127)tn-=256;var dec=j[${drumBase+2}],tone=j[${drumBase+3}],snp=j[${drumBase+4}],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;
 if(al===0){C.drPe=(df<<3)<<8;C.drPet=(df>>1)<<8;C.drRate=KC(tone);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}
@@ -4941,14 +4968,14 @@ ${usesNoteDelay ? `if(C.nd&&ct==C.nd){if(C.di<ni)TR(C,C.dn,C.di);C.nd=0}
 var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
 else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
 else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}${usesFM ? `
-if(C.w===6){for(var k=0;k<4;k++)C.fmf[k]=Math.round(C.f*C.fmR[k]);var jj=I[C.i];if(jj){C.fmAlgo=jj[13]|0;var fm=jj[16];for(var k=0;k<4;k++){var oo=fm[k]||[1,0,0,0,8,200,8],st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}C.fmStg[k]=st;C.fmEnv[k]=en}}}` : ''}}}
+if(C.w===6){for(var k=0;k<${fmOps};k++)C.fmf[k]=Math.round(C.f*C.fmR[k]);var jj=I[C.i];if(jj){${usesFM4 ? `C.fmAlgo=jj[13]|0;` : ``}var fm=jj[16];for(var k=0;k<${fmOps};k++){var oo=fm[k]||[1,0,0,0,8,200,8],st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}C.fmStg[k]=st;C.fmEnv[k]=en}}}` : ''}}}
 for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
 var v=0${usesReverb?',rI=0':''}${usesDuck?',DI=0,DN=DE':''};for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e${usesSamples ? '&&!C.sa' : ''}${usesDrum ? '&&!C.drTtl' : ''})continue
 var h=C.p,s=0
 ${usesSamples ? `if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
 if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}` : ''}${usesFM ? `
-${preFM}if(C.w===6){if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}}` : ''}${usesKS ? `
+${preFM}if(C.w===6){${(usesFM4 && usesFM2) ? `if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}` : usesFM4 ? `s=FM4(C)` : `var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F`}}` : ''}${usesKS ? `
 ${preKS}if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*C.kg)>>16;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
 ${preDrum}if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
 ${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8))%F;var tri=C.p<F/2?(C.p*4-F):(F*3-C.p*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}` : ''}

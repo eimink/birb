@@ -1143,10 +1143,21 @@ static int write_js(const char *filename, birb_song *song) {
 
     /* Detect which synth types we emit. */
     int uses_fm = 0, uses_ks = 0, uses_drum = 0, uses_formant = 0, uses_sine = 0;
+    int uses_fm4 = 0, uses_fm2 = 0, fm_algo_mask = 0;
+    char fm_fields[224], fm_zero[16];
+    char fm_trig[512];
     int uses_pulse = 0, uses_tri = 0, uses_saw = 0, uses_noise = 0, n_basic_waves = 0;
     int drum_algos = 0;  /* bitmask: bit 0=KICK/TOM, 1=SNARE, 2=HAT/CRASH, 3=CLAP */
     for (int i = 0; i < song->num_instruments; i++) {
-        if (song->instruments[i].synth_type == SYNTH_FM) uses_fm = 1;
+        if (song->instruments[i].synth_type == SYNTH_FM) {
+            uses_fm = 1;
+            /* FM4 carries all eight algorithms; emit only the operator count
+             * and the algorithms the instruments reach. A 2-op patch never
+             * calls FM4 at all. */
+            int no = song->instruments[i].fm.num_ops ? song->instruments[i].fm.num_ops : 2;
+            if (no >= 4) { uses_fm4 = 1; fm_algo_mask |= 1 << (song->instruments[i].fm.algorithm & 7); }
+            else uses_fm2 = 1;
+        }
         if (song->instruments[i].synth_type == SYNTH_KS) uses_ks = 1;
         if (song->instruments[i].synth_type == SYNTH_DRUM) {
             uses_drum = 1;
@@ -1523,6 +1534,17 @@ static int write_js(const char *filename, birb_song *song) {
             "function RV(x){var o=0,k,b,p,y;for(k=0;k<4;k++){b=RC[k];p=RCP[k];y=b[p];RCL[k]=y*%.6f+RCL[k]*%.6f;b[p]=x+RCL[k]*%.6f;RCP[k]=p+1<b.length?p+1:0;o+=y}o*=%.6f;for(k=0;k<2;k++){b=RA[k];p=RAP[k];y=b[p];var ou=-o+y;b[p]=o+y*0.5;RAP[k]=p+1<b.length?p+1:0;o=ou}return o*%.6f}\n",
             1.0 - rv_dc, rv_dc, rv_fb, (1.0 - rv_fb) * 5.5, rv_wet);
 #endif
+    snprintf(fm_trig, sizeof fm_trig,
+        "\nif(j[0]===6){var fm=j[15];%s%sC.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<%d;k++){"
+        "var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);"
+        "C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}",
+        (uses_fm4 && uses_fm2) ? "C.fmNo=j[11];" : "", uses_fm4 ? "C.fmAlgo=j[12]|0;" : "",
+        uses_fm4 ? 4 : 2);
+    snprintf(fm_zero, sizeof fm_zero, "%s", uses_fm4 ? "[0,0,0,0]" : "[0,0]");
+    snprintf(fm_fields, sizeof fm_fields,
+        ",fmp:%s,fmf:%s,fmL:%s,fmR:%s,fmEnv:%s,fmStg:%s,fmMi:64,fmFb:0%s%s,fmPrev:0",
+        fm_zero, fm_zero, fm_zero, uses_fm4 ? "[1,1,0,0]" : "[1,1]", fm_zero, fm_zero,
+        (uses_fm4 && uses_fm2) ? ",fmNo:2" : "", uses_fm4 ? ",fmAlgo:0" : "");
     fprintf(f,
         "for(c=0;c<N;c++)ch[c]={p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,i:0,%srv:255%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s}\n"
         "%s",
@@ -1537,7 +1559,7 @@ static int write_js(const char *filename, birb_song *song) {
         uses_vib ? ",vp:0,vs:0,vd:0" : "",
         uses_trem ? ",tp:0,ts:0,td:0,tm:0" : "",
         uses_noise ? ",h:0x7FFF,j:16,m:0" : "",
-        uses_fm ? ",fmp:[0,0,0,0],fmf:[0,0,0,0],fmL:[0,0,0,0],fmR:[1,1,0,0],fmEnv:[0,0,0,0],fmStg:[0,0,0,0],fmAlgo:0,fmMi:64,fmFb:0,fmNo:2,fmPrev:0" : "",
+        uses_fm ? fm_fields : "",
         uses_ks ? ",kb:new Int16Array(1024),kl:0,kp:0,kd:0,kg:0" : "",
         uses_drum ? ",drAl:0,drAlOrig:0,drP2:0,drNz:0,drPe:0,drPet:0,drRate:0,drSnap:0,drClk:0,drZ1:0,drZ2:0,drLf:0x7FFF,drTtl:0,drMix:0,drStage:0,drStageT:0,drBurstLen:0,drBodyT:0" : "",
         uses_formant ? ",ftSw:0,ftLf:0x7FFF,ftVa:0,ftVb:0,ftSp:0,ftDr:1,ftSS:0,ftR:128,ftRc:0,ftZ1:[0,0,0],ftZ2:[0,0,0],ftB0:[0,0,0],ftA1:[0,0,0],ftA2:[0,0,0]" : "",
@@ -1619,22 +1641,38 @@ static int write_js(const char *filename, birb_song *song) {
         }
         fprintf(f, "]\n");
     }
-    if (uses_fm) {
-        /* 4-op FM. 8 algos, mirrors fmRender4() in the editor. raw is the
-         * carrier op0's pre-level sine; fmPrev = raw*F so feedback maths
-         * matches 2-op exactly. */
+    if (uses_fm4) {
+        /* 4-op FM, mirrors fmRender4() in the editor. raw is the carrier op0's
+         * pre-level sine; fmPrev = raw*F so feedback maths matches 2-op exactly.
+         * Only the algorithms the song reaches are emitted; a single one needs
+         * no switch, and with several the last arm is the default so an
+         * out-of-range value cannot fall through with s undefined. */
+        static const char *FM_ALG[8] = {
+            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;",
+            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;",
+            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;",
+            "s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;",
+            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;",
+            "s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;",
+            "s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;",
+            "var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;",
+        };
+        int n_alg = 0, last = 0;
+        for (int a = 0; a < 8; a++) if (fm_algo_mask & (1 << a)) { n_alg++; last = a; }
         fprintf(f,
             "function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;\n"
-            "var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;\n"
-            "switch(C.fmAlgo&7){\n"
-            "case 0:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;\n"
-            "case 1:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;\n"
-            "case 2:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;break;\n"
-            "case 3:s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;break;\n"
-            "case 4:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;break;\n"
-            "case 5:{s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;break}\n"
-            "case 6:{s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;break}\n"
-            "default:{var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;break}}\n"
+            "var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;\n");
+        if (n_alg == 1) fprintf(f, "%s\n", FM_ALG[last]);
+        else {
+            fprintf(f, "switch(C.fmAlgo&7){\n");
+            for (int a = 0; a < 8; a++) {
+                if (!(fm_algo_mask & (1 << a))) continue;
+                if (a == last) fprintf(f, "default:{%sbreak}\n", FM_ALG[a]);
+                else           fprintf(f, "case %d:{%sbreak}\n", a, FM_ALG[a]);
+            }
+            fprintf(f, "}\n");
+        }
+        fprintf(f,
             "C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%%F;return s}\n");
     }
     /* KS damping lives at j[11] (no FM/drum) or j[16] (FM or drum pads 4). */
@@ -1664,7 +1702,7 @@ static int write_js(const char *filename, birb_song *song) {
         uses_duck  ? ";C.ds=DS[ii]||0;C.da=DA[ii]||0" : "",
         uses_noise ? "if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}" : "",
         uses_fm
-            ? "\nif(j[0]===6){var fm=j[15];C.fmNo=j[11];C.fmAlgo=j[12]|0;C.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}"
+            ? fm_trig
             : "",
         uses_ks
             ? "\nif(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kbit=(lf^(lf>>1))&1;lf=((lf>>1)|(kbit<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}"
@@ -1772,11 +1810,12 @@ static int write_js(const char *filename, birb_song *song) {
          * loop variable here is `oo` (not `op`) — `op` is the outer
          * order-position state and var-hoisting would clobber it. */
         fprintf(f,
-            "if(C.w===6&&C.i<ni){var jj=I[C.i],fm=jj[15];C.fmFb=jj[13];C.fmMi=jj[14];C.fmNo=jj[11];C.fmAlgo=jj[12]|0;\n"
-            "for(var k=0;k<4;k++){var oo=fm[k];C.fmR[k]=(oo[0]*16+(oo[1]&15))/16;C.fmf[k]=Math.round(C.f*C.fmR[k]);C.fmL[k]=Math.round(F*(oo[2]||0)/255);\n"
+            "if(C.w===6&&C.i<ni){var jj=I[C.i],fm=jj[15];C.fmFb=jj[13];C.fmMi=jj[14];%s\n"
+            "for(var k=0;k<%d;k++){var oo=fm[k];C.fmR[k]=(oo[0]*16+(oo[1]&15))/16;C.fmf[k]=Math.round(C.f*C.fmR[k]);C.fmL[k]=Math.round(F*(oo[2]||0)/255);\n"
             "var st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;\n"
             "if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}\n"
-            "C.fmStg[k]=st;C.fmEnv[k]=en}}\n");
+            "C.fmStg[k]=st;C.fmEnv[k]=en}}\n",
+            uses_fm4 ? "C.fmAlgo=jj[12]|0;" : "", uses_fm4 ? 4 : 2);
     }
     if (uses_ks) {
         fprintf(f, "if(C.w===7&&C.i<ni){var jk=I[C.i];C.kd=jk[16]||0}\n");
@@ -1803,7 +1842,10 @@ static int write_js(const char *filename, birb_song *song) {
     if (uses_fm) {
         /* nops=4 → FM4 (8 algos); nops=2 → simpler op1→op0 with feedback. */
         fprintf(f,
-            "if(C.w===6){if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%%F;s=cr_*l0f/F}}else \n");
+            "if(C.w===6){%s}else \n", (uses_fm4 && uses_fm2)
+                ? "if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}"
+                : uses_fm4 ? "s=FM4(C)"
+                : "var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F");
     }
     if (uses_ks) {
         fprintf(f,
