@@ -4783,7 +4783,7 @@ function buildJS(smol) {
     let planes = LOCK ? [] : ['pn','pi','pv','pf','pp'];
     let keys = ['note','inst','vol','fx','prm'];
     let defaults = [0, 255, 0, 0, 0]; // empty value per plane
-    for (let pl = 0; pl < 5; pl++) {
+    for (let pl = 0; pl < planes.length; pl++) {
         let vals = [], allEmpty = true, def = defaults[pl];
         for (let p of song.patterns)
             for (let c = 0; c < N; c++)
@@ -4855,8 +4855,8 @@ return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}})
     let drumBase = (usesFM || usesKS || usesDrum || usesFormant) ? 18 : -1;
     let formantBase = drumBase >= 0 ? (drumBase + 5) : -1;
     o += `var bf=[24,26,27,29,31,32,34,36,38,41,43,46],
-dv=[8192,16384,32768,49152],
-nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
+${(usesPulse||usesFormant) ? `dv=[8192,16384,32768,49152],
+` : ``}nf=n=>(n=n<0?0:n>95?95:n,bf[n%12]<<(n/12)),
 spt=S*5/((bpm||125)*2)|0,${LOCK ? `T=${WALK ? WALK.T : 0}` : SM.fixedLen ? `T=ol*${SM.rows}*tpr*spt` : `W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt`},
 out=new Float32Array(T),ch=[]${LOCK ? `` : `,ct=0,cr=0,op=0`},tc=0
 ${usesReverb ? `var RC=[new Float32Array(1116),new Float32Array(1188),new Float32Array(1277),new Float32Array(1356)],RCL=[0,0,0,0],RCP=[0,0,0,0],RA=[new Float32Array(556),new Float32Array(441)],RAP=[0,0]
@@ -4876,10 +4876,10 @@ function SC(t){var i=t>>3,f=t&7,c=SHP[i];return c+(((SHP[i+1]-c)*f)>>3)}
 function KG(d,l){var i=d>>3,f=d&7,q=KQ[i];q+=((KQ[i+1]-q)*f)>>3;var a=(q*l)>>8;return a>=65535?0:65535-a}
 ` : ''}${usesDuck ? `var DE=0,DR=${mstDuckRel.toFixed(6)}
 ` : ''}${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;switch(C.fmAlgo&7){case 0:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 1:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;break;case 2:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;break;case 3:s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;break;case 4:s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;break;case 5:{s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;break}case 6:{s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;break}default:{var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;break}}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%F;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
-C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0];C.u=dv[j[1]&3]
+C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0]${(usesPulse||usesFormant) ? `;C.u=dv[j[1]&3]` : ``}
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}
-C.q=j[6];C.g=j[7];C.x=j[8];C.y=j[9];${SM.noInstVol ? `` : `C.v=j[10]||255;`}C.rv=255;C.k=0;C.l=0;C.ps=0${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
-if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}
+${usesPitchEnv ? `C.q=j[6];C.g=j[7];` : ``}${usesArp ? `C.x=j[8];C.y=j[9];` : ``}${SM.noInstVol ? `` : `C.v=j[10]||255;`}C.rv=255${usesArp ? `;C.k=0` : ``}${usesSlide ? `;C.l=0` : ``}${usesPorta ? `;C.ps=0` : ``}${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
+${usesNoise ? `if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}` : ``}
 ${usesSamples ? `C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}` : ''}${usesFM ? `
 if(j[0]===6){var fm=j[16];C.fmNo=j[12];C.fmAlgo=j[13]|0;C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<4;k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
 if(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}` : ''}${usesDrum ? `
@@ -4902,11 +4902,11 @@ ${LOCK ? (() => {
     return `function R(){while(ei<EV.length&&et+EV[ei]<=tk){et+=EV[ei];c=EV[ei+1];var C=ch[c],n=EV[ei+2],rv=EV[ei+3],${fxp},ii=${inst};ei+=${k}`;
   })() : `function R(){for(c=0;c<N;c++){var q=O[op][c],C=ch[c];if(q>=np)continue
 var n=P(pn,q,c,cr),ii=${SM.instPerCh ? `IC[c]` : `pi.length?P(pi,q,c,cr):255`},rv=P(pv,q,c,cr),fx=P(pf,q,c,cr),pm=P(pp,q,c,cr)`}
-C.ri=0;C.nc=0;C.nd=0
-var itp=fx==5,ind=fx==7&&(pm>>4)==0xD
-if(ind&&n>=2){C.dn=n;C.di=${SM.instPerCh ? `ii` : `ii==255?C.i:ii`};C.nd=pm&15}
-else if(n==1)C.t=4;else if(n>=2){if(itp){C.pt=nf(n-2)}
-else{${SM.instPerCh ? `TR(C,n,ii)` : `if(ii==255)ii=C.i;if(ii<ni)TR(C,n,ii)`}}}
+${fxUsed[6] ? `C.ri=0;` : ``}${usesNoteCut ? `C.nc=0;` : ``}${usesNoteDelay ? `C.nd=0;` : ``}${(usesPorta||usesNoteDelay) ? `
+var itp=fx==5,ind=fx==7&&(pm>>4)==0xD` : ``}
+${usesNoteDelay ? `if(ind&&n>=2){C.dn=n;C.di=${SM.instPerCh ? `ii` : `ii==255?C.i:ii`};C.nd=pm&15}
+else ` : ``}if(n==1)C.t=4;else if(n>=2){${usesPorta ? `if(itp){C.pt=nf(n-2)}
+else` : ``}{${SM.instPerCh ? `TR(C,n,ii)` : `if(ii==255)ii=C.i;if(ii<ni)TR(C,n,ii)`}}}
 if(rv)C.rv=rv
 ${fxUsed[1] ? `if(fx==1){C.x=pm>>4;C.y=pm&15;C.k=0}
 ` : ''}${usesSlide ? `if(fx==2)C.l=pm<<2;else if(fx==3)C.l=-(pm<<2)
@@ -4957,7 +4957,7 @@ ${drumAlgos.has(2) ? `${(drumAlgos.has(0)||drumAlgos.has(1)) ? 'else ' : ''}if(C
 ${drumAlgos.has(3) ? `${(drumAlgos.has(0)||drumAlgos.has(1)||drumAlgos.has(2)) ? 'else ' : ''}if(C.drAl===3){var amp=0;if(C.drStage<3){var bL=C.drBurstLen||96;var into=bL-C.drStageT;var hf=bL/2;var env=(into<hf)?(into*256/hf):((bL-into)*256/hf);if(env<0)env=0;if(env>256)env=256;var nn=lfn();var sc=(nn&1)?26000:-26000;amp=(sc*env)>>8}else{var nn=lfn();amp=(nn&1)?9000:-9000}if(C.drStageT>0)C.drStageT--;else if(C.drStage<3){C.drStage++;C.drStageT=(C.drStage===3)?0xFFFF:(C.drBurstLen||96)}o_=amp}` : ''}
 s=o_/32768;if(s>1)s=1;else if(s<-1)s=-1}}` : ''}${usesFormant ? `
 ${preFormant}if(C.w===9){var src;if(C.ftSw===3){var fv=C.ftLf,fb=(fv^(fv>>1))&1;fv=((fv>>1)|(fb<<14))&0xFFFF;if(!fv)fv=0x7FFF;C.ftLf=fv;src=(fv&1)?16383:-16383}else if(C.ftSw===0){src=h<C.u?16383:-16383}else{src=(h*2-F)*32767/F|0}var sm=0;for(var fi=0;fi<3;fi++){var b0=C.ftB0[fi],a1=C.ftA1[fi],a2=C.ftA2[fi];var yy=(b0*src/65536|0)+C.ftZ1[fi];C.ftZ1[fi]=(-(a1*yy/65536|0))+C.ftZ2[fi];C.ftZ2[fi]=(-b0*src/65536|0)-(a2*yy/65536|0);sm+=yy}if(sm>32767)sm=32767;else if(sm<-32767)sm=-32767;s=sm/32768;if(C.ftSS){C.ftRc=(C.ftRc+1)&0xFF;if((C.ftRc&0x1F)===0){var st=C.ftSS>>3;if(!st)st=1;var sp=C.ftSp+C.ftDr*st;if(sp>=255){sp=255;C.ftDr=-1}else if(sp<=0){sp=0;C.ftDr=1}C.ftSp=sp;FI(C)}}}` : ''}${basicDispatch}
-var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F
+${usesTrem ? `var en=C.e+(C.tm?C.e*C.tm/F:0);if(en<0)en=0;if(en>F)en=F` : `var en=C.e`}
 ${usesDrive ? 'if(C.dp>1)s=SS(s*C.dp)*C.dn;' : ''}var cv=s*en*${SM.noInstVol ? `C.rv/F/255` : `C.v*C.rv/F/255/255`}*${tgain};${usesDuck ? 'if(C.ds)DI+=(cv<0?-cv:cv)*C.ds/255;if(C.da&&DN>0){var dg=1-DN*C.da/255;cv*=dg>0?dg:0}' : ''}v+=cv;${usesReverb ? 'if(C.rs)rI+=cv*C.rs/255;' : ''}if(C.w!==5${usesDrum ? '&&C.w!==8' : ''})C.p=(C.p+C.f)%F}${usesReverb?'v+=RV(rI);':''}${usesDuck ? 'var dd=DI>1?1:DI;DE=dd>DE?dd:dd+(DE-dd)*DR;' : ''}${SM.noMaster ? `v*=MG;out[i]=v>1?1:v<-1?-1:v` : `v*=MG;var la=v<0?-v:v;LE=la>LE?la:la+(LE-la)*MR;if(LE>MT)v*=MT/LE;out[i]=SS(v)/MC`}}
 return{o:out,spt:spt,T:T}}`;
     return o;
