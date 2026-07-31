@@ -2430,10 +2430,15 @@ static int write_smol_c(const char *filename, birb_song *song) {
         for (int c = 0; c < nch; c++)
             fprintf(f, "%s%d", c ? "," : "", song->instruments[ch_inst[c]].reverb_send);
         fprintf(f, "};\n");
-        bc_st(f, "float rc0[1116],rc1[1188],rc2[1277],rc3[1356],rcl[4];", "rc0,rc1,rc2,rc3,rcl");
+        /* One flat buffer indexed through constant integer offsets. A pointer
+         * table (float *const[4]) is four relocated slots in __DATA,__const,
+         * and a packed image has no dyld to slide them: each keeps whatever
+         * absolute address the linker chose and points at nothing.
+         * 1116+1188+1277+1356. */
+        bc_st(f, "float rcb[4937],rcl[4];", "rcb,rcl");
         bc_st(f, "i32 rcp[4];", "rcp");
         fprintf(f,
-            "static float *const rcb[4]={rc0,rc1,rc2,rc3};\n"
+            "static const i32 rco[4]={0,1116,2304,3581};\n"
             "static const i32 rcn[4]={1116,1188,1277,1356};\n"
             "");
         {   double size = song->rev_size / 255.0, damp = song->rev_damp / 255.0;
@@ -2441,8 +2446,8 @@ static int write_smol_c(const char *filename, birb_song *song) {
             double fb = 0.7 + 0.28 * size, dc = 0.4 * damp;
             fprintf(f,
                 "static float rev_(float x){ float o=0.f;\n"
-                " for(i32 k=0;k<4;k++){ i32 L=rcn[k],pp=rcp[k]; float y=rcb[k][pp];\n"
-                "  rcl[k]=y*%.6ff+rcl[k]*%.6ff; rcb[k][pp]=x+rcl[k]*%.6ff;\n"
+                " for(i32 k=0;k<4;k++){ i32 B=rco[k],L=rcn[k],pp=rcp[k]; float y=rcb[B+pp];\n"
+                "  rcl[k]=y*%.6ff+rcl[k]*%.6ff; rcb[B+pp]=x+rcl[k]*%.6ff;\n"
                 "  rcp[k]=(pp+1<L)?pp+1:0; o+=y; }\n"
                 /* the C player is always smol, so the diffusers are never emitted */
                 " o*=%.6ff;\n"
