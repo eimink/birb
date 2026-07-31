@@ -16,7 +16,8 @@
  *
  *   Order:
  *     order_length: u8
- *     [ch0_pat, ch1_pat, ch2_pat, ch3_pat] × order_length
+ *     [ch0_pat … ch(N-1)_pat] × order_length, where N is the header's
+ *     channel count. Loaders zero-pad any channels the build has beyond N.
  *
  *   Instruments (num_instruments × 12 bytes):
  *     waveform: u8
@@ -29,7 +30,8 @@
  *     pitch_env_len: u8
  *     arp_note1: u8
  *     arp_note2: u8
- *     reserved: u8, u8
+ *     volume: u8         (per-instrument level, 0..255; 255 = full)
+ *     sample_idx: u8     (index into the SMPL bank when waveform = WAVE_SAMPLE)
  *
  *   Pattern lengths:
  *     num_rows: u8 × num_patterns
@@ -44,7 +46,7 @@
  *
  *   Plane data (present for each non-empty plane, in order 0..4):
  *     Organized as channel-major, pattern-major:
- *       For each channel 0..3:
+ *       For each channel 0..N-1 (N = header channel count):
  *         For each pattern 0..num_patterns-1:
  *           pattern_lengths[p] bytes of plane data
  *     This layout maximises LZ77 locality across pattern boundaries.

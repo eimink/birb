@@ -200,7 +200,7 @@ def write_bsb(filename, bpm, tpr, instruments, patterns, order):
         buf.append(inst.get('arp1', 0))
         buf.append(inst.get('arp2', 0))
         buf.append(inst.get('vol', 255))
-        buf.append(0)  # reserved
+        buf.append(0)  # sample_idx — this writer never emits a SMPL bank
     # pattern lengths: ALL of them together, then the plane-empty flags byte,
     # then each non-empty plane channel-major across every pattern. This writer
     # previously emitted a per-pattern {nrows, 5 planes} layout, which the
