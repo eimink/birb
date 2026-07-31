@@ -3791,8 +3791,9 @@ static void usage(const char *prog) {
     fprintf(stderr, "  Other:   --version | -v   print version and exit\n");
     fprintf(stderr, "           --no-master        omit the JS master bus (smaller, CHANGES SOUND)\n");
     fprintf(stderr, "           --smol             smol birb: minimal export (smallest, CHANGES SOUND)\n");
-    fprintf(stderr, "           --smol-c           emit a standalone C player with the song baked in\n");
-    fprintf(stderr, "           --locked-c         experimental: locked-down C player, full feature set\n");
+    fprintf(stderr, "           (default)          locked-down C player, full feature set\n");
+    fprintf(stderr, "           --tracker          no player; just the .bsb/.h blob for birb_synth.c\n");
+    fprintf(stderr, "           --smol-c           smol C player instead (smaller, CHANGES SOUND)\n");
 }
 
 int main(int argc, char **argv) {
@@ -3807,7 +3808,7 @@ int main(int argc, char **argv) {
 
     const char *input = argv[1];
     const char *output_base = NULL;
-    int emit_js = 0, emit_smol_c = 0;
+    int emit_js = 0, emit_smol_c = 0, tracker = 0;
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
@@ -3816,7 +3817,9 @@ int main(int argc, char **argv) {
             emit_smol_c = 1;
             birb_smol = 1;          /* the C player is the smol feature set */
         } else if (strcmp(argv[i], "--locked-c") == 0) {
-            birb_locked = 1;
+            birb_locked = 1;        /* the default; kept so scripts can be explicit */
+        } else if (strcmp(argv[i], "--tracker") == 0) {
+            tracker = 1;
         } else if (strcmp(argv[i], "--js") == 0) {
             emit_js = 1;
         } else if (strcmp(argv[i], "--smol") == 0) {
@@ -3826,6 +3829,12 @@ int main(int argc, char **argv) {
             birb_no_master = 1;
         }
     }
+
+    /* The locked player is what birbc emits by default. --tracker asks for the
+     * dev path instead: just the .bsb/.h blob to compile against birb_synth.c,
+     * which keeps the sequencer and the row/pattern readout an editor needs.
+     * An explicit --smol-c or --locked-c always wins over the default. */
+    if (!tracker && !emit_smol_c) birb_locked = 1;
 
     /* derive output base from input if not specified */
     char base_buf[256];
