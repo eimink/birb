@@ -577,6 +577,10 @@ static int parse_birb_file(const char *filename, birb_song *song) {
  * Implies --no-master. Transforms the song cannot take stay off. */
 static int birb_smol = 0;
 
+/* Set by --locked-c (experimental): emit the full-feature locked-down C
+ * player. Independent of --smol/--smol-c, which are untouched. */
+static int birb_locked = 0;
+
 /* Set by --no-master. Drops the soft saturator, limiter and ceiling from the
  * emitted JS, replacing them with a hard clamp. Worth ~200 raw bytes but it
  * ALTERS THE OUTPUT: there is no setting at which the chain is a no-op, since
@@ -2959,13 +2963,12 @@ static int write_locked_c(const char *filename, birb_song *song) {
     int w_used[5] = {0,0,0,0,0};          /* pulse tri saw noise sine */
     int u_fm = 0, u_fm4 = 0, u_fm2 = 0, fm_mask = 0;
     int u_ks = 0, u_fmt = 0, u_smp = 0, u_drum = 0, drum_mask = 0, drum_lfo = 0;
-    int u_pe = 0, u_rev = 0, u_drive = 0, u_duck = 0, u_ivol = 0, unsupported = 0;
+    int u_pe = 0, u_rev = 0, u_drive = 0, u_duck = 0, unsupported = 0;
     for (int k = 0; k < NI; k++) {
         birb_instrument *in = &song->instruments[row[k]];
         if (in->reverb_send) u_rev = 1;
         if (in->drive) u_drive = 1;
         if (in->duck_send || in->duck_amt) u_duck = 1;
-        if (in->volume && in->volume != 255) u_ivol = 1;
         if (in->pitch_env && in->pitch_env_len) u_pe = 1;
         switch (in->synth_type) {
             case SYNTH_BASIC:   w_used[in->waveform < 5 ? in->waveform : 0] = 1; break;
@@ -3082,13 +3085,13 @@ static int write_locked_c(const char *filename, birb_song *song) {
           }
           lk_tab(f, "u8", an[a], NI, v);
         } }
-      if (u_ivol) {
-        for (int k = 0; k < NI; k++) {
-            int iv = song->instruments[row[k]].volume;
-            v[k] = iv ? iv : 255;
-        }
-        lk_tab(f, "i32", "CV", NI, v);
+      /* always emitted: the JS mix multiplies by it unconditionally, and
+       * folding a constant 255 away would change the float rounding */
+      for (int k = 0; k < NI; k++) {
+        int iv = song->instruments[row[k]].volume;
+        v[k] = iv ? iv : 255;
       }
+      lk_tab(f, "i32", "CV", NI, v);
       if (u_pe) {
         for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].pitch_env;
         lk_tab(f, "i8", "CPE", NI, v);
@@ -3143,14 +3146,615 @@ static int write_locked_c(const char *filename, birb_song *song) {
         fprintf(f, "};\n");
     }
 
+    /* ---- FM ---- */
+    int NO = u_fm4 ? 4 : 2;
+    if (u_fm) {
+        const char *fn[6] = { "FR", "FL", "FA", "FD", "FS", "FRl" };
+        for (int a = 0; a < 6; a++) {
+            fprintf(f, "static const i32 %s[NI][%d]={", fn[a], NO);
+            for (int k = 0; k < NI; k++) {
+                birb_instrument *in = &song->instruments[row[k]];
+                fprintf(f, "%s{", k ? "," : "");
+                for (int o = 0; o < NO; o++) {
+                    birb_fm_op *op = &in->fm.ops[o];
+                    int val = 0;
+                    if (in->synth_type == SYNTH_FM) switch (a) {
+                        case 0: val = (op->ratio_i << 4) | (op->ratio_f & 0xF); break;
+                        case 1: val = (int)((65536.0 * op->level) / 255.0 + 0.5); break;
+                        case 2: val = op->adsr.attack; break;
+                        case 3: val = op->adsr.decay; break;
+                        case 4: val = op->adsr.sustain; break;
+                        default: val = op->adsr.release; break;
+                    }
+                    fprintf(f, "%s%d", o ? "," : "", val);
+                }
+                fprintf(f, "}");
+            }
+            fprintf(f, "};\n");
+        }
+        int v[BIRB_MAX_INSTRUMENTS];
+        for (int k = 0; k < NI; k++) {
+            birb_instrument *in = &song->instruments[row[k]];
+            v[k] = in->synth_type == SYNTH_FM ? in->fm.feedback : 0;
+        }
+        lk_tab(f, "i32", "FFB", NI, v);
+        for (int k = 0; k < NI; k++) {
+            birb_instrument *in = &song->instruments[row[k]];
+            v[k] = in->synth_type == SYNTH_FM ? in->fm.mod_index : 64;
+        }
+        lk_tab(f, "i32", "FMI", NI, v);
+        if (u_fm4 && u_fm2) {
+            for (int k = 0; k < NI; k++) {
+                birb_instrument *in = &song->instruments[row[k]];
+                v[k] = (in->synth_type == SYNTH_FM && in->fm.num_ops) ? in->fm.num_ops : 2;
+            }
+            lk_tab(f, "u8", "FNO", NI, v);
+        }
+        int n_alg = 0;
+        for (int a = 0; a < 8; a++) if (fm_mask & (1 << a)) n_alg++;
+        if (u_fm4 && n_alg > 1) {
+            for (int k = 0; k < NI; k++) {
+                birb_instrument *in = &song->instruments[row[k]];
+                v[k] = in->synth_type == SYNTH_FM ? (in->fm.algorithm & 7) : 0;
+            }
+            lk_tab(f, "u8", "FAL", NI, v);
+        }
+    }
+
+    /* ---- drum ---- */
+    if (u_drum) {
+        const char *dn[5] = { "DT", "DTU", "DDC", "DTO", "DSN" };
+        int v[BIRB_MAX_INSTRUMENTS];
+        for (int a = 0; a < 5; a++) {
+            for (int k = 0; k < NI; k++) {
+                birb_instrument *in = &song->instruments[row[k]];
+                int val = 0;
+                if (in->synth_type == SYNTH_DRUM) switch (a) {
+                    case 0: val = in->drum_type & 7; break;
+                    case 1: val = (signed char)in->drum_tune; break;
+                    case 2: val = in->drum_decay; break;
+                    case 3: val = in->drum_tone; break;
+                    default: val = in->drum_snap; break;
+                }
+                v[k] = val;
+            }
+            lk_tab(f, "i32", dn[a], NI, v);
+        }
+    }
+
+    /* ---- formant ---- */
+    if (u_fmt) {
+        fprintf(f, "static const i32 FCO[NI][2][9]={");
+        for (int k = 0; k < NI; k++) {
+            birb_instrument *in = &song->instruments[row[k]];
+            int32_t cf[2][3][3];
+            double q = 2.0 + (in->formant_resonance / 255.0) * 30.0;
+            if (in->synth_type == SYNTH_FORMANT) {
+                bc_formant_coeffs(in->formant_vowel_a, q, cf[0]);
+                bc_formant_coeffs(in->formant_vowel_b, q, cf[1]);
+            } else {
+                for (int a = 0; a < 2; a++) for (int i = 0; i < 3; i++)
+                    for (int j = 0; j < 3; j++) cf[a][i][j] = 0;
+            }
+            fprintf(f, "%s{", k ? "," : "");
+            for (int a = 0; a < 2; a++) {
+                fprintf(f, "%s{", a ? "," : "");
+                for (int i = 0; i < 3; i++)
+                    for (int j = 0; j < 3; j++)
+                        fprintf(f, "%s%d", (i || j) ? "," : "", (int)cf[a][i][j]);
+                fprintf(f, "}");
+            }
+            fprintf(f, "}");
+        }
+        fprintf(f, "};\n");
+        const char *fn2[4] = { "FTSW", "FTDU", "FTSS", "FTRS" };
+        int v[BIRB_MAX_INSTRUMENTS];
+        for (int a = 0; a < 4; a++) {
+            for (int k = 0; k < NI; k++) {
+                birb_instrument *in = &song->instruments[row[k]];
+                int val = 0;
+                if (in->synth_type == SYNTH_FORMANT) switch (a) {
+                    case 0: val = in->formant_source_wave; break;
+                    case 1: val = in->formant_duty & 3; break;
+                    case 2: val = in->formant_sweep_speed; break;
+                    default: val = in->formant_resonance; break;
+                }
+                v[k] = val;
+            }
+            lk_tab(f, "i32", fn2[a], NI, v);
+        }
+    }
+
+    /* ---- samples ---- */
+    if (u_smp) {
+        fprintf(f, "static const i16 SPOOL[]={");
+        for (uint32_t k = 0; k < song->sample_pool_used; k++)
+            fprintf(f, "%s%d", k ? "," : "", (int)song->sample_pool[k]);
+        if (!song->sample_pool_used) fprintf(f, "0");
+        fprintf(f, "};\n");
+        const char *sn[5] = { "SOFF", "SLEN", "SLS", "SLE", "SBN" };
+        for (int a = 0; a < 5; a++) {
+            fprintf(f, "static const i32 %s[]={", sn[a]);
+            for (int i = 0; i < song->num_samples; i++) {
+                birb_sample_meta *m = &song->samples[i];
+                long val = a == 0 ? (long)m->offset : a == 1 ? (long)m->length
+                         : a == 2 ? (long)(int32_t)m->loop_start
+                         : a == 3 ? (long)m->loop_end : (long)m->base_note;
+                fprintf(f, "%s%ld", i ? "," : "", val);
+            }
+            if (!song->num_samples) fprintf(f, "0");
+            fprintf(f, "};\n");
+        }
+    }
+
+    /* ---- event list ---- */
+    const int ev_w = 5 + (ev_fx ? 2 : 0);
+    fprintf(f, "static const u16 EV[]={");
+    { int prev = 0;
+      for (int k = 0; k < bc_nev; k++) {
+        int ii = bc_ev[k].ins;
+        int sl = (ii >= 0 && ii < BIRB_MAX_INSTRUMENTS && slot[ii] >= 0) ? slot[ii] : 0;
+        fprintf(f, "%s%d,%d,%d,%d,%d", k ? "," : "",
+                bc_ev[k].t - prev, bc_ev[k].c, bc_ev[k].n, bc_ev[k].rv, sl);
+        if (ev_fx) fprintf(f, ",%d,%d", bc_ev[k].fx, bc_ev[k].pm);
+        prev = bc_ev[k].t;
+      } }
+    fprintf(f, "};\n#define NEV %d\n", bc_nev * ev_w);
+
+    /* ---- shared helpers ---- */
+    fprintf(f,
+        "static const i32 BF[12]={6221,6591,6983,7398,7838,8304,8797,9321,9875,"
+        "10462,11084,11743};\n"
+        "static i32 nf(i32 n){ if(n<0)n=0; if(n>95)n=95;\n"
+        " return ((BF[n%%12]<<(n/12))+128)>>8; }\n");
+    if (u_fm || drum_lfo || w_used[4])
+        fprintf(f,
+            "static float sa_(i32 ph){ i32 p=((ph%%F)+F)%%F; i32 ng=p>=F/2; i32 t=ng?p-F/2:p;\n"
+            " if(t>F/4) t=F/2-t; float x=(float)t/F*4.f; if(x>1.f)x=1.f; float x2=x*x;\n"
+            " float y=x*(1.5707288f-x2*(0.6432292f-x2*0.0727778f)); if(y>1.f)y=1.f;\n"
+            " return ng?-y:y; }\n");
+    if (u_lfo)
+        fprintf(f,
+            "static i32 LT(i32 p){ p&=65535; i32 t=p<32768?p:65536-p;\n"
+            " return ((t<<2)-65536)>>7; }\n");
+    if (master || u_drive)
+        fprintf(f,
+            "static float SS(float x){ if(x<-3.f)x=-3.f; else if(x>3.f)x=3.f;\n"
+            " float x2=x*x; return x*(27.f+x2)/(27.f+9.f*x2); }\n");
+
+    /* ---- state ---- */
+    bc_st(f, "float ph[N],fq[N],ev_[N];", "ph,fq,ev_");
+    bc_st(f, "i32 bs[N],st[N],rv[N];", "bs,st,rv");
+    bc_st(f, "u8 CI[N];", "CI");
+    if (u_pe)    bc_st(f, "i32 pet[N];", "pet");
+    if (u_slide) bc_st(f, "i32 sl[N];", "sl");
+    if (u_porta) bc_st(f, "i32 pt[N],ps[N];", "pt,ps");
+    if (u_arp)   bc_st(f, "i32 a1[N],a2[N],at[N],bn[N];", "a1,a2,at,bn");
+    if (u_vib)   bc_st(f, "i32 vp[N],vs[N],vd[N];", "vp,vs,vd");
+    if (u_trem)  bc_st(f, "i32 tp[N],ts[N],td[N],tm[N];", "tp,ts,td,tm");
+    if (w_used[3]) bc_st(f, "i32 lh[N],lj[N],lm[N];", "lh,lj,lm");
+    if (u_fm) {
+        char d1[128], d2[128];
+        snprintf(d1, sizeof d1, "i32 fp[N][%d],ff[N][%d],fst[N][%d];", NO, NO, NO);
+        snprintf(d2, sizeof d2, "float fe[N][%d],fpv[N];", NO);
+        bc_st(f, d1, "fp,ff,fst"); bc_st(f, d2, "fe,fpv");
+    }
+    if (u_ks) {
+        bc_st(f, "i16 kb[N][1024];", "kb");
+        bc_st(f, "i32 kl[N],kp[N],kg[N];", "kl,kp,kg");
+        fprintf(f,
+            "static const i32 KQ[33]={657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398};\n"
+            "static i32 KG(i32 d,i32 l){ i32 i=d>>3,fr=d&7,q=KQ[i];\n"
+            " q+=((KQ[i+1]-q)*fr)>>3; i32 a=(i32)(((long long)q*l)>>8);\n"
+            " return a>=65535?0:65535-a; }\n");
+    }
+    if (u_smp) bc_st(f, "i32 sp_[N],ss_[N],si_[N],sa_on[N];", "sp_,ss_,si_,sa_on");
+    if (u_fmt) {
+        bc_st(f, "i32 ftz1[N][3],ftz2[N][3],ftb0[N][3],fta1[N][3],fta2[N][3];",
+                 "ftz1,ftz2,ftb0,fta1,fta2");
+        bc_st(f, "i32 ftlf[N],ftsp[N],ftdr[N],ftrc[N],CUv[N];",
+                 "ftlf,ftsp,ftdr,ftrc,CUv");
+        fprintf(f,
+            "static void FI(i32 c){ i32 I=CI[c], t=ftsp[c], o=255-t;\n"
+            " for(i32 i=0;i<3;i++){\n"
+            "  ftb0[c][i]=(FCO[I][0][i*3+0]*o+FCO[I][1][i*3+0]*t)/255;\n"
+            "  fta1[c][i]=(FCO[I][0][i*3+1]*o+FCO[I][1][i*3+1]*t)/255;\n"
+            "  fta2[c][i]=(FCO[I][0][i*3+2]*o+FCO[I][1][i*3+2]*t)/255; } }\n");
+    }
+    if (u_drum) {
+        bc_st(f, "i32 dal[N],dor[N],dp2[N],dnz[N],dpe[N],dpt[N],drt[N],dsn[N],"
+                 "dclk[N],dz1[N],dlf[N],dttl[N],dmix[N],dstg[N],dstt[N],dbl[N];",
+                 "dal,dor,dp2,dnz,dpe,dpt,drt,dsn,dclk,dz1,dlf,dttl,dmix,dstg,dstt,dbl");
+        fprintf(f,
+            "static i32 dlfn(i32 c){ i32 b=(dlf[c]^(dlf[c]>>1))&1;\n"
+            "  dlf[c]=((dlf[c]>>1)|(b<<14))&0xFFFF; if(!dlf[c]) dlf[c]=0x7FFF; return dlf[c]; }\n");
+        if (drum_mask & 1)
+            fprintf(f,
+                "static const i32 KSW[33]={65518,65516,65512,65509,65505,65500,65495,65489,65482,65474,65465,65454,65442,65428,65412,65393,65372,65348,65320,65287,65251,65208,65160,65104,65040,64966,64882,64785,64674,64546,64400,64233,64067};\n"
+                "static i32 KC(i32 t){ i32 i=t>>3,fr=t&7,c=KSW[i]; return c+(((KSW[i+1]-c)*fr)>>3); }\n");
+        if (drum_mask & 2)
+            fprintf(f,
+                "static const i32 SHP[33]={1386,1545,1722,1920,2139,2383,2655,2956,3291,3663,4076,4533,5039,5600,6219,6903,7657,8487,9400,10401,11498,12697,14004,15424,16964,18627,20416,22332,24376,26543,28828,31221,33392};\n"
+                "static i32 SC(i32 t){ i32 i=t>>3,fr=t&7,c=SHP[i]; return c+(((SHP[i+1]-c)*fr)>>3); }\n");
+    }
+    if (u_rev) {
+        bc_st(f, "float rc0[1116],rc1[1188],rc2[1277],rc3[1356],rcl[4];",
+                 "rc0,rc1,rc2,rc3,rcl");
+        bc_st(f, "float ra0[556],ra1[441];", "ra0,ra1");
+        bc_st(f, "i32 rcp[4],rap[2];", "rcp,rap");
+        double size = song->rev_size / 255.0, damp = song->rev_damp / 255.0;
+        double wet = song->rev_wet / 255.0;
+        double fb = 0.7 + 0.28 * size, dc = 0.4 * damp;
+        fprintf(f,
+            "static float *const rcb[4]={rc0,rc1,rc2,rc3};\n"
+            "static const i32 rcn[4]={1116,1188,1277,1356};\n"
+            "static float *const rab[2]={ra0,ra1};\n"
+            "static const i32 ran[2]={556,441};\n"
+            "static float rev_(float x){ float o=0.f;\n"
+            " for(i32 k=0;k<4;k++){ i32 L=rcn[k],pp=rcp[k]; float y=rcb[k][pp];\n"
+            "  rcl[k]=y*%.6ff+rcl[k]*%.6ff; rcb[k][pp]=x+rcl[k]*%.6ff;\n"
+            "  rcp[k]=(pp+1<L)?pp+1:0; o+=y; }\n"
+            " o*=%.6ff;\n"
+            " for(i32 k=0;k<2;k++){ i32 L=ran[k],pp=rap[k]; float y=rab[k][pp];\n"
+            "  float ou=-o+y; rab[k][pp]=o+y*0.5f;\n"
+            "  rap[k]=(pp+1<L)?pp+1:0; o=ou; }\n"
+            " return o*%.6ff; }\n",
+            1.0 - dc, dc, fb, (1.0 - fb) * 5.5, wet);
+    }
+    if (master) bc_st(f, "float LE;", "LE");
+    if (u_duck) {
+        bc_st(f, "float DE;", "DE");
+        fprintf(f, "#define DR %.6ff\n",
+                1.0 - 1.0 / (44100.0 * ((song->duck_release ? song->duck_release : 120) * 0.001)));
+    }
+    bc_st(f, "i32 ei,tk,et,tc;", "ei,tk,et,tc");
+    fprintf(f,
+        "static i16 out[4096];\n"
+        "i16 *outPtr(void){ return out; }\n"
+        "u32 getOutputBuf(void){ return (u32)(unsigned long)out; }\n"
+        "i32 getLength(void){ return (i32)TOTAL; }\n");
+
+    /* ---- trigger ---- */
+    fprintf(f,
+        "static void trig(i32 c,i32 n,i32 I){ CI[c]=(u8)I; i32 s=n-2;\n"
+        " bs[c]=nf(s); ph[c]=0.f; rv[c]=255;\n");
+    if (u_arp)   fprintf(f, " bn[c]=s; a1[c]=IA1[I]; a2[c]=IA2[I]; at[c]=0;\n");
+    if (u_slide) fprintf(f, " sl[c]=0;\n");
+    if (u_porta) fprintf(f, " ps[c]=0;\n");
+    fprintf(f,
+        " if(CA[I]==0){ ev_[c]=(float)F; st[c]=2; } else { ev_[c]=0.f; st[c]=1; }\n");
+    if (u_pe)      fprintf(f, " pet[c]=CPL[I];\n");
+    if (w_used[3]) fprintf(f, " if(CW[I]==3){ lh[c]=0x7FFF; lm[c]=0; lj[c]=(256>>(s/12))?(256>>(s/12)):1; }\n");
+    if (u_smp)
+        fprintf(f,
+            " sa_on[c]=0;\n"
+            " if(CW[I]==5){ i32 idx=CSI[I]; si_[c]=idx; sp_[c]=0; sa_on[c]=1;\n"
+            "  i32 bf2=nf(SBN[idx]);\n"
+            "  ss_[c] = bf2>0 ? (i32)(((long long)bs[c]*65536 + bf2/2)/bf2) : 65536; }\n");
+    if (u_fmt)
+        fprintf(f,
+            " if(CW[I]==9){ ftlf[c]=(0x7FFF^((s*0x2BCD)&0xFFFF))&0xFFFF; if(!ftlf[c]) ftlf[c]=0x7FFF;\n"
+            "  ftsp[c]=0; ftdr[c]=1; ftrc[c]=0;\n"
+            "  for(i32 i=0;i<3;i++){ ftz1[c][i]=0; ftz2[c][i]=0; }\n"
+            "  { static const i32 dvt[4]={F/8,F/4,F/2,F*3/4}; CUv[c]=dvt[FTDU[I]&3]; }\n"
+            "  FI(c); }\n");
+    if (u_ks)
+        fprintf(f,
+            " if(CW[I]==7){ i32 ln = bs[c]>0 ? (F/bs[c]) : 0;\n"
+            "  if(ln<4) ln=4; if(ln>1024) ln=1024; kl[c]=ln; kp[c]=0; kg[c]=KG(KD[I],ln);\n"
+            "  i32 lfv=(0x7FFF^((s*0x1D79)&0xFFFF))&0xFFFF; if(!lfv) lfv=0x7FFF;\n"
+            "  for(i32 ki=0;ki<ln;ki++){ i32 kbv=(lfv^(lfv>>1))&1;\n"
+            "   lfv=((lfv>>1)|(kbv<<14))&0xFFFF; kb[c][ki]=(lfv&1)?32767:-32767; } }\n");
+    if (u_drum) {
+        fprintf(f,
+            " if(CW[I]==8){ i32 dt=DT[I], al=dt==4?0:dt==5?2:dt, tn=DTU[I];\n"
+            "  i32 dec=DDC[I], tone=DTO[I], snp=DSN[I], dn=s+tn;\n"
+            "  if(dn<0)dn=0; if(dn>95)dn=95; i32 df=nf(dn), tt=0;\n"
+            "  dal[c]=al; dor[c]=dt; dp2[c]=0; dz1[c]=0;\n"
+            "  dlf[c]=(0x7FFF^((s*0x3D7F)&0xFFFF))&0xFFFF; if(!dlf[c]) dlf[c]=0x7FFF;\n");
+        if (drum_mask & 1)
+            fprintf(f,
+                "  if(al==0){ dpe[c]=(df<<3)<<8; dpt[c]=(df>>1)<<8; drt[c]=KC(tone);\n"
+                "   dsn[c]=snp; dclk[c]=384; tt=dec*200+1024; if(dt==4) tt*=2; }\n");
+        if (drum_mask & 2)
+            fprintf(f,
+                "  %sif(al==1){ bs[c]=df>0?df:nf(26); dmix[c]=snp; dpt[c]=SC(tone);\n"
+                "   dpe[c]=F; drt[c]=65460; dz1[c]=0; tt=dec*120+1024; dp2[c]=F;\n"
+                "   i32 q=301466/(tt?tt:1); dnz[c]=F-(q<4096?q:4096); }\n",
+                (drum_mask & 1) ? "else " : "");
+        if (drum_mask & 4)
+            fprintf(f,
+                "  %sif(al==2){ i32 hp=(i32)(snp*(F*15.0f/16.0f/255.0f)); if(hp<(F>>4)) hp=F>>4;\n"
+                "   dpt[c]=hp; dz1[c]=0; tt=dec*180+1024; if(dt==5) tt=90000+dec*400; }\n",
+                (drum_mask & 3) ? "else " : "");
+        if (drum_mask & 8)
+            fprintf(f,
+                "  %s{ dbl[c]=80+(snp>>1); dstg[c]=0; dstt[c]=dbl[c]; tt=dec*160+2048; }\n",
+                (drum_mask & 7) ? "else " : "");
+        fprintf(f, "  if(tt>0xFFFFFF) tt=0xFFFFFF; dttl[c]=tt; }\n");
+    }
+    if (u_fm)
+        fprintf(f,
+            " if(CW[I]==6){ fpv[c]=0.f;\n"
+            "  for(i32 k=0;k<%d;k++){ fp[c][k]=0; ff[c][k]=(i32)((float)bs[c]*FR[I][k]/16.f+0.5f);\n"
+            "   if(FA[I][k]==0){ fe[c][k]=(float)F; fst[c][k]=2; } else { fe[c][k]=0.f; fst[c][k]=1; } } }\n",
+            NO);
+    fprintf(f, "}\n");
+
+    /* ---- per-tick ---- */
+    { char fxdecl[64];
+      if (ev_fx) snprintf(fxdecl, sizeof fxdecl, " i32 fx=EV[ei+5],pm=EV[ei+6];");
+      else fxdecl[0] = 0;
+      fprintf(f,
+        "static void tickf(void){\n"
+        " while(ei<NEV && et+(i32)EV[ei]<=tk){ et+=(i32)EV[ei];\n"
+        "  i32 c=EV[ei+1],n=EV[ei+2],v=EV[ei+3],I=EV[ei+4];%s ei+=%d;\n",
+        fxdecl, ev_w);
+      /* a tone porta with a note retunes the target instead of retriggering */
+      if (u_porta)
+          fprintf(f, "  if(fx==5&&n>=2&&n<=97){ pt[c]=nf(n-2); }\n  else ");
+      else
+          fprintf(f, "  ");
+      fprintf(f, "if(n==1) st[c]=4;\n");
+      if (u_cut)
+          fprintf(f, "  else if(n==%d){ ev_[c]=0.f; st[c]=0; }\n", BC_N_CUT);
+      if (u_retrig) {
+          fprintf(f, "  else if(n==%d){ ph[c]=0.f; ev_[c]=0.f; st[c]=1;", BC_N_RETRIG);
+          if (w_used[3]) fprintf(f, " if(CW[CI[c]]>=3){ lh[c]=0x7FFF; lm[c]=0; }");
+          fprintf(f, " }\n");
+      }
+      fprintf(f, "  else if(n>=2&&n<=97) trig(c,n,I);\n  if(v) rv[c]=v;\n");
+      if (u_arp)   fprintf(f, "  if(fx==1){ a1[c]=pm>>4; a2[c]=pm&15; at[c]=0; }\n");
+      if (u_slide) fprintf(f, "  if(fx==2) sl[c]=pm<<2; else if(fx==3) sl[c]=-(pm<<2);\n");
+      if (u_vib)   fprintf(f, "  if(fx==4){ vs[c]=F/64*(pm>>4); vd[c]=(pm&15)<<4; }\n");
+      if (u_porta) fprintf(f, "  if(fx==5) ps[c]=pm<<2;\n");
+      if (u_trem)  fprintf(f, "  if(fx==8){ ts[c]=F/64*(pm>>4); td[c]=(pm&15)<<4; }\n");
+      if (u_soff)  fprintf(f, "  if(fx==9&&CW[CI[c]]==5) sp_[c]=(pm<<8)<<16;\n");
+      if (u_speed) fprintf(f, "  if(fx==15&&pm>=0x20) spt=44100*5/(pm*2);\n");
+      fprintf(f, " }\n tk++;\n for(i32 c=0;c<N;c++){ i32 I=CI[c];\n"); }
+    if (u_pe)
+        fprintf(f, "  if(pet[c]){ bs[c]+=(i32)CPE[I]<<2; if(bs[c]<1)bs[c]=1; pet[c]--; }\n");
+    if (u_slide)
+        fprintf(f, "  if(sl[c]){ bs[c]+=sl[c]; if(bs[c]<1)bs[c]=1; }\n");
+    if (u_porta)
+        fprintf(f,
+            "  if(pt[c]&&ps[c]){ if(bs[c]<pt[c]){ bs[c]+=ps[c]; if(bs[c]>pt[c]) bs[c]=pt[c]; }\n"
+            "   else if(bs[c]>pt[c]){ bs[c]-=ps[c]; if(bs[c]<pt[c]) bs[c]=pt[c]; } }\n");
+    if (u_arp)
+        fprintf(f,
+            "  if(a1[c]|a2[c]){ i32 t3=at[c]%%3, nn=bn[c];\n"
+            "   if(t3==1) nn+=a1[c]; else if(t3==2) nn+=a2[c];\n"
+            "   fq[c]=(float)nf(nn); at[c]++; } else fq[c]=(float)bs[c];\n");
+    else
+        fprintf(f, "  fq[c]=(float)bs[c];\n");
+    if (u_vib)
+        fprintf(f,
+            "  if(vd[c]){ fq[c]+=(float)(LT(vp[c])*vd[c])/(float)F; vp[c]+=vs[c]; }\n");
+    if (u_trem)
+        fprintf(f,
+            "  if(td[c]){ tm[c]=(LT(tp[c])*td[c])>>1; tp[c]+=ts[c]; } else tm[c]=0;\n");
+    fprintf(f,
+        "  i32 e=st[c];\n"
+        "  if(e==1){ ev_[c]+=(float)F/(CA[I]+1); if(ev_[c]>=F){ ev_[c]=(float)F; st[c]=2; } }\n"
+        "  else if(e==2){ float g=(float)F*CS[I]/255; ev_[c]-=((float)F-g)/(CD[I]+1); if(ev_[c]<=g){ ev_[c]=g; st[c]=3; } }\n"
+        "  else if(e==4){ ev_[c]-=ev_[c]/(CR[I]+1); if(ev_[c]<64){ ev_[c]=0.f; st[c]=0; } }\n");
+    if (u_fm)
+        fprintf(f,
+            "  if(CW[I]==6) for(i32 k=0;k<%d;k++){ ff[c][k]=(i32)(fq[c]*FR[I][k]/16.f+0.5f);\n"
+            "   i32 t2=fst[c][k]; float en=fe[c][k];\n"
+            "   if(t2==1){ en+=(float)F/(FA[I][k]+1); if(en>=F){ en=(float)F; t2=2; } }\n"
+            "   else if(t2==2){ float g=(float)F*FS[I][k]/255; en-=((float)F-g)/(FD[I][k]+1); if(en<=g){ en=g; t2=3; } }\n"
+            "   else if(t2==4){ en-=en/(FRl[I][k]+1); if(en<64){ en=0.f; t2=0; } }\n"
+            "   fst[c][k]=t2; fe[c][k]=en; }\n", NO);
+    fprintf(f, " }\n}\n");
+
+    /* ---- render ---- */
+    fprintf(f,
+        "void render(i32 n){\n"
+        " for(i32 i=0;i<n;i++){\n"
+        "  if(tc<=0){ tickf(); tc=spt; }\n"
+        "  tc--;\n"
+        "  float v=0.f%s%s;\n"
+        "  for(i32 c=0;c<N;c++){\n"
+        "   if(!st[c] && ev_[c]==0.f%s) continue;\n"
+        "   i32 I=CI[c]; float h=ph[c], s=0.f;\n",
+        u_rev ? ",ri=0.f" : "",
+        u_duck ? ",DI=0.f,DN=DE" : "",
+        u_drum ? " && !dttl[c]" : "");
+    { int first = 1;
+      if (u_smp) {
+        fprintf(f,
+            "   %s(CW[I]==5){ if(sa_on[c]){ i32 idx=si_[c], pos=(i32)((u32)sp_[c]>>16);\n"
+            "    if(pos>=SLEN[idx]){\n"
+            "     if(SLS[idx]>=0 && SLE[idx]>SLS[idx]){ i32 ll=SLE[idx]-SLS[idx];\n"
+            "      pos=SLS[idx]+((pos-SLS[idx])%%ll); sp_[c]=(pos<<16)|(sp_[c]&0xFFFF); }\n"
+            "     else { sa_on[c]=0; s=0.f; } }\n"
+            "    if(sa_on[c]){ s=(float)SPOOL[SOFF[idx]+pos]/32768.f;\n"
+            "     sp_[c]=(i32)((u32)sp_[c]+(u32)ss_[c]); } } }\n", first?"if":"else if");
+        first = 0;
+      }
+      if (u_fmt) {
+        fprintf(f,
+            "   %s(CW[I]==9){ i32 src;\n"
+            "    if(FTSW[I]==3){ i32 fv=ftlf[c], fb2=(fv^(fv>>1))&1;\n"
+            "     fv=((fv>>1)|(fb2<<14))&0xFFFF; if(!fv) fv=0x7FFF; ftlf[c]=fv;\n"
+            "     src=(fv&1)?16383:-16383; }\n"
+            "    else if(FTSW[I]==0){ src = h<(float)CUv[c] ? 16383 : -16383; }\n"
+            "    else { src=(i32)((h*2.f-(float)F)*32767.f/(float)F); }\n"
+            "    i32 sm=0;\n"
+            "    for(i32 fi=0;fi<3;fi++){\n"
+            "     i32 b0=ftb0[c][fi],a1=fta1[c][fi],a2=fta2[c][fi];\n"
+            "     i32 yy=(i32)(((long long)b0*src)/65536)+ftz1[c][fi];\n"
+            "     ftz1[c][fi]=(-(i32)(((long long)a1*yy)/65536))+ftz2[c][fi];\n"
+            "     ftz2[c][fi]=(-(i32)(((long long)b0*src)/65536))-(i32)(((long long)a2*yy)/65536);\n"
+            "     sm+=yy; }\n"
+            "    if(sm>32767) sm=32767; else if(sm<-32767) sm=-32767;\n"
+            "    s=(float)sm/32768.f;\n"
+            "    if(FTSS[I]){ ftrc[c]=(ftrc[c]+1)&0xFF;\n"
+            "     if((ftrc[c]&0x1F)==0){ i32 stp=FTSS[I]>>3; if(!stp) stp=1;\n"
+            "      i32 sp=ftsp[c]+ftdr[c]*stp;\n"
+            "      if(sp>=255){ sp=255; ftdr[c]=-1; } else if(sp<=0){ sp=0; ftdr[c]=1; }\n"
+            "      ftsp[c]=sp; FI(c); } } }\n", first?"if":"else if");
+        first = 0;
+      }
+      if (u_ks) {
+        fprintf(f,
+            "   %s(CW[I]==7){ if(kl[c]<2) s=0.f; else {\n"
+            "    i32 kpp=kp[c], knx=kpp+1; if(knx>=kl[c]) knx=0;\n"
+            "    i32 kcur=kb[c][kpp];\n"
+            "    kb[c][kpp]=(i16)((i32)(((kcur+kb[c][knx])>>1)*kg[c])>>16);\n"
+            "    kp[c]=knx; s=(float)kcur/32768.f; } }\n", first?"if":"else if");
+        first = 0;
+      }
+      if (u_drum) {
+        fprintf(f,
+            "   %s(CW[I]==8){ if(dttl[c]<=0){ s=0.f; ev_[c]=0.f; st[c]=0; } else { dttl[c]--;\n"
+            "    i32 o_=0;\n", first?"if":"else if");
+        if (drum_mask & 1)
+            fprintf(f,
+                "    if(dal[c]==0){ i32 gp=dpe[c]-dpt[c];\n"
+                "     if(gp>0) dpe[c]=dpt[c]+(i32)(((long long)gp*drt[c])>>16);\n"
+                "     ph[c]+=(float)(dpe[c]>>8); while(ph[c]>=(float)F) ph[c]-=(float)F;\n"
+                "     float tri = ph[c]<(float)F/2 ? (ph[c]*4.f-(float)F) : ((float)F*3.f-ph[c]*4.f);\n"
+                "     o_=(i32)(tri*28000.f/(float)F);\n"
+                "     if(dclk[c]>0){ i32 nn=dlfn(c), pk=dsn[c]*128, ap=(i32)(((long long)pk*dclk[c])/384);\n"
+                "      o_ += (nn&1)?ap:-ap; dclk[c]--; } }\n");
+        if (drum_mask & 2)
+            fprintf(f,
+                "    %sif(dal[c]==1){ i32 nn=dlfn(c), sr_=(nn&1)?26000:-26000, y_=sr_-dz1[c];\n"
+                "     dz1[c] += (i32)((i32)(u32)((long long)y_*dpt[c])>>16);\n"
+                "     i32 noi=(i32)(((long long)y_*dp2[c])>>16);\n"
+                "     dp2[c]=(i32)(((long long)dp2[c]*dnz[c])>>16);\n"
+                "     ph[c]+=(float)bs[c]; while(ph[c]>=(float)F) ph[c]-=(float)F;\n"
+                "     float tr_ = ph[c]<(float)F/2 ? (ph[c]*4.f-(float)F) : ((float)F*3.f-ph[c]*4.f);\n"
+                "     i32 bd=(i32)((i32)(u32)((long long)(i32)tr_*22000)>>16);\n"
+                "     bd=(i32)(((long long)bd*dpe[c])>>16);\n"
+                "     dpe[c]=(i32)(((long long)dpe[c]*drt[c])>>16);\n"
+                "     i32 mxB=dmix[c], mxN=255-mxB;\n"
+                "     o_=(i32)(((long long)noi*mxN+(long long)bd*mxB)/255); }\n",
+                (drum_mask & 1) ? "else " : "");
+        if (drum_mask & 4)
+            fprintf(f,
+                "    %sif(dal[c]==2){ i32 nn=dlfn(c), src2=(nn&1)?24000:-24000, yh=src2-dz1[c];\n"
+                "     dz1[c] += (i32)((i32)(u32)((long long)yh*dpt[c])>>16); o_=yh;\n"
+                "%s"
+                "    }\n",
+                (drum_mask & 3) ? "else " : "",
+                drum_lfo
+                  ? "     if(dor[c]==5){ float lo=sa_((dttl[c]<<3)&0xFFFF); o_=(i32)(o_*(1.f+lo*0.5f)); }\n"
+                  : "");
+        if (drum_mask & 8)
+            fprintf(f,
+                "    %s{ i32 amp=0;\n"
+                "     if(dstg[c]<3){ i32 bL=dbl[c]?dbl[c]:96, into=bL-dstt[c], hf=bL/2;\n"
+                "      i32 en2 = (into<hf) ? (into*256/hf) : ((bL-into)*256/hf);\n"
+                "      if(en2<0) en2=0; if(en2>256) en2=256;\n"
+                "      i32 nn=dlfn(c), sc=(nn&1)?26000:-26000; amp=(sc*en2)>>8; }\n"
+                "     else { i32 nn=dlfn(c); amp=(nn&1)?9000:-9000; }\n"
+                "     if(dstt[c]>0) dstt[c]--;\n"
+                "     else if(dstg[c]<3){ dstg[c]++; dstt[c]=(dstg[c]==3)?0xFFFF:(dbl[c]?dbl[c]:96); }\n"
+                "     o_=amp; }\n",
+                (drum_mask & 7) ? "else " : "");
+        fprintf(f,
+            "    s=(float)o_/32768.f; if(s>1.f)s=1.f; else if(s<-1.f)s=-1.f; } }\n");
+        first = 0;
+      }
+      if (u_fm) {
+        static const char *ALG[8] = {
+          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2]+(i32)s3)*l2; s1=sa_(fp[c][1]+(i32)s2)*l1; raw=sa_(fp[c][0]+(i32)(s1*mi)); sv=raw*l0/F;",
+          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2])*l2; s1=sa_(fp[c][1]+(i32)s3+(i32)s2)*l1; raw=sa_(fp[c][0]+(i32)(s1*mi)); sv=raw*l0/F;",
+          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2]+(i32)s3)*l2; s1=sa_(fp[c][1])*l1; raw=sa_(fp[c][0]+(i32)((s2+s1)*mi)); sv=raw*l0/F;",
+          "s3=sa_(fp[c][3]+fb)*l3; s1=sa_(fp[c][1]+(i32)s3)*l1; s2=sa_(fp[c][2])*l2; raw=sa_(fp[c][0]+(i32)((s1+s2)*mi)); sv=raw*l0/F;",
+          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2])*l2; s1=sa_(fp[c][1])*l1; raw=sa_(fp[c][0]+(i32)((s3+s2+s1)*mi)); sv=raw*l0/F;",
+          "s3=sa_(fp[c][3]+fb)*l3; s1=sa_(fp[c][1])*l1; { float r2=sa_(fp[c][2]+(i32)(s3*mi)); raw=sa_(fp[c][0]+(i32)(s1*mi)); sv=(r2*l2+raw*l0)/F*0.5f; }",
+          "s3=sa_(fp[c][3]+fb)*l3; { float r2=sa_(fp[c][2]+(i32)(s3*mi)),r1=sa_(fp[c][1]); raw=sa_(fp[c][0]); sv=(r2*l2+r1*l1+raw*l0)/F/3.f; }",
+          "{ float r3=sa_(fp[c][3]+fb),r2=sa_(fp[c][2]),r1=sa_(fp[c][1]); raw=sa_(fp[c][0]); sv=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25f; }",
+        };
+        int n_alg = 0, last = 0;
+        for (int a = 0; a < 8; a++) if (fm_mask & (1 << a)) { n_alg++; last = a; }
+        fprintf(f, "   %s(CW[I]==6){ float sv=0.f,raw=0.f;\n"
+                   "    float l0=fe[c][0]*FL[I][0]/F, l1=fe[c][1]*FL[I][1]/F;\n",
+                   first?"if":"else if");
+        if (u_fm4) fprintf(f, "    float l2=fe[c][2]*FL[I][2]/F, l3=fe[c][3]*FL[I][3]/F;\n");
+        fprintf(f, "    float mi=(float)FMI[I]/255.f, fb=FFB[I]?fpv[c]*FFB[I]/256.f:0.f;\n");
+        if (u_fm4) fprintf(f, "    float s1=0.f,s2=0.f,s3=0.f;\n");
+        if (u_fm4 && u_fm2) fprintf(f, "    if(FNO[I]>=4){\n");
+        if (u_fm4) {
+            if (n_alg <= 1) fprintf(f, "    %s\n", ALG[last]);
+            else {
+                fprintf(f, "    switch(FAL[I]&7){\n");
+                for (int a = 0; a < 8; a++) {
+                    if (!(fm_mask & (1 << a))) continue;
+                    if (a == last) fprintf(f, "     default: %s break;\n", ALG[a]);
+                    else           fprintf(f, "     case %d: %s break;\n", a, ALG[a]);
+                }
+                fprintf(f, "    }\n");
+            }
+        }
+        if (u_fm4 && u_fm2) fprintf(f, "    } else {\n");
+        if (u_fm2)
+            fprintf(f,
+                "    float mo=sa_(fp[c][1])*((float)FMI[I]*l1/255.f);\n"
+                "    if(FFB[I]) mo+=fpv[c]*FFB[I]/256.f;\n"
+                "    raw=sa_(fp[c][0]+(i32)mo); sv=raw*l0/F;\n");
+        if (u_fm4 && u_fm2) fprintf(f, "    }\n");
+        fprintf(f,
+            "    fpv[c]=raw*F;\n"
+            "    for(i32 k=0;k<%d;k++) fp[c][k]=(fp[c][k]+ff[c][k])%%F;\n"
+            "    s=sv; }\n", NO);
+        first = 0;
+      }
+      if (w_used[0]) { fprintf(f, "   %s(CW[I]==0){ s = h<(float)CU[I] ? .5f : -.5f; }\n", first?"if":"else if"); first=0; }
+      if (w_used[1]) { fprintf(f, "   %s(CW[I]==1){ s = h<(float)F/2 ? (h*4.f-(float)F)/F : ((float)F*3.f-h*4.f)/F; }\n", first?"if":"else if"); first=0; }
+      if (w_used[2]) { fprintf(f, "   %s(CW[I]==2){ s = (h*2.f-(float)F)/F; }\n", first?"if":"else if"); first=0; }
+      if (w_used[4]) { fprintf(f, "   %s(CW[I]==4){ s = sa_((i32)h); }\n", first?"if":"else if"); first=0; }
+      if (w_used[3]) {
+        fprintf(f, "   %s{ lm[c]++; if(lm[c]>=lj[c]){ lm[c]=0; i32 b=(lh[c]^(lh[c]>>1))&1; lh[c]=(lh[c]>>1)|(b<<14); }\n"
+                   "     s = (lh[c]&1) ? .5f : -.5f; }\n", first?"" : "else ");
+        first=0;
+      }
+      if (first) fprintf(f, "   s=0.f;\n"); }
+
+    if (u_drive)
+        fprintf(f, "   if(DVP[I]>1.f) s=SS(s*DVP[I])*DVN[I];\n");
+    fprintf(f, "   float en=ev_[c];\n");
+    if (u_trem)
+        fprintf(f,
+            "   if(tm[c]){ en+=en*tm[c]/(float)F; if(en<0.f)en=0.f; if(en>(float)F)en=(float)F; }\n");
+    fprintf(f,
+        "   float cv = s*en*CV[I]*rv[c]/F/255.f/255.f*TG[CW[I]];\n");
+    if (u_duck)
+        fprintf(f,
+            "   if(DS[I]) DI += (cv<0.f?-cv:cv)*DS[I]/255.f;\n"
+            "   if(DA[I]&&DN>0.f){ float dg=1.f-DN*DA[I]/255.f; cv*= dg>0.f?dg:0.f; }\n");
+    fprintf(f, "   v += cv;\n");
+    if (u_rev) fprintf(f, "   if(RS[I]) ri += cv*RS[I]/255.f;\n");
+    { char guard[96]; guard[0] = 0;
+      int n = 0;
+      if (u_fm)   { strcat(guard, n++ ? "&&CW[I]!=6" : "CW[I]!=6"); }
+      if (u_drum) { strcat(guard, n++ ? "&&CW[I]!=8" : "CW[I]!=8"); }
+      if (u_smp)  { strcat(guard, n++ ? "&&CW[I]!=5" : "CW[I]!=5"); }
+      if (n) fprintf(f, "   if(%s){ ph[c]+=fq[c]; if(ph[c]>=(float)F) ph[c]-=(float)F; }\n", guard);
+      else   fprintf(f, "   ph[c]+=fq[c]; if(ph[c]>=(float)F) ph[c]-=(float)F;\n"); }
+    fprintf(f, "  }\n");
+    if (u_rev)  fprintf(f, "  v += rev_(ri);\n");
+    if (u_duck) fprintf(f, "  { float dd=DI>1.f?1.f:DI; DE = dd>DE ? dd : dd+(DE-dd)*DR; }\n");
+    fprintf(f, "  v *= MG;\n");
+    if (master)
+        fprintf(f,
+            "  { float la=v<0.f?-v:v; LE = la>LE ? la : la+(LE-la)*MR;\n"
+            "    if(LE>MT) v*=MT/LE; v=SS(v)/MC; }\n");
+    else
+        fprintf(f, "  if(v>1.f) v=1.f; else if(v<-1.f) v=-1.f;\n");
+    fprintf(f,
+        "  out[i] = (i16)(v*32767.f);\n"
+        " }\n}\n");
+
+    bc_emit_dev(f);
     fclose(f);
     fprintf(stderr, "Wrote %s (%d channels, %d instrument rows, %d events, %ld samples)\n",
             filename, nch, NI, bc_nev, (long)bc_walk_T);
     if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
-    (void)w_used; (void)u_fm; (void)u_fm4; (void)u_fm2; (void)fm_mask;
-    (void)u_fmt; (void)u_drum; (void)drum_mask; (void)drum_lfo;
-    (void)u_vib; (void)u_trem; (void)u_porta; (void)u_soff; (void)u_speed;
-    (void)u_lfo; (void)u_retrig; (void)u_cut; (void)ev_fx; (void)u_slide;
     return 0;
 }
 
@@ -3165,6 +3769,7 @@ static void usage(const char *prog) {
     fprintf(stderr, "           --no-master        omit the JS master bus (smaller, CHANGES SOUND)\n");
     fprintf(stderr, "           --smol             smol birb: minimal export (smallest, CHANGES SOUND)\n");
     fprintf(stderr, "           --smol-c           emit a standalone C player with the song baked in\n");
+    fprintf(stderr, "           --locked-c         experimental: locked-down C player, full feature set\n");
 }
 
 int main(int argc, char **argv) {
@@ -3187,6 +3792,8 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--smol-c") == 0) {
             emit_smol_c = 1;
             birb_smol = 1;          /* the C player is the smol feature set */
+        } else if (strcmp(argv[i], "--locked-c") == 0) {
+            birb_locked = 1;
         } else if (strcmp(argv[i], "--js") == 0) {
             emit_js = 1;
         } else if (strcmp(argv[i], "--smol") == 0) {
@@ -3236,6 +3843,13 @@ int main(int argc, char **argv) {
     /* write JS (4K demo target) */
     if (emit_js) {
         if (write_js(js_name, &song) < 0) return 1;
+    }
+
+    /* experimental full-feature locked-down C player */
+    if (birb_locked) {
+        char c_name[512];
+        snprintf(c_name, sizeof c_name, "%s_locked.c", output_base);
+        if (write_locked_c(c_name, &song) < 0) return 1;
     }
 
     /* write the standalone C player (native / wasm 4K target) */
