@@ -1040,7 +1040,10 @@ static void emit_u8_array(FILE *f, const uint8_t *data, int len) {
  * run tpr), Bxx/Dxx are followed and never shipped, Fxx stays an event because it
  * retunes spt, and a volume cell that restates the channel's current value emits
  * nothing. Any divergence here shows up as an audible mismatch with the editor. */
-typedef struct { int t, c, n, rv, fx, pm, ins; } bc_event;
+/* t is the absolute tick, tpr the ticks-per-row in force at that row - the
+ * locked writer needs it to place the sub-row effects, which in a sequencer
+ * player compare against a tick-within-row counter that no longer exists. */
+typedef struct { int t, c, n, rv, fx, pm, ins, tpr; } bc_event;
 static bc_event *bc_ev = NULL;
 static int bc_nev = 0, bc_any_fx = 0;
 static long bc_walk_T = 0;
@@ -1072,6 +1075,7 @@ static void bc_emit_row(const birb_song *song, int nch, int eo, int er, long tk,
             bc_ev[bc_nev].n = n; bc_ev[bc_nev].rv = rv_out;
             bc_ev[bc_nev].fx = keep_fx; bc_ev[bc_nev].pm = keep_fx ? pm : 0;
             bc_ev[bc_nev].ins = (cell->instrument == 0xFF) ? -1 : cell->instrument;
+            bc_ev[bc_nev].tpr = st->tpr;
             if (keep_fx) bc_any_fx = 1;
             bc_nev++;
         }
@@ -1095,7 +1099,15 @@ static void bc_walk(const birb_song *song, int nch) {
     if (!bc_ev) { bc_walk_T = 0; return; }
 
     while (!done && guard++ < 200000) {
-        if (first) { first = 0; bc_emit_row(song, nch, op, cr, tk, &st); }
+        if (first) {
+            first = 0;
+            int n0 = bc_nev;
+            bc_emit_row(song, nch, op, cr, tk, &st);
+            /* row 0 is applied before ct is ever reset, so it runs one tick
+             * shorter than the rest; tpr is read after the row in case an Fxx
+             * on it retuned the span. */
+            for (int k = n0; k < bc_nev; k++) bc_ev[k].tpr = st.tpr - 1;
+        }
         ct++;
         if (ct >= st.tpr) {
             ct = 0;
@@ -1106,11 +1118,113 @@ static void bc_walk(const birb_song *song, int nch) {
                 if (!pl) pl = 16;
                 if (cr >= pl) { cr = 0; if (++op >= ol) { done = 1; op = 0; } }
             }
-            if (!done) bc_emit_row(song, nch, op, cr, tk, &st);
+            if (!done) {
+                int n0 = bc_nev;
+                bc_emit_row(song, nch, op, cr, tk, &st);
+                for (int k = n0; k < bc_nev; k++) bc_ev[k].tpr = st.tpr;
+            }
         }
         tk++; samples += st.spt;
     }
     bc_walk_T = samples;
+}
+
+/* ------------------------------------------------------------------
+ * Locked-player event expansion.
+ *
+ * A sequencer resolves EDx, ECx and Rxy against a tick-within-row counter.
+ * The locked player has no rows and no such counter, so they are resolved
+ * here into the event list instead, which costs events and no player code.
+ * Two note codes carry what a note number cannot: 254 restarts phase and
+ * envelope without retriggering the voice (what Rxy does), 255 cuts.
+ *
+ * The sticky instrument column is resolved at the same time, so a note-on
+ * names its parameter row outright and the player carries no fallback.
+ * ------------------------------------------------------------------ */
+#define BC_N_RETRIG 254
+#define BC_N_CUT    255
+
+static int bc_exp_cmp(const void *pa, const void *pb) {
+    int ia = *(const int *)pa, ib = *(const int *)pb;
+    if (bc_ev[ia].t != bc_ev[ib].t) return bc_ev[ia].t < bc_ev[ib].t ? -1 : 1;
+    return ia < ib ? -1 : (ia > ib);   /* ties keep the order the walk emitted */
+}
+
+static int bc_expand_locked(void) {
+    int cur[BIRB_NUM_CHANNELS];
+    for (int c = 0; c < BIRB_NUM_CHANNELS; c++) cur[c] = 0;
+    for (int k = 0; k < bc_nev; k++) {
+        int c = bc_ev[k].c;
+        if (c < 0 || c >= BIRB_NUM_CHANNELS) continue;
+        if (bc_ev[k].n >= 2 && bc_ev[k].ins >= 0) cur[c] = bc_ev[k].ins;
+        bc_ev[k].ins = cur[c];
+    }
+
+    int extra = 0;
+    for (int k = 0; k < bc_nev; k++) {
+        int span = bc_ev[k].tpr < 1 ? 1 : bc_ev[k].tpr;
+        if (bc_ev[k].fx == FX_EXTENDED) extra++;
+        else if (bc_ev[k].fx == FX_RETRIGGER && bc_ev[k].pm > 0)
+            extra += span / bc_ev[k].pm + 1;
+    }
+    if (extra) {
+        bc_event *g = (bc_event *)realloc(bc_ev, sizeof(bc_event) * (size_t)(bc_nev + extra));
+        if (!g) return -1;
+        bc_ev = g;
+    }
+
+    int n = bc_nev;
+    for (int k = 0; k < bc_nev; k++) {
+        bc_event *e = &bc_ev[k];
+        int span = e->tpr < 1 ? 1 : e->tpr;
+        if (e->fx == FX_EXTENDED && (e->pm >> 4) == 0xD) {
+            int d = e->pm & 15;
+            if (e->n >= 2) {
+                /* the row no longer triggers; a delay that cannot land inside
+                 * the row loses the note, which is what the runtime does when
+                 * the next row clears the pending delay. */
+                if (d > 0 && d < span) {
+                    bc_event dl = *e;
+                    dl.t = e->t + d; dl.rv = 0; dl.fx = 0; dl.pm = 0;
+                    bc_ev[n++] = dl;
+                }
+                e->n = 0;
+            }
+            e->fx = 0; e->pm = 0;
+        } else if (e->fx == FX_EXTENDED && (e->pm >> 4) == 0xC) {
+            int v = e->pm & 15;
+            if (v > 0 && v < span) {
+                bc_event ct = *e;
+                ct.t = e->t + v; ct.n = BC_N_CUT; ct.rv = 0; ct.fx = 0; ct.pm = 0;
+                bc_ev[n++] = ct;
+            }
+            e->fx = 0; e->pm = 0;
+        } else if (e->fx == FX_RETRIGGER) {
+            int ri = e->pm;
+            if (ri > 0)
+                for (int t = ri; t < span; t += ri) {
+                    bc_event rt = *e;
+                    rt.t = e->t + t; rt.n = BC_N_RETRIG; rt.rv = 0; rt.fx = 0; rt.pm = 0;
+                    bc_ev[n++] = rt;
+                }
+            e->fx = 0; e->pm = 0;
+        }
+    }
+    bc_nev = n;
+
+    /* an expanded event can land past the following row, so re-order */
+    int *idx = (int *)malloc(sizeof(int) * (size_t)(bc_nev ? bc_nev : 1));
+    bc_event *tmp = (bc_event *)malloc(sizeof(bc_event) * (size_t)(bc_nev ? bc_nev : 1));
+    if (!idx || !tmp) { free(idx); free(tmp); return -1; }
+    for (int k = 0; k < bc_nev; k++) idx[k] = k;
+    qsort(idx, (size_t)bc_nev, sizeof(int), bc_exp_cmp);
+    for (int k = 0; k < bc_nev; k++) tmp[k] = bc_ev[idx[k]];
+    for (int k = 0; k < bc_nev; k++) bc_ev[k] = tmp[k];
+    free(idx); free(tmp);
+
+    bc_any_fx = 0;
+    for (int k = 0; k < bc_nev; k++) if (bc_ev[k].fx) bc_any_fx = 1;
+    return 0;
 }
 
 static int write_js(const char *filename, birb_song *song) {
@@ -2778,6 +2892,265 @@ static int write_smol_c(const char *filename, birb_song *song) {
     fclose(f);
     fprintf(stderr, "Wrote %s (%d events, %ld samples)\n", filename, bc_nev, (long)bc_walk_T);
     if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+    return 0;
+}
+
+/* ==================================================================
+ * Locked-down C player, full feature set (--locked-c).
+ *
+ * The shape smol-c established - song baked in, event list, no loader, no
+ * pattern data, no sequencer, only the code the song reaches - carrying
+ * everything the tracker can play rather than smol's reduced set. Separate
+ * from write_smol_c on purpose: that one exists to be small and its
+ * structure encodes the drops, so threading a full feature set through it
+ * fights the design at every branch.
+ *
+ * Parity target is the full JS export, which is the tracker's own engine.
+ * Arithmetic is float wherever the JS is float so the two can be compared
+ * sample for sample; the fixed-point of birb_synth.c is a different domain
+ * and is not what this mirrors.
+ *
+ * Voice slots are tracker channels, parameter tables are indexed by
+ * instrument, and a note-on rebinds its slot's row.
+ * ================================================================== */
+
+/* emit one per-instrument table of ints */
+static void lk_tab(FILE *f, const char *type, const char *name, int ni,
+                   const int *vals) {
+    fprintf(f, "static const %s %s[NI]={", type, name);
+    for (int i = 0; i < ni; i++) fprintf(f, "%s%d", i ? "," : "", vals[i]);
+    fprintf(f, "};\n");
+}
+
+static int write_locked_c(const char *filename, birb_song *song) {
+    FILE *f = fopen(filename, "w");
+    if (!f) { fprintf(stderr, "Error: cannot write '%s'\n", filename); return -1; }
+
+    /* channels the song authored: the loader pads order columns past the
+     * song's own count with 0xFF, so the highest column carrying a pattern is
+     * the width. */
+    int nch = 0;
+    for (int i = 0; i < song->order_length && i < BIRB_MAX_ORDER; i++)
+        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
+            if (song->order[i][c] != 0xFF && c + 1 > nch) nch = c + 1;
+    if (nch < 1) nch = 1;
+
+    bc_st_reset_reg();
+    bc_walk(song, nch);
+    if (bc_expand_locked() < 0) {
+        fprintf(stderr, "Error: out of memory expanding the event list\n");
+        fclose(f);
+        if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+        return -1;
+    }
+
+    /* one parameter row per instrument the song actually triggers */
+    int row[BIRB_MAX_INSTRUMENTS], slot[BIRB_MAX_INSTRUMENTS], NI = 0;
+    for (int i = 0; i < BIRB_MAX_INSTRUMENTS; i++) slot[i] = -1;
+    for (int k = 0; k < bc_nev; k++) {
+        int ii = bc_ev[k].ins;
+        if (bc_ev[k].n < 2 || bc_ev[k].n > 97) continue;
+        if (ii < 0 || ii >= BIRB_MAX_INSTRUMENTS) continue;
+        if (slot[ii] < 0) { slot[ii] = NI; row[NI++] = ii; }
+    }
+    if (!NI) { slot[0] = 0; row[NI++] = 0; }
+
+    /* ---- what this song reaches ---- */
+    int w_used[5] = {0,0,0,0,0};          /* pulse tri saw noise sine */
+    int u_fm = 0, u_fm4 = 0, u_fm2 = 0, fm_mask = 0;
+    int u_ks = 0, u_fmt = 0, u_smp = 0, u_drum = 0, drum_mask = 0, drum_lfo = 0;
+    int u_pe = 0, u_rev = 0, u_drive = 0, u_duck = 0, u_ivol = 0, unsupported = 0;
+    for (int k = 0; k < NI; k++) {
+        birb_instrument *in = &song->instruments[row[k]];
+        if (in->reverb_send) u_rev = 1;
+        if (in->drive) u_drive = 1;
+        if (in->duck_send || in->duck_amt) u_duck = 1;
+        if (in->volume && in->volume != 255) u_ivol = 1;
+        if (in->pitch_env && in->pitch_env_len) u_pe = 1;
+        switch (in->synth_type) {
+            case SYNTH_BASIC:   w_used[in->waveform < 5 ? in->waveform : 0] = 1; break;
+            case SYNTH_KS:      u_ks = 1; break;
+            case SYNTH_FORMANT: u_fmt = 1; break;
+            case SYNTH_SAMPLE:  u_smp = 1; break;
+            case SYNTH_DRUM: {
+                int dt = in->drum_type & 7, al = dt == 4 ? 0 : dt == 5 ? 2 : dt;
+                u_drum = 1; drum_mask |= 1 << (al & 3);
+                if (dt == 5) drum_lfo = 1;
+                break;
+            }
+            case SYNTH_FM: {
+                int no = in->fm.num_ops ? in->fm.num_ops : 2;
+                u_fm = 1;
+                if (no >= 4) { u_fm4 = 1; fm_mask |= 1 << (in->fm.algorithm & 7); }
+                else u_fm2 = 1;
+                break;
+            }
+            default: unsupported = 1; break;
+        }
+    }
+#ifdef BIRB_NO_REVERB
+    u_rev = 0;
+#endif
+    if (!song->rev_wet) u_rev = 0;
+    if (unsupported)
+        fprintf(stderr, "  note: an unrecognised voice type is silent in the C backend\n");
+
+    /* effects that survived the walk and the expansion */
+    int fxu[FX_COUNT];
+    for (int i = 0; i < FX_COUNT; i++) fxu[i] = 0;
+    for (int k = 0; k < bc_nev; k++)
+        if (bc_ev[k].fx > 0 && bc_ev[k].fx < FX_COUNT) fxu[bc_ev[k].fx] = 1;
+    int u_arp = fxu[FX_ARPEGGIO];
+    for (int k = 0; k < NI; k++)
+        if (song->instruments[row[k]].arp_note1 || song->instruments[row[k]].arp_note2)
+            u_arp = 1;
+    int u_slide = fxu[FX_PITCH_UP] || fxu[FX_PITCH_DOWN];
+    int u_vib   = fxu[FX_VIBRATO];
+    int u_trem  = fxu[FX_TREMOLO];
+    int u_porta = fxu[FX_TONE_PORTA];
+    int u_soff  = fxu[FX_SAMPLE_OFFSET] && u_smp;
+    int u_speed = fxu[FX_SET_SPEED];
+    int u_lfo   = u_vib || u_trem;
+    /* the expansion turns these into note codes, so the player needs neither */
+    int u_retrig = 0, u_cut = 0;
+    for (int k = 0; k < bc_nev; k++) {
+        if (bc_ev[k].n == BC_N_RETRIG) u_retrig = 1;
+        if (bc_ev[k].n == BC_N_CUT)    u_cut = 1;
+    }
+    const int ev_fx = (u_arp || u_slide || u_vib || u_trem || u_porta
+                       || u_soff || u_speed);
+    const int master = !birb_no_master;
+
+    /* ---- header and constants ---- */
+    double mg = (song->master_gain ? song->master_gain : 128) / 64.0;
+    long spt0 = 44100L * 5 / ((song->bpm ? song->bpm : 125) * 2);
+    fprintf(f,
+        "/* Generated by birbc --locked-c - do not edit, regenerate.\n"
+        " * Locked-down player: song baked in, no loader, no pattern data, no\n"
+        " * sequencer. Full feature set. State is global so render() streams. */\n"
+        "typedef signed char i8; typedef unsigned char u8;\n"
+        "typedef short i16; typedef unsigned short u16;\n"
+        "typedef int i32; typedef unsigned int u32;\n"
+        "#define F 65536\n"
+        "#define N %d\n"
+        "#define NI %d\n"
+        "#define TOTAL %ldL\n"
+        "#define MG %.6ff\n",
+        nch, NI, (long)bc_walk_T, mg);
+    fprintf(f,
+        "static const float TG[10]={0.4550018311f,0.4550018311f,0.4550018311f,"
+        "0.4550018311f,0.4550018311f,0.3528900146f,0.2343750000f,0.5926208496f,"
+        "0.9396362305f,2.2748413086f};\n");
+    if (master) {
+        double mt = (song->limit_thresh ? song->limit_thresh : 242) / 255.0;
+        /* the ceiling is the saturator's own value at the threshold: limiting
+         * to MT and then saturating would otherwise land the loudest peak
+         * short of full scale. */
+        double x = mt > 3.0 ? 3.0 : mt, x2 = x * x;
+        double mc = x * (27.0 + x2) / (27.0 + 9.0 * x2);
+        fprintf(f,
+            "#define MT %.6ff\n#define MR %.6ff\n#define MC %.6ff\n",
+            mt,
+            1.0 - 1.0 / (44100.0 * ((song->limit_release ? song->limit_release : 50) * 0.001)),
+            mc);
+    }
+    fprintf(f, "static i32 spt=%ld;\n", spt0);
+
+    /* ---- per-instrument tables ---- */
+    { int v[BIRB_MAX_INSTRUMENTS];
+      for (int k = 0; k < NI; k++) {
+        birb_instrument *in = &song->instruments[row[k]];
+        switch (in->synth_type) {
+            case SYNTH_SAMPLE:  v[k] = 5; break;
+            case SYNTH_FM:      v[k] = 6; break;
+            case SYNTH_KS:      v[k] = 7; break;
+            case SYNTH_DRUM:    v[k] = 8; break;
+            case SYNTH_FORMANT: v[k] = 9; break;
+            default:            v[k] = in->waveform < 5 ? in->waveform : 0; break;
+        }
+      }
+      lk_tab(f, "u8", "CW", NI, v);
+      if (w_used[0]) {
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].duty;
+        lk_tab(f, "i32", "CU", NI, v);
+      }
+      { const char *an[4] = { "CA", "CD", "CS", "CR" };
+        for (int a = 0; a < 4; a++) {
+          for (int k = 0; k < NI; k++) {
+            birb_adsr *e = &song->instruments[row[k]].envelope;
+            v[k] = a == 0 ? e->attack : a == 1 ? e->decay : a == 2 ? e->sustain : e->release;
+          }
+          lk_tab(f, "u8", an[a], NI, v);
+        } }
+      if (u_ivol) {
+        for (int k = 0; k < NI; k++) {
+            int iv = song->instruments[row[k]].volume;
+            v[k] = iv ? iv : 255;
+        }
+        lk_tab(f, "i32", "CV", NI, v);
+      }
+      if (u_pe) {
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].pitch_env;
+        lk_tab(f, "i8", "CPE", NI, v);
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].pitch_env_len;
+        lk_tab(f, "u8", "CPL", NI, v);
+      }
+      if (u_arp) {
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].arp_note1;
+        lk_tab(f, "i32", "IA1", NI, v);
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].arp_note2;
+        lk_tab(f, "i32", "IA2", NI, v);
+      }
+      if (u_rev) {
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].reverb_send;
+        lk_tab(f, "i32", "RS", NI, v);
+      }
+      if (u_duck) {
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].duck_send;
+        lk_tab(f, "i32", "DS", NI, v);
+        for (int k = 0; k < NI; k++) v[k] = song->instruments[row[k]].duck_amt;
+        lk_tab(f, "i32", "DA", NI, v);
+      }
+      if (u_smp) {
+        for (int k = 0; k < NI; k++) {
+            birb_instrument *in = &song->instruments[row[k]];
+            v[k] = in->synth_type == SYNTH_SAMPLE ? in->sample_idx : 0;
+        }
+        lk_tab(f, "i32", "CSI", NI, v);
+      }
+      if (u_ks) {
+        for (int k = 0; k < NI; k++) {
+            birb_instrument *in = &song->instruments[row[k]];
+            v[k] = in->synth_type == SYNTH_KS ? in->ks_damping : 0;
+        }
+        lk_tab(f, "i32", "KD", NI, v);
+      }
+    }
+    /* drive is a float per instrument: pre-gain and the matching normaliser */
+    if (u_drive) {
+        fprintf(f, "static const float DVP[NI]={");
+        for (int k = 0; k < NI; k++) {
+            double dp = 1.0 + song->instruments[row[k]].drive * (8.0 / 255.0);
+            fprintf(f, "%s%.6ff", k ? "," : "", dp);
+        }
+        fprintf(f, "};\nstatic const float DVN[NI]={");
+        for (int k = 0; k < NI; k++) {
+            double dp = 1.0 + song->instruments[row[k]].drive * (8.0 / 255.0);
+            double x = dp > 3.0 ? 3.0 : dp, x2 = x * x;
+            double ss = x * (27.0 + x2) / (27.0 + 9.0 * x2);
+            fprintf(f, "%s%.6ff", k ? "," : "", dp > 1.0 ? 1.0 / ss : 1.0);
+        }
+        fprintf(f, "};\n");
+    }
+
+    fclose(f);
+    fprintf(stderr, "Wrote %s (%d channels, %d instrument rows, %d events, %ld samples)\n",
+            filename, nch, NI, bc_nev, (long)bc_walk_T);
+    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+    (void)w_used; (void)u_fm; (void)u_fm4; (void)u_fm2; (void)fm_mask;
+    (void)u_fmt; (void)u_drum; (void)drum_mask; (void)drum_lfo;
+    (void)u_vib; (void)u_trem; (void)u_porta; (void)u_soff; (void)u_speed;
+    (void)u_lfo; (void)u_retrig; (void)u_cut; (void)ev_fx; (void)u_slide;
     return 0;
 }
 
