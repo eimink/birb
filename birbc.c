@@ -3057,7 +3057,12 @@ static int write_locked_c(const char *filename, birb_song *song) {
             1.0 - 1.0 / (44100.0 * ((song->limit_release ? song->limit_release : 50) * 0.001)),
             mc);
     }
-    fprintf(f, "static i32 spt=%ld;\n", spt0);
+    /* Tempo. Without Fxx it is a constant and no object exists at all - not
+     * left to the optimiser to fold. With Fxx it is carried as a delta from
+     * that constant so it lives in bss: a packed native build copies no
+     * initialised __DATA, and a zeroed delta is already the right tempo. */
+    if (u_speed) fprintf(f, "#define SPT0 %ld\n", spt0);
+    else         fprintf(f, "#define SPT %ld\n", spt0);
 
     /* ---- per-instrument tables ---- */
     { int v[BIRB_MAX_INSTRUMENTS];
@@ -3407,6 +3412,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
         fprintf(f, "#define DR %.6f\n",
                 1.0 - 1.0 / (44100.0 * ((song->duck_release ? song->duck_release : 120) * 0.001)));
     }
+    if (u_speed) bc_st(f, "i32 sptd;", "sptd");
     bc_st(f, "i32 ei,tk,et,tc;", "ei,tk,et,tc");
     fprintf(f,
         "static i16 out[4096];\n"
@@ -3510,7 +3516,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
       if (u_porta) fprintf(f, "  if(fx==5) ps[c]=pm<<2;\n");
       if (u_trem)  fprintf(f, "  if(fx==8){ ts[c]=F/64*(pm>>4); td[c]=(pm&15)<<4; }\n");
       if (u_soff)  fprintf(f, "  if(fx==9&&CW[CI[c]]==5) sp_[c]=(pm<<8)<<16;\n");
-      if (u_speed) fprintf(f, "  if(fx==15&&pm>=0x20) spt=44100*5/(pm*2);\n");
+      if (u_speed) fprintf(f, "  if(fx==15&&pm>=0x20) sptd=44100*5/(pm*2)-SPT0;\n");
       fprintf(f, " }\n tk++;\n for(i32 c=0;c<N;c++){ i32 I=CI[c];\n"); }
     if (u_pe)
         fprintf(f, "  if(pet[c]){ bs[c]+=(i32)CPE[I]<<2; if(bs[c]<1)bs[c]=1; pet[c]--; }\n");
@@ -3552,12 +3558,13 @@ static int write_locked_c(const char *filename, birb_song *song) {
     fprintf(f,
         "void render(i32 n){\n"
         " for(i32 i=0;i<n;i++){\n"
-        "  if(tc<=0){ tickf(); tc=spt; }\n"
+        "  if(tc<=0){ tickf(); tc=%s; }\n"
         "  tc--;\n"
         "  double v=0.%s%s;\n"
         "  for(i32 c=0;c<N;c++){\n"
         "   if(!st[c] && ev_[c]==0.%s) continue;\n"
         "   i32 I=CI[c]; double h=ph[c], s=0.;\n",
+        u_speed ? "SPT0+sptd" : "SPT",
         u_rev ? ",ri=0." : "",
         u_duck ? ",DI=0.,DN=DE" : "",
         u_drum ? " && !dttl[c]" : "");
