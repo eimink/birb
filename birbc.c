@@ -1240,7 +1240,9 @@ static int write_js(const char *filename, birb_song *song) {
 
     const int nch_js = BIRB_NUM_CHANNELS;
     const int LOCK = birb_smol;
-    if (LOCK) bc_walk(song, nch_js);
+    /* Always walked: LOCK ships the event list, and every mode takes its
+     * length from the walk's own elapsed sample count. */
+    bc_walk(song, nch_js);
 
     fprintf(f, "function birb(X){\n");
     fprintf(f, "var S=44100,N=4,F=65536,\n");
@@ -1373,9 +1375,12 @@ static int write_js(const char *filename, birb_song *song) {
             }
     for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
         if (smol_ch_inst[c] < 0) smol_ch_inst[c] = 0;   /* channel never names one */
+    /* The walk follows Fxx, Bxx/Dxx and each pattern's own length, so its
+     * sample count is what the song actually plays. ol*W*tpr*spt assumed one
+     * tempo for the whole song and the longest pattern at every order
+     * position, which truncated anything that slowed down. */
     char smol_span[64];
-    if (birb_smol) snprintf(smol_span, sizeof smol_span, "T=%ld,", bc_walk_T);
-    else snprintf(smol_span, sizeof smol_span, "T=ol*%d*tpr*spt,", smol_rows);
+    snprintf(smol_span, sizeof smol_span, "T=%ld,", bc_walk_T);
     int s_fixedlen = birb_smol && smol_same_len;
     int s_perch    = birb_smol && smol_per_ch;
     int s_novol    = birb_smol;
@@ -1644,8 +1649,7 @@ static int write_js(const char *filename, birb_song *song) {
         "nf=n=>(n=n<0?0:n>95?95:n,((bf[n%%12]<<(n/12))+128)>>8),\n"
         "spt=S*5/((bpm||125)*2)|0,%s\n"
         "out=new Float32Array(T),ch=[]%s,tc=0\n",
-        LOCK ? smol_span : s_fixedlen ? smol_span
-             : "W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt,",
+        smol_span,
         LOCK ? "" : ",ct=0,cr=0,op=0");
 #ifndef BIRB_NO_REVERB
     /* reverb send bus (mirror of the editor's makeReverb; coefficients baked). */
