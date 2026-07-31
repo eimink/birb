@@ -3387,25 +3387,29 @@ static int write_locked_c(const char *filename, birb_song *song) {
                 "static i32 SC(i32 t){ i32 i=t>>3,fr=t&7,c=SHP[i]; return c+(((SHP[i+1]-c)*fr)>>3); }\n");
     }
     if (u_rev) {
-        bc_st(f, "double rc0[1116],rc1[1188],rc2[1277],rc3[1356],rcl[4];",
-                 "rc0,rc1,rc2,rc3,rcl");
-        bc_st(f, "double ra0[556],ra1[441];", "ra0,ra1");
+        /* One flat buffer per bank, indexed through an integer offset table.
+         * A pointer table (double *const[4]) is a relocated slot, and a packed
+         * image has no dyld to slide it: the linker's absolute address is kept
+         * and points at nothing. Integer offsets need no relocation, so the
+         * delay lines survive packing. 1116+1188+1277+1356, 556+441. */
+        bc_st(f, "double rcb[4937],rcl[4];", "rcb,rcl");
+        bc_st(f, "double rab[997];", "rab");
         bc_st(f, "i32 rcp[4],rap[2];", "rcp,rap");
         double size = song->rev_size / 255.0, damp = song->rev_damp / 255.0;
         double wet = song->rev_wet / 255.0;
         double fb = 0.7 + 0.28 * size, dc = 0.4 * damp;
         fprintf(f,
-            "static double *const rcb[4]={rc0,rc1,rc2,rc3};\n"
+            "static const i32 rco[4]={0,1116,2304,3581};\n"
             "static const i32 rcn[4]={1116,1188,1277,1356};\n"
-            "static double *const rab[2]={ra0,ra1};\n"
+            "static const i32 rao[2]={0,556};\n"
             "static const i32 ran[2]={556,441};\n"
             "static double rev_(double x){ double o=0.;\n"
-            " for(i32 k=0;k<4;k++){ i32 L=rcn[k],pp=rcp[k]; double y=rcb[k][pp];\n"
-            "  rcl[k]=y*%.6f+rcl[k]*%.6f; rcb[k][pp]=x+rcl[k]*%.6f;\n"
+            " for(i32 k=0;k<4;k++){ i32 B=rco[k],L=rcn[k],pp=rcp[k]; double y=rcb[B+pp];\n"
+            "  rcl[k]=y*%.6f+rcl[k]*%.6f; rcb[B+pp]=x+rcl[k]*%.6f;\n"
             "  rcp[k]=(pp+1<L)?pp+1:0; o+=y; }\n"
             " o*=%.6f;\n"
-            " for(i32 k=0;k<2;k++){ i32 L=ran[k],pp=rap[k]; double y=rab[k][pp];\n"
-            "  double ou=-o+y; rab[k][pp]=o+y*0.5;\n"
+            " for(i32 k=0;k<2;k++){ i32 B=rao[k],L=ran[k],pp=rap[k]; double y=rab[B+pp];\n"
+            "  double ou=-o+y; rab[B+pp]=o+y*0.5;\n"
             "  rap[k]=(pp+1<L)?pp+1:0; o=ou; }\n"
             " return o*%.6f; }\n",
             1.0 - dc, dc, fb, (1.0 - fb) * 5.5, wet);
