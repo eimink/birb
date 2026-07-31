@@ -8,7 +8,7 @@
 #define BIRB_SYNTH_H
 
 /* Project version — single source of truth for the C tools' --version. */
-#define BIRB_VERSION "5.0.0"
+#define BIRB_VERSION "5.1.0"
 
 #ifdef __wasm__
 typedef unsigned char uint8_t;

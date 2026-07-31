@@ -1049,6 +1049,24 @@ static void emit_u8_array(FILE *f, const uint8_t *data, int len) {
  * player compare against a tick-within-row counter that no longer exists. */
 typedef struct { int t, c, n, rv, fx, pm, ins, tpr; } bc_event;
 static bc_event *bc_ev = NULL;
+
+/* Where each row starts, so a generated player can report row and order
+ * position the way birb_get_row/birb_get_pattern do. Collected by the walk
+ * whether or not a writer wants it; it is small and freed with the events. */
+typedef struct { int t, op, row; } bc_rowmark;
+static bc_rowmark *bc_rm = NULL;
+static int bc_nrm = 0, bc_rmcap = 0;
+
+static void bc_rm_add(int t, int op, int row) {
+    if (bc_nrm >= bc_rmcap) {
+        int n = bc_rmcap ? bc_rmcap * 2 : 256;
+        bc_rowmark *g = (bc_rowmark *)realloc(bc_rm, sizeof(bc_rowmark) * (size_t)n);
+        if (!g) return;
+        bc_rm = g; bc_rmcap = n;
+    }
+    bc_rm[bc_nrm].t = t; bc_rm[bc_nrm].op = op; bc_rm[bc_nrm].row = row;
+    bc_nrm++;
+}
 static int bc_nev = 0, bc_any_fx = 0;
 static long bc_walk_T = 0;
 
@@ -1099,13 +1117,14 @@ static void bc_walk(const birb_song *song, int nch) {
 
     st.cap = (ol ? ol : 1) * BIRB_MAX_ROWS * (nch ? nch : 1) + 16;
     bc_ev = (bc_event *)malloc(sizeof(bc_event) * st.cap);
-    bc_nev = 0; bc_any_fx = 0;
+    bc_nev = 0; bc_any_fx = 0; bc_nrm = 0;
     if (!bc_ev) { bc_walk_T = 0; return; }
 
     while (!done && guard++ < 200000) {
         if (first) {
             first = 0;
             int n0 = bc_nev;
+            bc_rm_add((int)tk, op, cr);
             bc_emit_row(song, nch, op, cr, tk, &st);
             /* row 0 is applied before ct is ever reset, so it runs one tick
              * shorter than the rest; tpr is read after the row in case an Fxx
@@ -1124,6 +1143,7 @@ static void bc_walk(const birb_song *song, int nch) {
             }
             if (!done) {
                 int n0 = bc_nev;
+                bc_rm_add((int)tk, op, cr);
                 bc_emit_row(song, nch, op, cr, tk, &st);
                 for (int k = n0; k < bc_nev; k++) bc_ev[k].tpr = st.tpr;
             }
@@ -2067,7 +2087,8 @@ static int write_js(const char *filename, birb_song *song) {
                 "return{o:out,spt:spt,T:T}}\n", drv, tgain, dsend, padv, dtick, master);
     }
 
-    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0;
+      free(bc_rm); bc_rm = NULL; bc_nrm = bc_rmcap = 0; }
     fclose(f);
 
     /* measure output size */
@@ -2402,7 +2423,8 @@ static int write_smol_c(const char *filename, birb_song *song) {
                         "plays more than one on some channel.\n"
                         "       Split those parts onto separate channels.\n");
         fclose(f);
-        if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+        if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0;
+      free(bc_rm); bc_rm = NULL; bc_nrm = bc_rmcap = 0; }
         return -1;
     }
     const int ev_w = 4 + (ev_fx ? 2 : 0);
@@ -2904,7 +2926,8 @@ static int write_smol_c(const char *filename, birb_song *song) {
     bc_emit_dev(f);
     fclose(f);
     fprintf(stderr, "Wrote %s (%d events, %ld samples)\n", filename, bc_nev, (long)bc_walk_T);
-    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0;
+      free(bc_rm); bc_rm = NULL; bc_nrm = bc_rmcap = 0; }
     return 0;
 }
 
@@ -2953,9 +2976,25 @@ static int write_locked_c(const char *filename, birb_song *song) {
     if (bc_expand_locked() < 0) {
         fprintf(stderr, "Error: out of memory expanding the event list\n");
         fclose(f);
-        if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+        if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0;
+      free(bc_rm); bc_rm = NULL; bc_nrm = bc_rmcap = 0; }
         return -1;
     }
+
+    /* Row and order position, reported the way birb_get_row/birb_get_pattern
+     * do. Both are pure functions of the tick counter when the song runs
+     * straight through at one speed with equal-length patterns, so the usual
+     * case costs two divisions and no table at all. Anything the walk resolved
+     * away - a jump, an Fxx, uneven pattern lengths - falls back to a marker
+     * list stepped by the same tick cursor. */
+    int rm_tpr = song->ticks_per_row ? song->ticks_per_row : 6;
+    int rm_rows = song->num_patterns ? song->pattern_lengths[0] : 64;
+    int rm_closed = (bc_nrm > 0 && rm_tpr > 0 && rm_rows > 0);
+    if (!rm_rows) rm_rows = 64;
+    for (int k = 0; k < bc_nrm && rm_closed; k++)
+        if ((bc_rm[k].t + 1) / rm_tpr != k
+            || bc_rm[k].op != k / rm_rows
+            || bc_rm[k].row != k % rm_rows) rm_closed = 0;
 
     /* one parameter row per instrument the song actually triggers */
     int row[BIRB_MAX_INSTRUMENTS], slot[BIRB_MAX_INSTRUMENTS], NI = 0;
@@ -3432,6 +3471,29 @@ static int write_locked_c(const char *filename, birb_song *song) {
         "i16 *outPtr(void){ return out; }\n"
         "u32 getOutputBuf(void){ return (u32)(unsigned long)out; }\n"
         "i32 getLength(void){ return (i32)TOTAL; }\n");
+    if (rm_closed) {
+        fprintf(f,
+            /* clamped to the last row the walk reached, so the tail tick
+             * past the end of the order does not report one pattern too far */
+            "i32 getRow(void){ i32 r=(tk+1)/%d; return (r<%d?r:%d)%%%d; }\n"
+            "i32 getPat(void){ i32 r=(tk+1)/%d; return (r<%d?r:%d)/%d; }\n",
+            rm_tpr, bc_nrm, bc_nrm - 1, rm_rows,
+            rm_tpr, bc_nrm, bc_nrm - 1, rm_rows);
+    } else {
+        fprintf(f, "static const u16 RM[]={");
+        { int prev = 0;
+          for (int k = 0; k < bc_nrm; k++) {
+            fprintf(f, "%s%d,%d", k ? "," : "", bc_rm[k].t - prev,
+                    ((bc_rm[k].op & 0xFF) << 8) | (bc_rm[k].row & 0xFF));
+            prev = bc_rm[k].t;
+          }
+          if (!bc_nrm) fprintf(f, "0,0"); }
+        fprintf(f, "};\n#define NRM %d\n", bc_nrm ? bc_nrm * 2 : 2);
+        bc_st(f, "i32 rmi,rmt,rmv;", "rmi,rmt,rmv");
+        fprintf(f,
+            "i32 getRow(void){ return rmv&0xFF; }\n"
+            "i32 getPat(void){ return (rmv>>8)&0xFF; }\n");
+    }
 
     /* ---- trigger ---- */
     fprintf(f,
@@ -3530,7 +3592,11 @@ static int write_locked_c(const char *filename, birb_song *song) {
       if (u_trem)  fprintf(f, "  if(fx==8){ ts[c]=F/64*(pm>>4); td[c]=(pm&15)<<4; }\n");
       if (u_soff)  fprintf(f, "  if(fx==9&&CW[CI[c]]==5) sp_[c]=(pm<<8)<<16;\n");
       if (u_speed) fprintf(f, "  if(fx==15&&pm>=0x20) sptd=44100*5/(pm*2)-SPT0;\n");
-      fprintf(f, " }\n tk++;\n for(i32 c=0;c<N;c++){ i32 I=CI[c];\n"); }
+      fprintf(f, " }\n");                 /* close the event loop */
+      if (!rm_closed)
+          fprintf(f, " while(rmi<NRM && rmt+(i32)RM[rmi]<=tk){"
+                     " rmt+=(i32)RM[rmi]; rmv=RM[rmi+1]; rmi+=2; }\n");
+      fprintf(f, " tk++;\n for(i32 c=0;c<N;c++){ i32 I=CI[c];\n"); }
     if (u_pe)
         fprintf(f, "  if(pet[c]){ bs[c]+=(i32)CPE[I]<<2; if(bs[c]<1)bs[c]=1; pet[c]--; }\n");
     if (u_slide)
@@ -3777,7 +3843,8 @@ static int write_locked_c(const char *filename, birb_song *song) {
     fclose(f);
     fprintf(stderr, "Wrote %s (%d channels, %d instrument rows, %d events, %ld samples)\n",
             filename, nch, NI, bc_nev, (long)bc_walk_T);
-    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0; }
+    if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0;
+      free(bc_rm); bc_rm = NULL; bc_nrm = bc_rmcap = 0; }
     return 0;
 }
 
