@@ -195,4 +195,6 @@ See `INTEGRATION.md` for full integration details.
 
 ## License
 
-(C) 2026 eimink / Wide Load ^ KVG. All rights reserved.
+MIT — see [LICENSE](LICENSE).
+
+(C) 2026 eimink / Wide Load ^ KVG
