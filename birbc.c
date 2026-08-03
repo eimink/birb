@@ -3849,18 +3849,18 @@ static int write_locked_c(const char *filename, birb_song *song) {
 }
 
 static void usage(const char *prog) {
-    fprintf(stderr, "Usage: %s input.[birb|bin] [-o output_base] [--js]\n", prog);
+    fprintf(stderr, "Usage: %s input.[birb|bin] [-o output_base] [options]\n", prog);
     fprintf(stderr, "  Inputs:  .birb  text format\n");
     fprintf(stderr, "           .bsb   binary format (from editor)\n");
-    fprintf(stderr, "  Outputs: output_base.bsb  (binary)\n");
-    fprintf(stderr, "           output_base.h    (C header)\n");
-    fprintf(stderr, "           --js             also emit .js for 4K demos\n");
-    fprintf(stderr, "  Other:   --version | -v   print version and exit\n");
-    fprintf(stderr, "           --no-master        omit the JS master bus (smaller, CHANGES SOUND)\n");
-    fprintf(stderr, "           --smol             smol birb: minimal export (smallest, CHANGES SOUND)\n");
-    fprintf(stderr, "           (default)          locked-down C player, full feature set\n");
-    fprintf(stderr, "           --tracker          no player; just the .bsb/.h blob for birb_synth.c\n");
-    fprintf(stderr, "           --smol-c           smol C player instead (smaller, CHANGES SOUND)\n");
+    fprintf(stderr, "  Outputs: output_base.bsb       binary song\n");
+    fprintf(stderr, "           output_base.h         the .bsb as a C byte array\n");
+    fprintf(stderr, "           output_base_locked.c  standalone player, emitted by default\n");
+    fprintf(stderr, "  Options: --js             also emit .js for web demos\n");
+    fprintf(stderr, "           --tracker        no player; just the .bsb/.h for birb_synth.c\n");
+    fprintf(stderr, "           --smol-c         smol C player instead (smaller, CHANGES SOUND)\n");
+    fprintf(stderr, "           --smol           smol birb: minimal .js export (CHANGES SOUND)\n");
+    fprintf(stderr, "           --no-master      omit the JS master bus (smaller, CHANGES SOUND)\n");
+    fprintf(stderr, "           --version | -v   print version and exit\n");
 }
 
 int main(int argc, char **argv) {

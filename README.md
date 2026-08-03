@@ -69,8 +69,9 @@ Global:
 |---|---|---|
 | 4K web intro | ~1-1.5 KB Brotli | `birbc song.bsb --js` or tracker "Export .js" — self-contained function |
 | Larger web demo | ~3 KB gzip | WASM engine + AudioWorklet (`web/birb.wasm` + `web/birb_processor.js`) |
+| Native intro | ~1-3 KB of code | `birbc song.bsb` — generated player, song baked in, only the voices the song reaches |
 | Native macOS | ~34 KB binary | CoreAudio playback via `birb_play` |
-| Native (any platform) | — | Include `birb_synth.c` + `birb_format.h` + your song header, call `birb_render()` in your audio callback |
+| Native (any platform) | — | `birbc song.bsb --tracker`, then include `birb_synth.c` + `birb_format.h` + your song header and call `birb_render()` in your audio callback |
 
 ## Build
 
@@ -113,9 +114,16 @@ python3 midi2birb.py song.mid
 #   Export .min.js   → minified + packed (smallest, with Brotli size estimate)
 
 # Alternatively, use birbc on a .bsb or .birb:
-./birbc song.bsb --js     # → song.js for web embedding
-./birbc song.bsb          # → song.h for C embedding
+./birbc song.bsb            # → song.bsb, song.h and song_locked.c (generated player)
+./birbc song.bsb --js       # → the above plus song.js for web embedding
+./birbc song.bsb --tracker  # → song.bsb and song.h only, for the birb_synth.c engine
+./birbc song.bsb --smol-c   # → song_smol.c instead: smaller, CHANGES SOUND
 ```
+
+`song_locked.c` is the default output: a standalone player with the song baked
+in, no loader, no pattern data, no sequencer, and only the voices and effects
+the song actually reaches. Use `--tracker` when you want the engine instead —
+it keeps the sequencer and the row/pattern readout an editor needs.
 
 ### Integrate (WebGL 4K)
 
@@ -133,7 +141,26 @@ s.start();
 // Sync: m.spt = samples per tick; derive beat from ctx.currentTime
 ```
 
-### Integrate (Native C)
+### Integrate (Native C, generated player)
+
+`song_locked.c` is self-contained — compile it alongside your demo. No engine
+source, no loader, no song header.
+
+```c
+void   render(int n);      // fill the internal buffer with n samples, n <= 4096
+short *outPtr(void);       // that buffer: mono int16, 44100 Hz
+int    getLength(void);    // total samples in the song
+int    getRow(void);       // row within the pattern
+int    getPat(void);       // order position
+
+// In your audio callback:
+render(num_samples);
+memcpy(buffer, outPtr(), num_samples * sizeof(short));
+```
+
+### Integrate (Native C, engine)
+
+Export with `--tracker` for the loader-and-sequencer route:
 
 ```c
 #include "birb_synth.h"

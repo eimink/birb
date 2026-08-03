@@ -4,7 +4,8 @@ birb is a multi-channel chiptune synth (4 channels by default, up to 16). The mu
 
 ## What you get from the musician
 
-- **`.bsb` file** — binary song data (for native C demos or further conversion)
+- **`.bsb` file** — binary song data (for further conversion, or the engine route below)
+- **`_locked.c` file** — standalone C player with the song baked in (for native demos)
 - **`.js` file** — self-contained JS with synth engine + song data (for web demos)
 - **`.min.js` file** — same as above, minified and packed (for 4K intros)
 
@@ -118,6 +119,77 @@ startTime = ctx.currentTime;
 
 ## Native C demo integration
 
+There are two routes. The generated player is what `birbc song.bsb` produces by
+default and is what an intro wants; the engine is what `--tracker` gives you and
+is what a tool wants.
+
+## Native C: the generated player
+
+`birbc song.bsb` writes `song_locked.c`. It is standalone: the song is baked in,
+there is no loader, no pattern data and no sequencer, and only the voices and
+effects the song actually reaches are emitted. You do not need `birb_synth.c`,
+`birb_format.h` or `song.h` alongside it.
+
+### Compile
+
+```bash
+clang -Os song_locked.c your_demo.c -o demo
+```
+
+### API
+
+```c
+void   render(int n);       // fill the internal buffer with n samples, n <= 4096
+short *outPtr(void);        // that buffer: mono int16, 44100 Hz
+unsigned getOutputBuf(void);// same buffer as an integer address, for wasm hosts
+int    getLength(void);     // total samples in the song
+int    getRow(void);        // row within the pattern, as birb_get_row reports it
+int    getPat(void);        // order position, as birb_get_pattern reports it
+```
+
+`render()` writes into its own 4096-sample buffer rather than one you pass in,
+so copy out of `outPtr()` before the next call:
+
+```c
+void audio_callback(int16_t *buffer, int num_samples) {
+    render(num_samples);                                  // num_samples <= 4096
+    memcpy(buffer, outPtr(), num_samples * sizeof(int16_t));
+}
+```
+
+Playback is a straight line from the start — there is no seeking and no
+transport. State lives in globals, so `render()` streams and picks up where it
+left off.
+
+### Editor support
+
+Compiling with `-DBIRB_DEV` adds snapshot, restore and rewind, so a host can
+drive several logical players or seek by resetting and rendering forward:
+
+```c
+int   birb_state_size(void);
+void  birb_save(BirbState *s);
+void  birb_load(const BirbState *s);
+void  birb_reset(void);
+```
+
+None of this exists without `BIRB_DEV`, so the distributable carries none of it.
+`birb_load` here restores a snapshot and is unrelated to the song loader of the
+same name in `birb_format.h`; that one is `static`, so the two never clash at
+link time, but do not expect both in one translation unit.
+
+### Packing
+
+The player is built to survive a packer that maps the image and jumps straight
+in, with no dyld to relocate anything. It emits no initialised `__DATA` and no
+pointers that need relocating: the tempo is a compile-time constant unless the
+song uses `Fxx`, in which case it is carried as a delta from that constant in
+bss, and the reverb delay lines are flat buffers behind integer offset tables
+rather than pointer arrays. Everything mutable is zerofill `__bss`, which is
+already the correct initial state.
+
+## Native C: the engine
+
 ### Files you need
 
 From the birb project:
@@ -126,7 +198,7 @@ From the birb project:
 - `birb_format.h` — binary format loader
 
 From the musician:
-- `song.h` — generated C header with embedded song data (run `birbc song.bsb` to produce this)
+- `song.h` — generated C header with embedded song data (run `birbc song.bsb --tracker` to produce this)
 
 ### Compile
 
@@ -195,7 +267,7 @@ See `web/index.html` for the full integration example. This approach uses more b
 ## Song format notes
 
 - The `.bsb` binary format is the interchange format between tracker and tools
-- birbc can convert `.bsb` → `.js` (web), `.h` (C header)
+- birbc can convert `.bsb` → `_locked.c` (standalone player, the default), `.js` (web), `.h` (C header, with `--tracker`)
 - The tracker can load and save `.bsb` files directly
 - MIDI files can be converted with `python3 midi2birb.py song.mid`
 
