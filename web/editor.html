@@ -2571,27 +2571,65 @@ function handleKey(e) {
 
 document.getElementById('grid').addEventListener('keydown', handleKey);
 
+/* Which keys a focused element is entitled to swallow. Only real text entry
+ * takes the whole keyboard; a slider or a <select> gets the keys it can use
+ * (arrows, Home/End, Space, Enter, Tab) and nothing else, so the piano row
+ * keeps working while a parameter is being tweaked. */
+const TEXT_INPUT_TYPES = {text:1, search:1, email:1, url:1, tel:1, password:1};
+function keyRole(el) {
+    if (!el) return 'none';
+    if (el.isContentEditable || el.tagName === 'TEXTAREA') return 'text';
+    if (el.tagName === 'SELECT' || el.tagName === 'BUTTON') return 'control';
+    if (el.tagName !== 'INPUT') return 'none';   // grid, body: handled elsewhere
+    let ty = (el.type || 'text').toLowerCase();
+    if (ty === 'number') return 'number';
+    return TEXT_INPUT_TYPES[ty] ? 'text' : 'control';   // range, checkbox, ...
+}
+
 // Global: F1-F7 select octave 1-7 (FT2-style), F9 toggles the instrument editor,
-// Esc returns to pattern view. In the instrument editor, note keys audition the
-// instrument being tweaked. Skip when typing in an input/textarea/contenteditable.
+// Esc leaves a field, then the instrument editor. Note keys audition wherever the
+// focus is parked on something that isn't text entry — a slider being nudged with
+// the arrow keys, a wave <select>, the Oct spinner — so tweaking a parameter never
+// costs you the keyboard. Preview only: nothing is written to the pattern.
 document.addEventListener('keydown', function(e) {
-    let t = e.target;
-    let typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
-    if (typing) return;
+    let role = keyRole(e.target);
     let vi = document.getElementById('view-instrument');
     let inInstEditor = vi && vi.style.display !== 'none';
     if (/^F[1-7]$/.test(e.key)) {
         e.preventDefault();
         setOctave(+e.key.slice(1));
-    } else if (e.key === 'F9') {
+        return;
+    }
+    if (e.key === 'F9') {
         e.preventDefault();
         setMainTab(inInstEditor ? 'pattern' : 'instrument');
-    } else if (e.key === 'Escape') {
-        if (inInstEditor) { e.preventDefault(); setMainTab('pattern'); }
-    } else if (inInstEditor && !e.ctrlKey && !e.metaKey && !e.altKey && KEY_NOTE_MAP[e.key] !== undefined) {
-        // Audition the instrument being edited — no pattern writing.
-        let semi = KEY_NOTE_MAP[e.key] + curOctave * 12;
-        if (semi >= 0 && semi < 96) { e.preventDefault(); previewNote(semi + 2, editInst); }
+        return;
+    }
+    if (e.key === 'Escape' || e.key === 'Enter') {
+        // In a field, Esc/Enter commits and drops focus (everything saves on
+        // input, so there is nothing to revert) — one keypress back to playing.
+        if (role === 'text' || role === 'number') { e.preventDefault(); e.target.blur(); }
+        else if (e.key === 'Escape' && inInstEditor) { e.preventDefault(); setMainTab('pattern'); }
+        return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.defaultPrevented) return;              // the grid handler already took it
+    if (e.repeat) return;                        // one trigger per press, no machine-gun
+    let n = KEY_NOTE_MAP[e.key];
+    if (n === undefined) return;
+    // Text fields keep every key. Number fields keep the digits and edit keys they
+    // can use; letters are dead there, so they stay note keys.
+    if (role === 'text') return;
+    if (role === 'number' && !/^[a-z]$/.test(e.key)) return;
+    // The pattern grid owns its own keys (note entry, hex columns, cursor moves).
+    // Anything else with the focus — order bar, instrument list, plain body after a
+    // click landed nowhere — falls through to plain auditioning.
+    if (role === 'none' && !inInstEditor &&
+        e.target && e.target.closest && e.target.closest('#grid')) return;
+    let semi = n + curOctave * 12;
+    if (semi >= 0 && semi < 96) {
+        e.preventDefault();   // also stops <select> type-ahead jumping the value
+        previewNote(semi + 2, inInstEditor ? editInst : curInst);
     }
 });
 
@@ -4282,7 +4320,19 @@ for (let k of ['wet','size','damp']) {
 syncRevUI();
 syncMasterUI();
 syncSmolUI();
-document.getElementById('octave').addEventListener('change', function() { curOctave = +this.value; saveSongToStorage(); updateStatus(); });
+/* Oct: track on 'input' so the spinner and the arrow keys move the octave the
+ * moment they are used — 'change' alone only landed it on blur, so a note played
+ * right after nudging the field came out in the old octave. */
+{
+    let oct = document.getElementById('octave');
+    oct.addEventListener('input', function() {
+        if (this.value === '') return;   // field cleared mid-edit, wait for a digit
+        setOctave(+this.value || 0);
+    });
+    oct.addEventListener('change', function() { this.value = curOctave; });  // clamp what was typed
+    // One digit wide: typing replaces instead of appending onto "4" and clamping to 7.
+    oct.addEventListener('focus', function() { this.select(); });
+}
 document.getElementById('song-name').addEventListener('input', function() { saveSongToStorage(); });
 
 /* ================================================================
@@ -4290,10 +4340,11 @@ document.getElementById('song-name').addEventListener('input', function() { save
    ================================================================ */
 /* ---- FT2-style octave (F1-F7) / instrument (+/-) change ---- */
 function setOctave(o) {
-    o = Math.max(0, Math.min(7, o));
+    o = Math.max(0, Math.min(7, o | 0));
+    let fld = document.getElementById('octave');
+    if (fld.value !== String(o)) fld.value = o;   // also clamps what was typed in
     if (o === curOctave) return;
     curOctave = o;
-    document.getElementById('octave').value = curOctave;
     saveSongToStorage();
     updateStatus();
 }
