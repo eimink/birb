@@ -29,6 +29,13 @@ typedef unsigned long long uint64_t;
 #define BIRB_SAMPLE_RATE 44100
 #endif
 
+/* octave_base (birb_synth.c) is a table of phase increments baked for 44100 Hz.
+ * Nothing derives it at runtime, so building at another rate silently detunes
+ * the whole engine — 48000 plays 146.7 cents sharp. Retuning means regenerating
+ * that table, not overriding this. */
+_Static_assert(BIRB_SAMPLE_RATE == 44100,
+               "octave_base is baked for 44100 Hz; regenerate it to retune");
+
 /* Channel count is compile-time configurable (min 4, max 16).
  * Runtime loader reads the per-song count from the flag byte and validates
  * it is <= BIRB_NUM_CHANNELS. Songs authored with fewer channels are padded
@@ -480,6 +487,11 @@ typedef struct {
     uint8_t  num_instruments;
     uint8_t  order_length;
     uint8_t  num_samples;
+    /* Channels this song actually uses (4..16, even). Decoded from the
+     * ticks_per_row byte on load. Kept because the build's BIRB_NUM_CHANNELS
+     * is the array width, not the song's width — writing the build's count
+     * back out pads a 6-channel song to whatever the tool was compiled for. */
+    uint8_t  num_channels;
 #ifndef BIRB_NO_REVERB
     uint8_t  rev_size;   /* global reverb bus: tail length   0-255 */
     uint8_t  rev_damp;   /* global reverb bus: HF damping     0-255 */

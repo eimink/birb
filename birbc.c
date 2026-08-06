@@ -42,6 +42,17 @@
 #include <string.h>
 #include <math.h>
 #include <ctype.h>
+
+/* birbc is a host-side compiler, not a player: nothing here ships in a demo,
+ * so it holds the widest song the format allows rather than the 4-channel
+ * default. Without this a 6-channel .bsb from the tracker is rejected with
+ * "invalid .bin file", which says nothing about the actual problem. The
+ * song's own width travels in song->num_channels and is what gets written
+ * back out — see emit paths below. */
+#ifndef BIRB_NUM_CHANNELS
+#define BIRB_NUM_CHANNELS 16
+#endif
+
 #include "birb_synth.h"
 #include "birb_format.h"
 
@@ -455,6 +466,7 @@ static int parse_birb_file(const char *filename, birb_song *song) {
     int pattern_row = 0;
     int pattern_max_rows = BIRB_MAX_ROWS;
     int line_num = 0;
+    int text_channels = 0;   /* widest pattern row seen; see the parse loop */
 
     while (fgets(line, sizeof(line), f)) {
         line_num++;
@@ -554,6 +566,10 @@ static int parse_birb_file(const char *filename, birb_song *song) {
                 birb_row row = { BIRB_NOTE_EMPTY, 0xFF, 0, FX_NONE, 0 };
                 if (parse_cell(&cursor, &row) == 0) {
                     song->patterns[in_pattern][pattern_row][c] = row;
+                    /* Widest row seen decides the song's channel count — the
+                     * text format has no explicit declaration, and the build's
+                     * array width says nothing about what the song uses. */
+                    if (c + 1 > text_channels) text_channels = c + 1;
                 }
             }
             pattern_row++;
@@ -562,9 +578,17 @@ static int parse_birb_file(const char *filename, birb_song *song) {
     }
 
     fclose(f);
-    printf("Parsed: bpm=%d ticks=%d instruments=%d patterns=%d order=%d\n",
+
+    /* The format encodes channel count as 4 + 2*code, so round the observed
+     * width up to an even number and never below 4. */
+    if (text_channels < 4) text_channels = 4;
+    if (text_channels & 1) text_channels++;
+    if (text_channels > 16) text_channels = 16;
+    song->num_channels = (uint8_t)text_channels;
+
+    printf("Parsed: bpm=%d ticks=%d instruments=%d patterns=%d order=%d channels=%d\n",
            song->bpm, song->ticks_per_row, song->num_instruments,
-           song->num_patterns, song->order_length);
+           song->num_patterns, song->order_length, song->num_channels);
     return 0;
 }
 
@@ -622,10 +646,13 @@ static int write_binary(const char *filename, birb_song *song) {
     }
 
     /* header — channel count lives in the high 3 bits of the ticks_per_row
-     * byte. For Phase 1 we always write BIRB_NUM_CHANNELS (which the current
-     * build is compiled for and the editor writes 4-channel .bsb into). */
+     * byte, and it is the SONG's width, not the build's. birbc compiles at 16
+     * channels so it can open anything; writing that back would pad every
+     * 4-channel song to 16 and quadruple its order and plane data. */
+    int nch_out = song->num_channels ? song->num_channels : 4;
+    if (nch_out > BIRB_NUM_CHANNELS) nch_out = BIRB_NUM_CHANNELS;
     uint8_t tpr_byte = (uint8_t)((song->ticks_per_row & BIRB_TPR_MASK) |
-                                 (BIRB_CHANNELS_ENCODE(BIRB_NUM_CHANNELS) << BIRB_CHANNELS_SHIFT));
+                                 (BIRB_CHANNELS_ENCODE(nch_out) << BIRB_CHANNELS_SHIFT));
     uint8_t hdr[8] = {
         BIRB_MAGIC_0, BIRB_MAGIC_1, BIRB_MAGIC_2, BIRB_MAGIC_3,
         song->bpm, tpr_byte, song->num_instruments, song->num_patterns
@@ -635,7 +662,7 @@ static int write_binary(const char *filename, birb_song *song) {
     /* order */
     fwrite(&song->order_length, 1, 1, f);
     for (int i = 0; i < song->order_length; i++) {
-        fwrite(song->order[i], 1, BIRB_NUM_CHANNELS, f);
+        fwrite(song->order[i], 1, (size_t)nch_out, f);
     }
 
     /* instruments */
@@ -675,7 +702,7 @@ static int write_binary(const char *filename, birb_song *song) {
         for (int p = 0; p < song->num_patterns && empty; p++) {
             int nrows = song->pattern_lengths[p]; if (!nrows) nrows = BIRB_MAX_ROWS;
             for (int r = 0; r < nrows && empty; r++) {
-                for (int c = 0; c < BIRB_NUM_CHANNELS && empty; c++) {
+                for (int c = 0; c < nch_out && empty; c++) {
                     uint8_t v = 0;
                     switch (pl) {
                         case 0: v = song->patterns[p][r][c].note; break;
@@ -696,7 +723,7 @@ static int write_binary(const char *filename, birb_song *song) {
     /* Plane data (channel-major, pattern-major) */
     for (int pl = 0; pl < 5; pl++) {
         if (plane_flags & (1 << pl)) continue;
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++) {
+        for (int c = 0; c < nch_out; c++) {
             for (int p = 0; p < song->num_patterns; p++) {
                 int nrows = song->pattern_lengths[p]; if (!nrows) nrows = BIRB_MAX_ROWS;
                 for (int r = 0; r < nrows; r++) {
@@ -969,7 +996,7 @@ static int write_binary(const char *filename, birb_song *song) {
     fclose(f);
     printf("Wrote %s (%ld bytes: 8 hdr + %d order + %d inst + %d patterns)\n",
            filename, size,
-           1 + song->order_length * BIRB_NUM_CHANNELS,
+           1 + song->order_length * nch_out,
            song->num_instruments * BIRB_INST_SIZE,
            total_pattern_bytes);
     return 0;
@@ -1258,14 +1285,17 @@ static int write_js(const char *filename, birb_song *song) {
         return -1;
     }
 
-    const int nch_js = BIRB_NUM_CHANNELS;
+    /* Emit at the song's width, not the build's: a player that loops over 16
+     * channels for a 4-channel song is 4x the per-sample work and carries 12
+     * dead channel structs. */
+    const int nch_js = song->num_channels ? song->num_channels : BIRB_NUM_CHANNELS;
     const int LOCK = birb_smol;
     /* Always walked: LOCK ships the event list, and every mode takes its
      * length from the walk's own elapsed sample count. */
     bc_walk(song, nch_js);
 
     fprintf(f, "function birb(X){\n");
-    fprintf(f, "var S=44100,N=4,F=65536,\n");
+    fprintf(f, "var S=44100,N=%d,F=65536,\n", nch_js);
     fprintf(f, "bpm=%d,tpr=%d,ni=%d,np=%d,ol=%d,\n",
             song->bpm, song->ticks_per_row, song->num_instruments,
             song->num_patterns, song->order_length);
@@ -1275,8 +1305,10 @@ static int write_js(const char *filename, birb_song *song) {
     fprintf(f, "O=[");
     for (int i = 0; i < song->order_length; i++) {
         if (i) fprintf(f, ",");
-        fprintf(f, "[%d,%d,%d,%d]", song->order[i][0], song->order[i][1],
-                song->order[i][2], song->order[i][3]);
+        fprintf(f, "[");
+        for (int c = 0; c < nch_js; c++)
+            fprintf(f, "%s%d", c ? "," : "", song->order[i][c]);
+        fprintf(f, "]");
     }
     fprintf(f, "],\n");
     }
@@ -1554,7 +1586,7 @@ static int write_js(const char *filename, birb_song *song) {
 
     if (s_perch) {
         fprintf(f, "IC=[");
-        for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
+        for (int c = 0; c < nch_js; c++)
             fprintf(f, "%s%d", c ? "," : "", smol_ch_inst[c]);
         fprintf(f, "],\n");
     }
@@ -1606,13 +1638,13 @@ static int write_js(const char *filename, birb_song *song) {
         int total = 0;
         for (int p = 0; p < song->num_patterns; p++) {
             int nrows = song->pattern_lengths[p]; if (!nrows) nrows = 64;
-            total += nrows * BIRB_NUM_CHANNELS;
+            total += nrows * nch_js;
         }
         uint8_t *flat = (uint8_t *)malloc(total ? total : 1);
         int w = 0;
         for (int p = 0; p < song->num_patterns; p++) {
             int nrows = song->pattern_lengths[p]; if (!nrows) nrows = 64;
-            for (int c = 0; c < BIRB_NUM_CHANNELS; c++)
+            for (int c = 0; c < nch_js; c++)
                 for (int r = 0; r < nrows; r++) {
                     switch (plane) {
                         case 0: flat[w] = song->patterns[p][r][c].note; break;
@@ -2072,19 +2104,24 @@ static int write_js(const char *filename, birb_song *song) {
         /* one family -> one constant, so the table and its index go away */
         const char *tgain = (!uses_fm && !uses_ks && !uses_drum && !uses_formant)
             ? "(29819/65536)" : "TG[C.w]";
+        /* smol drops per-instrument volume (it says so on the tin — see the
+         * --smol warning), so its TR never assigns C.v. Emitting C.v into the
+         * mix anyway multiplied every sample by undefined and made the whole
+         * export NaN. Drop the term and its /255 along with it. */
+        const char *vterm = birb_smol ? "C.rv/F/255" : "C.v*C.rv/F/255/255";
         const char *master = birb_no_master
             ? "v*=MG;out[i]=v>1?1:v<-1?-1:v"
             : "v*=MG;var la=v<0?-v:v;LE=la>LE?la:la+(LE-la)*MR;if(LE>MT)v*=MT/LE;out[i]=SS(v)/MC";
 #ifndef BIRB_NO_REVERB
         if (uses_reverb)
             fprintf(f,
-                "%svar cv=s*en*C.v*C.rv/F/255/255*%s;%sv+=cv;if(C.rs)rI+=cv*C.rs/255;%sC.p=(C.p+C.f)%%F}v+=RV(rI);%s%s}\n"
-                "return{o:out,spt:spt,T:T}}\n", drv, tgain, dsend, padv, dtick, master);
+                "%svar cv=s*en*%s*%s;%sv+=cv;if(C.rs)rI+=cv*C.rs/255;%sC.p=(C.p+C.f)%%F}v+=RV(rI);%s%s}\n"
+                "return{o:out,spt:spt,T:T}}\n", drv, vterm, tgain, dsend, padv, dtick, master);
         else
 #endif
             fprintf(f,
-                "%svar cv=s*en*C.v*C.rv/F/255/255*%s;%sv+=cv;%sC.p=(C.p+C.f)%%F}%s%s}\n"
-                "return{o:out,spt:spt,T:T}}\n", drv, tgain, dsend, padv, dtick, master);
+                "%svar cv=s*en*%s*%s;%sv+=cv;%sC.p=(C.p+C.f)%%F}%s%s}\n"
+                "return{o:out,spt:spt,T:T}}\n", drv, vterm, tgain, dsend, padv, dtick, master);
     }
 
     if (bc_ev) { free(bc_ev); bc_ev = NULL; bc_nev = 0;
@@ -2219,7 +2256,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
     FILE *f = fopen(filename, "w");
     if (!f) { fprintf(stderr, "Error: cannot write '%s'\n", filename); return -1; }
 
-    const int nch = BIRB_NUM_CHANNELS;
+    const int nch = song->num_channels ? song->num_channels : BIRB_NUM_CHANNELS;
     bc_st_reset_reg();
     bc_walk(song, nch);
 

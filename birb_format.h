@@ -190,6 +190,7 @@ static int birb_load(birb_song *song, const uint8_t *data, int len) {
     song->ticks_per_row = tpr_byte & BIRB_TPR_MASK;
     int nch_song = BIRB_CHANNELS_DECODE(tpr_byte);
     if (nch_song > BIRB_NUM_CHANNELS) return -1; /* build can't hold this many */
+    song->num_channels = (uint8_t)nch_song;
     song->num_instruments = data[6];
     song->num_patterns = data[7];
 
