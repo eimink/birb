@@ -44,11 +44,17 @@ int main(int argc, char **argv) {
      * limiter, and a generic pitch estimator reads it wrong by up to 177 cents.
      * The loop itself is exactly periodic, so measure that instead. */
     if (argc >= 3 && strcmp(argv[1], "--dump-ks") == 0) {
-        int len = atoi(argv[2]);
+        /* Takes the Q32 increment, not a length, so it exercises exactly what
+         * trigger_note computes — including the fractional part that the
+         * allpass realizes. */
+        uint32_t inc = (uint32_t)strtoul(argv[2], NULL, 10);
         int damping = argc > 3 ? atoi(argv[3]) : 0;
         long count = argc > 4 ? atol(argv[4]) : 200000;
+        uint64_t lq = inc ? (((uint64_t)1 << 48) / inc) : 0;
+        int len = (int)(lq >> 16);
+        uint32_t lfrac = (uint32_t)(lq & 0xFFFFu);
         if (len < 4 || len > BIRB_KS_BUF_SIZE) {
-            fprintf(stderr, "buf_len must be 4..%d\n", BIRB_KS_BUF_SIZE);
+            fprintf(stderr, "buf_len %d out of 4..%d\n", len, BIRB_KS_BUF_SIZE);
             return 1;
         }
         static birb_channel ch;
@@ -57,6 +63,13 @@ int main(int argc, char **argv) {
         ch.u.ks.buf_len = (uint16_t)len;
         ch.u.ks.buf_pos = 0;
         ch.u.ks.loop_gain = birb_ks_loop_gain((uint8_t)damping, (uint16_t)len);
+#ifndef BIRB_LEGACY_PITCH
+        {
+            int32_t d_q16 = (int32_t)lfrac + 32768;
+            int64_t nu = (int64_t)(65536 - d_q16) << 16;
+            ch.u.ks.ap_c = (int16_t)(nu / (65536 + d_q16));
+        }
+#endif
         uint16_t lfsr = 0x7FFF;
         for (int i = 0; i < len; i++) {
             uint16_t b = (lfsr ^ (lfsr >> 1)) & 1;
@@ -67,15 +80,15 @@ int main(int argc, char **argv) {
             int16_t v = generate_ks(&ch);
             fwrite(&v, sizeof v, 1, stdout);
         }
-        fprintf(stderr, "ks loop len=%d damping=%d gain=%u samples=%ld\n",
-                len, damping, ch.u.ks.loop_gain, count);
+        fprintf(stderr, "ks loop len=%d frac=%u c=%d gain=%u samples=%ld\n",
+                len, lfrac, ch.u.ks.ap_c, ch.u.ks.loop_gain, count);
         return 0;
     }
 
     if (argc < 3) {
         fprintf(stderr, "usage: %s song.bsb out.raw [num_samples]\n", argv[0]);
         fprintf(stderr, "       %s --dump-notes\n", argv[0]);
-        fprintf(stderr, "       %s --dump-ks <buf_len> [damping] [n] > out.raw\n", argv[0]);
+        fprintf(stderr, "       %s --dump-ks <q32_increment> [damping] [n] > out.raw\n", argv[0]);
         return 2;
     }
 

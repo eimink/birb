@@ -335,6 +335,17 @@ static int16_t generate_ks(birb_channel *ch) {
     int16_t out = ch->u.ks.buf[pos];
     /* simple 2-tap low-pass: average of current + next tap */
     int32_t avg = ((int32_t)out + ch->u.ks.buf[next]) >> 1;
+    /* Fractional delay, in series after the lowpass so the two delays compose.
+     * y = c*(x - y_prev) + x_prev. |x - y_prev| <= ~65534 and |c| < 0.34 in
+     * Q16, so the product stays inside int32. */
+    if (ch->u.ks.ap_c) {
+        int32_t y = (int32_t)((((int64_t)ch->u.ks.ap_c * (avg - ch->u.ks.ap_y)) >> 16)
+                              + ch->u.ks.ap_x);
+        if (y > 32767) y = 32767; else if (y < -32768) y = -32768;
+        ch->u.ks.ap_x = (int16_t)avg;
+        ch->u.ks.ap_y = (int16_t)y;
+        avg = y;
+    }
     /* |avg| <= 32767 and loop_gain <= 65535, so this stays inside int32. */
     int32_t damped = (avg * (int32_t)ch->u.ks.loop_gain) >> 16;
     ch->u.ks.buf[pos] = (int16_t)damped;
@@ -930,13 +941,30 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
     else if (inst->synth_type == SYNTH_KS) {
         /* buffer length = SAMPLE_RATE / freq_hz. ch->freq is the 16.16 phase
          * increment at SAMPLE_RATE, so len == FX_ONE / freq directly. */
-        uint32_t len = ch->freq > 0
-            ? (uint32_t)(((uint64_t)1 << 48) / (uint32_t)ch->freq) >> 16 : 0;
+        /* L in 16.16. The integer part sizes the line; the fraction becomes
+         * the allpass delay, offset by the half sample the loop filter costs. */
+        uint64_t lq = ch->freq > 0
+            ? ((uint64_t)1 << 48) / (uint32_t)ch->freq : 0;
+        uint32_t len = (uint32_t)(lq >> 16);
+        uint32_t lfrac = (uint32_t)(lq & 0xFFFFu);
         if (len < 4) len = 4;
         if (len > BIRB_KS_BUF_SIZE) len = BIRB_KS_BUF_SIZE;
         ch->u.ks.buf_len = (uint16_t)len;
         ch->u.ks.buf_pos = 0;
         ch->u.ks.loop_gain = birb_ks_loop_gain(inst->ks_damping, (uint16_t)len);
+#ifdef BIRB_LEGACY_PITCH
+        /* Legacy: no fractional delay, the line is a whole number of samples. */
+        ch->u.ks.ap_c = 0;
+#else
+        {
+            /* d = frac + 0.5 in Q16, then c = (1 - d) / (1 + d). */
+            int32_t d_q16 = (int32_t)lfrac + 32768;
+            int64_t num = (int64_t)(65536 - d_q16) << 16;
+            ch->u.ks.ap_c = (int16_t)(num / (65536 + d_q16));
+        }
+#endif
+        ch->u.ks.ap_x = 0;
+        ch->u.ks.ap_y = 0;
         /* Fill buffer with a deterministic LFSR noise burst. Seed is shifted
          * from the note so identical instruments on different pitches don't
          * alias phase-locked. Excitation is full scale: at ±16383 the pluck

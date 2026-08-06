@@ -316,12 +316,12 @@ function t60(x, blocks = 24) {
  * inside a song is a decaying filtered noise burst through an envelope and a
  * limiter; a generic pitch estimator reads that wrong by up to 177 cents, which
  * is what this section used to report. The loop itself is exactly periodic. */
-function ksLoopPeriod(len, damping = 0) {
+function ksLoopPeriod(inc, len, damping = 0) {
     const n = Math.max(len * 600, 120000);
     let buf;
     try {
         buf = execFileSync(join(ROOT, 'tools/birb_render'),
-            ['--dump-ks', String(len), String(damping), String(n)],
+            ['--dump-ks', String(inc), String(damping), String(n)],
             { maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] });
     } catch { return NaN; }
     const N = buf.length >> 1, x = new Float64Array(N);
@@ -351,7 +351,7 @@ function ksDirectReport(tableFn) {
         const ideal = 2 ** 32 / inc;
         const len = Math.floor(ideal);
         if (len < 4 || len > KS_BUF) continue;
-        const p = ksLoopPeriod(len);
+        const p = ksLoopPeriod(inc, len);
         if (!Number.isFinite(p)) continue;
         rows.push([n, 1200 * Math.log2(ideal / p), len, p]);
     }

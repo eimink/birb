@@ -398,6 +398,14 @@ typedef struct {
              * makes decay time pitch-independent: a long buffer needs a higher
              * per-period gain to reach the same T60 in seconds. */
             uint16_t loop_gain;
+            /* Fractional-delay allpass. c is Q16 and lives in (-0.2, 0.334];
+             * ap_x is the filter's last input (the loop-filter output, so it
+             * fits int16), ap_y its last output, which can overshoot and is
+             * kept wide. Zeroed under BIRB_LEGACY_PITCH, where c is 0 and the
+             * filter degenerates to the plain one-sample path. */
+            int16_t  ap_c;
+            int16_t  ap_x;
+            int16_t  ap_y;
         } ks;
 #endif
 #ifndef BIRB_NO_DRUM

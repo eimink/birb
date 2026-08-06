@@ -2733,7 +2733,7 @@ function renderSong(patOnly, singlePat) {
     for (let c = 0; c < N; c++)
         ch[c] = {p:0,f:0,b:0,w:0,n:0,u:F/2,e:0,t:0,a:0,d:0,s:0,r:0,q:0,g:0,x:0,y:0,k:0,l:0,h:0x7FFF,j:16,m:0,i:0,v:255,rv:255,pt:0,ps:0,ri:0,nc:0,nd:0,dn:0,di:0,vp:0,vs:0,vd:0,sp:0,ss:0,si:0,sa:0,tp:0,ts:0,td:0,tm:0,
             fmp:[0,0,0,0], fmf:[0,0,0,0], fmL:[0,0,0,0], fmR:[1,1,0,0], fmEnv:[0,0,0,0], fmStg:[0,0,0,0], fmFb:0, fmMi:64, fmNo:2, fmAlgo:0, fmPrev:0,
-            ksBuf:null, ksLen:0, ksPos:0, ksD:0, ksG:0, dp:1, dn:1, ds:0, da:0,
+            ksBuf:null, ksLen:0, ksPos:0, ksD:0, ksG:0, ksC:0, ksAx:0, ksAy:0, dp:1, dn:1, ds:0, da:0,
             drAl:0, drAlOrig:0, drPhase2:0, drP2:0, drNz:0, drPe:0, drPet:0, drRate:0, drSnap:0, drClick:0, drZ1:0, drZ2:0, drLf:0x7FFF, drTtl:0, drMix:0, drStage:0, drStageT:0, drBurstLen:0, drBodyT:0,
             fmtSw:0, fmtLf:0x7FFF, fmtVa:0, fmtVb:0, fmtSp:0, fmtDir:1, fmtSS:0, fmtR:128, fmtRc:0,
             fmtZ1:[0,0,0], fmtZ2:[0,0,0], fmtB0:[0,0,0], fmtA1:[0,0,0], fmtA2:[0,0,0]};
@@ -2941,7 +2941,13 @@ function renderSong(patOnly, singlePat) {
         }
         if (j.wave === 7) {
             /* Karplus-Strong: buffer length from freq (FX_ONE / freq), pre-filled with LFSR noise. */
-            let ln = C.b > 0 ? Math.floor(2**32 / C.b) : 0;
+            let lq_ = C.b > 0 ? Math.floor(2**48 / C.b) : 0;
+            let ln = lq_ >>> 16;
+            /* fraction -> allpass delay d = frac + 0.5, so
+             * c = (1-d)/(1+d) in Q16. See PITCH.md 5. */
+            let d_ = (lq_ & 0xFFFF) + 32768;
+            C.ksC = Math.round(((65536 - d_) * 65536) / (65536 + d_));
+            C.ksAx = 0; C.ksAy = 0;
             if (ln < 4) ln = 4;
             if (ln > 1024) ln = 1024;
             C.ksLen = ln; C.ksPos = 0;
@@ -3195,6 +3201,13 @@ function renderSong(patOnly, singlePat) {
                     let p = C.ksPos, nx = p + 1; if (nx >= C.ksLen) nx = 0;
                     let cur = C.ksBuf[p];
                     let avg = (cur + C.ksBuf[nx]) >> 1;
+                    if (C.ksC) {   /* fractional delay, in series after the LP */
+                        let x_ = avg;
+                        let y_ = ((C.ksC * (x_ - C.ksAy)) >> 16) + C.ksAx;
+                        if (y_ > 32767) y_ = 32767; else if (y_ < -32768) y_ = -32768;
+                        C.ksAx = x_; C.ksAy = y_;   /* x_ is the input, y_ the output */
+                        avg = y_;
+                    }
                     C.ksBuf[p] = (avg * C.ksG) >> 16;
                     C.ksPos = nx;
                     s = cur / 32768;
@@ -3703,7 +3716,13 @@ class BirbProcessor extends AudioWorkletProcessor {
             }
         }
         if (j.wave === 7) {
-            let ln = C.b > 0 ? Math.floor(2**32 / C.b) : 0;
+            let lq_ = C.b > 0 ? Math.floor(2**48 / C.b) : 0;
+            let ln = lq_ >>> 16;
+            /* fraction -> allpass delay d = frac + 0.5, so
+             * c = (1-d)/(1+d) in Q16. See PITCH.md 5. */
+            let d_ = (lq_ & 0xFFFF) + 32768;
+            C.ksC = Math.round(((65536 - d_) * 65536) / (65536 + d_));
+            C.ksAx = 0; C.ksAy = 0;
             if (ln < 4) ln = 4;
             if (ln > 1024) ln = 1024;
             C.ksLen = ln; C.ksPos = 0;
@@ -3991,6 +4010,13 @@ class BirbProcessor extends AudioWorkletProcessor {
                         let p = C.ksPos, nx = p + 1; if (nx >= C.ksLen) nx = 0;
                         let cur = C.ksBuf[p];
                         let avg = (cur + C.ksBuf[nx]) >> 1;
+                        if (C.ksC) {
+                            let x_ = avg;
+                            let y_ = ((C.ksC * (x_ - C.ksAy)) >> 16) + C.ksAx;
+                            if (y_ > 32767) y_ = 32767; else if (y_ < -32768) y_ = -32768;
+                            C.ksAx = x_; C.ksAy = y_;
+                            avg = y_;
+                        }
                         C.ksBuf[p] = (avg * C.ksG) >> 16;
                         C.ksPos = nx;
                         s = cur / 32768;
@@ -4981,7 +5007,7 @@ ${usesPitchEnv ? `C.q=j[6];C.g=j[7];` : ``}${usesArp ? `C.x=j[8];C.y=j[9];` : ``
 ${usesNoise ? `if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}` : ``}
 ${usesSamples ? `C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}` : ''}${usesFM ? `
 if(j[0]===6){var fm=j[16];${(usesFM4&&usesFM2) ? `C.fmNo=j[12];` : ``}${usesFM4 ? `C.fmAlgo=j[13]|0;` : ``}C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<${fmOps};k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.min(Math.round(C.b*C.fmR[k]),2147483647);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
-if(j[0]===7){var ln=C.b>0?2**32/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}` : ''}${usesDrum ? `
+if(j[0]===7){var lq_=C.b>0?Math.floor(2**48/C.b):0,ln=lq_>>>16,d_=(lq_&0xFFFF)+32768;C.kc=Math.round(((65536-d_)*65536)/(65536+d_));C.kax=0;C.kay=0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}` : ''}${usesDrum ? `
 if(j[0]===8){var dt=j[${drumBase}]&7,al=dt===4?0:dt===5?2:dt,tn=j[${drumBase+1}];if(tn>127)tn-=256;var dec=j[${drumBase+2}],tone=j[${drumBase+3}],snp=j[${drumBase+4}],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;
 if(al===0){var df16=df/65536;C.drPe=(df16<<3)<<8;C.drPet=(df16>>1)<<8;C.drRate=KC(tone);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}
 else if(al===1){C.f=df>0?df:nf(26);C.b=C.f;C.drMix=snp;C.drPet=SC(tone);C.drPe=F;C.drRate=65460;C.drZ1=0;tt=dec*120+1024;C.drP2=F;C.drNz=F-Math.min(4096,(301466/(tt||1))|0)}
@@ -5048,7 +5074,7 @@ ${usesSamples ? `if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
 if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}` : ''}${usesFM ? `
 ${preFM}if(C.w===6){${(usesFM4 && usesFM2) ? `if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_((C.fmp[1]>>>16))*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_((C.fmp[0]>>>16)+mo);C.fmPrev=cr_*F;C.fmp[0]=C.fmp[0]+C.fmf[0]>>>0;C.fmp[1]=C.fmp[1]+C.fmf[1]>>>0;s=cr_*l0f/F}` : usesFM4 ? `s=FM4(C)` : `var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_((C.fmp[1]>>>16))*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_((C.fmp[0]>>>16)+mo);C.fmPrev=cr_*F;C.fmp[0]=C.fmp[0]+C.fmf[0]>>>0;C.fmp[1]=C.fmp[1]+C.fmf[1]>>>0;s=cr_*l0f/F`}}` : ''}${usesKS ? `
-${preKS}if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*C.kg)>>16;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
+${preKS}if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp],kav=(kcur+C.kb[knx])>>1;if(C.kc){var kx=kav,ky=((C.kc*(kx-C.kay))>>16)+C.kax;ky=ky>32767?32767:(ky<-32768?-32768:ky);C.kax=kx;C.kay=ky;kav=ky}C.kb[kpp]=(kav*C.kg)>>16;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
 ${preDrum}if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
 ${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8)*65536)>>>0;var q_=C.p>>>16,tri=q_<F/2?(q_*4-F):(F*3-q_*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}` : ''}
 ${drumAlgos.has(1) ? `${drumAlgos.has(0) ? 'else ' : ''}if(C.drAl===1){var nn=lfn();var sr_=(nn&1)?26000:-26000;var y_=sr_-C.drZ1;C.drZ1+=(y_*C.drPet)>>16;var noi=Math.floor(y_*C.drP2/65536);C.drP2=Math.floor(C.drP2*C.drNz/65536);C.p=C.p+C.f>>>0;var q_=C.p>>>16,tr_=q_<F/2?(q_*4-F):(F*3-q_*4);var bd=(tr_*22000)>>16;bd=Math.floor(bd*C.drPe/65536);C.drPe=Math.floor(C.drPe*C.drRate/65536);var mxB=C.drMix,mxN=255-mxB;o_=((noi*mxN+bd*mxB)/255)|0}` : ''}
