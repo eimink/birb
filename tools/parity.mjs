@@ -17,7 +17,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exportSong, renderInEditor } from './editor_export.mjs';
@@ -172,6 +173,48 @@ for (const song of songs) {
             : `${c.pct.toFixed(1)}% differ, max ${c.max.toFixed(4)}, rmse ${c.rmse.toFixed(5)}` +
               (c.lenA !== c.lenB ? `, length ${c.lenA} vs ${c.lenB}` : '');
         console.log(`  ${ref} vs ${name.padEnd(15)} ${tag}`);
+    }
+}
+
+/* ---------- bit-identity gate ----------
+ * PITCH.md §8: the Q32 widening must not change a single sample. Cross-class
+ * numbers cannot show that — they only compare paths to each other, so a change
+ * that shifts every path equally would slip through. This hashes each path's
+ * PCM and diffs against a saved baseline.
+ *
+ *   node tools/parity.mjs --save-baseline    before the change
+ *   node tools/parity.mjs                    after; any MOVED line is a failure
+ */
+{
+    const file = join(WORK, '..', 'parity-baseline.json');
+    const now = {};
+    for (const k of Object.keys(renders)) {
+        const r = renders[k], b = Buffer.allocUnsafe(r.length * 2);
+        for (let i = 0; i < r.length; i++) {
+            let v = Math.round(r[i] * 32768);
+            if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
+            b.writeInt16LE(v, i * 2);
+        }
+        now[k] = createHash('sha256').update(b).digest('hex').slice(0, 16);
+    }
+    if (args.includes('--save-baseline')) {
+        writeFileSync(file, JSON.stringify(now, null, 1));
+        console.log(`\n\nbaseline saved: ${Object.keys(now).length} renders -> ${file}`);
+    } else if (existsSync(file)) {
+        const was = JSON.parse(readFileSync(file, 'utf8'));
+        const moved = [], gone = [], added = [];
+        for (const k of Object.keys(now)) {
+            if (!(k in was)) added.push(k);
+            else if (was[k] !== now[k]) moved.push(k);
+        }
+        for (const k of Object.keys(was)) if (!(k in now)) gone.push(k);
+        console.log('\n\nbit-identity against saved baseline');
+        if (!moved.length) console.log(`  ok — all ${Object.keys(now).length - added.length} renders byte-identical`);
+        else { console.log(`  ${moved.length} render(s) MOVED:`); for (const k of moved) console.log(`    ${k}`); }
+        if (added.length) console.log(`  ${added.length} new (not in baseline)`);
+        if (gone.length) console.log(`  ${gone.length} missing since baseline: ${gone.join(', ')}`);
+    } else {
+        console.log('\n\nno baseline saved — run with --save-baseline first');
     }
 }
 
