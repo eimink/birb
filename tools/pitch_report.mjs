@@ -217,16 +217,23 @@ const TABLES = {
         return n => v[n];
     },
     'birbc --js': (work) => {
-        /* the emitted player carries its own copy — read that, not the source */
+        /* Evaluate the emitted player's OWN nf, never a copy of it. */
         const src = readFileSync(join(work, 'lj.js'), 'utf8');
         const bf = JSON.parse(src.match(/bf=(\[[^\]]*\])/)[1]);
-        return new Function('bf', 'return n=>(n=n<0?0:n>95?95:n,((bf[n%12]<<(n/12))+128)>>8);')(bf);
+        const at = src.search(/nf=n=>\(/);
+        let i = src.indexOf('(', src.indexOf('=>', at));
+        const start = i;
+        for (let d = 0; i < src.length; i++) {
+            if (src[i] === '(') d++;
+            else if (src[i] === ')' && --d === 0) { i++; break; }
+        }
+        return new Function('bf', `return n => ${src.slice(start, i)};`)(bf);
     },
 };
 
 function tableReport(work) {
     console.log('note lookup, compared exactly (no audio involved)');
-    console.log('increment -> Hz = inc * 44100 / 65536; error vs equal temperament\n');
+    console.log('increment -> Hz = inc * 44100 / 2**32; error vs equal temperament\n');
     const rows = [];
     for (const [name, get] of Object.entries(TABLES)) {
         let fn;
@@ -234,7 +241,7 @@ function tableReport(work) {
         if (!fn) { rows.push([name, null, 'could not extract lookup']); continue; }
         let worst = 0, wn = 0, sum = 0;
         for (let n = 0; n < 96; n++) {
-            const hz = fn(n) * SR / 65536;
+            const hz = fn(n) * SR / 2 ** 32;
             const e = CENTS(hz, n);
             sum += Math.abs(e);
             if (Math.abs(e) > Math.abs(worst)) { worst = e; wn = n; }
@@ -279,7 +286,7 @@ function tableReport(work) {
  * both. */
 const KS_BUF = 1024;   /* BIRB_KS_BUF_SIZE default */
 
-function ksLength(inc) { return inc > 0 ? Math.floor(65536 / inc) : 0; }
+function ksLength(inc) { return inc > 0 ? Math.floor(2 ** 32 / inc) : 0; }
 
 /* T60 from the RMS envelope: block the row, take log amplitude, least-squares
  * the slope in dB/s, extrapolate to -60 dB. */

@@ -37,7 +37,14 @@ fixed16 birb_note_to_freq(int note) {
      * away here — unrounding them is an audible change and belongs to its own
      * milestone; this one only widens, so the value is the old 16.16 one
      * shifted up and the output is bit-identical. */
-    return (fixed16)((((octave_base[note % 12] << (note / 12)) + 128) >> 8) << 16);
+    uint32_t v = (uint32_t)octave_base[note % 12] << (note / 12);  /* 1/256 LSB16 */
+#ifdef BIRB_LEGACY_PITCH
+    /* Pre-2026-08 tuning: round the table's fractional bits away. Kept so an
+     * existing production can be rebuilt exactly as it shipped. */
+    return (fixed16)(((v + 128) >> 8) << 16);
+#else
+    return (fixed16)(v << 8);
+#endif
 }
 
 /* ---------- sine approximation ---------- *
@@ -1375,7 +1382,9 @@ static void tick_effects(birb_channel *ch, birb_song *song) {
              * the fractional freq_f so vibrato reaches the operators exactly as
              * in the editor. fmR = (ri*16+rf)/16 (exact, /16 is a power of two). */
             double fmR = (double)((ri << 4) | (rf & 0xF)) / 16.0;
-            ch->u.fm.op_freq[i] = (fixed16)(freq_f * fmR + 0.5);
+            /* Operators run on a 16.16 phase, so narrow the Q32 carrier first —
+             * same as the trigger above and as the JS emitters' /65536. */
+            ch->u.fm.op_freq[i] = (fixed16)(freq_f / 65536.0 * fmR + 0.5);
         }
         fm_op_envelope_tick(ch, inst);
     }

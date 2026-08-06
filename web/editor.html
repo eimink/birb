@@ -2695,7 +2695,7 @@ function renderSong(patOnly, singlePat) {
      * phase increment is an integer. */
     let bf = [6221,6591,6983,7398,7838,8304,8797,9321,9875,10462,11084,11743];
     let dv = [8192,16384,32768,49152];
-    let nf = n => (n=n<0?0:n>95?95:n, (((bf[n%12]<<(n/12))+128)>>8)*65536);
+    let nf = n => (n=n<0?0:n>95?95:n, (bf[n%12]<<(n/12))*256);
     let spt = S*5/((bpm||125)*2)|0;
 
     // Build order and pattern data
@@ -3630,7 +3630,7 @@ class BirbProcessor extends AudioWorkletProcessor {
         for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
         return s;
     }
-    nf(n) { if (n<0)n=0; if (n>95)n=95; return (((this.bf[n%12] << (n/12|0)) + 128) >> 8) * 65536; }
+    nf(n) { if (n<0)n=0; if (n>95)n=95; return (this.bf[n%12] << (n/12|0)) * 256; }
     fmtCalcCoeffs(vowel, q, dst) {
         const FREQS = [[730,1090,2440],[530,1840,2480],[270,2290,3010],[570,840,2410],[300,870,2240]];
         const GAINS = [1.0, 0.7, 0.4];
@@ -4955,7 +4955,7 @@ return{d:out,b:q.b,l:q.l,ls:q.ls,le:q.le}})
     let formantBase = drumBase >= 0 ? (drumBase + 5) : -1;
     o += `var bf=[6221,6591,6983,7398,7838,8304,8797,9321,9875,10462,11084,11743],
 ${(usesPulse||usesFormant) ? `dv=[8192,16384,32768,49152],
-` : ``}nf=n=>(n=n<0?0:n>95?95:n,(((bf[n%12]<<(n/12))+128)>>8)*65536),
+` : ``}nf=n=>(n=n<0?0:n>95?95:n,(bf[n%12]<<(n/12))*256),
 spt=S*5/((bpm||125)*2)|0,${LOCK ? `T=${WALK ? WALK.T : 0}` : SM.fixedLen ? `T=ol*${SM.rows}*tpr*spt` : `W=pl.reduce((a,b)=>a>b?a:b,1),T=ol*W*tpr*spt`},
 out=new Float32Array(T),ch=[]${LOCK ? `` : `,ct=0,cr=0,op=0`},tc=0
 ${usesReverb ? `var RB=[1116,1188,1277,1356${SM.on ? `` : `,556,441`}].map(n=>new Float32Array(n)),RP=[0,0,0,0${SM.on ? `` : `,0,0`}],RCL=[0,0,0,0]
