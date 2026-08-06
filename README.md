@@ -17,7 +17,7 @@ Ten voice types across six engines, chosen per instrument:
 
 - **Oscillators** — pulse (12.5 / 25 / 50 / 75% duty), triangle, sawtooth, LFSR noise, sine (5th-order minimax)
 - **FM** — 2-operator (carrier + modulator) and 4-operator with 8 algorithms; per-op ratio / level / ADSR, global feedback and mod index. Presets: Bass, Bell, Organ, Brass (2-op), Violin, BRAAAAM (4-op)
-- **Karplus-Strong** — plucked/struck string, one damping control (low = ringy, high = muted click)
+- **Karplus-Strong** — plucked/struck string, one damping control (low = ringy, high = muted click). The delay line carries a fractional length via a first-order allpass, so pitch is accurate to 2.8 cents rather than the tens-to-hundreds an integer line gives. Below ~43 Hz (~172 Hz in 4K builds, where the buffer is 256) the length clamps and the voice plays a different note
 - **Algorithmic drums** — Kick / Snare / Hat / Clap / Tom / Crash; Tune / Decay / Tone / Snap re-purpose per algorithm. Preset kit (808/909 kicks, snare, rim, closed/open hat, clap, crash, ride)
 - **Formant / vowel** — source wave (pulse/saw/noise) through 3 parallel bandpass biquads at vowel formant frequencies; pick vowel A and B (A/E/I/O/U) and a sweep speed to morph A↔B, resonance steers Q
 - **Samples** — IMA-ADPCM WAV playback with pitch shifting and loop points
@@ -30,6 +30,30 @@ Global:
 - **Master soft-saturation** (tanh) — gentle limiting, no hard clip even when the reverb is drenched
 - **Per-row volume column** (`00` = hold previous, `01`–`FF` = level)
 
+### Tuning
+
+One canonical note table, shared by every render path and compared exactly by
+`make pitch-report` — the engine, the tracker's own playback, its JS export,
+and all four `birbc` emitters agree to the bit.
+
+| | worst error |
+|---|---|
+| note lookup | 0.12 cents |
+| pulse / saw | 0.6 cents |
+| FM | 6.8 cents |
+| Karplus-Strong (loop) | 2.8 cents |
+
+The table is stored in 1/256 units and used at full precision; the phase
+increment is a 32-bit fraction of a cycle, which is what leaves room for it. A
+16.16 increment quantised the low octaves to 35-70 cents per step and cost up
+to 23.4 cents. `4XY` benefits from the same change — its depth used to truncate
+to zero for Y = 1..7 and to one step for Y = 8..15, i.e. two outcomes from a
+15-step control.
+
+Build with `-DBIRB_LEGACY_PITCH` to restore the old rounding, the old `4XY`
+truncation and the integer KS delay, for rebuilding a production exactly as it
+shipped. `BIRB_SAMPLE_RATE` is asserted at 44100: the table is baked for it.
+
 ### Effects (FT2-inspired)
 
 | Effect | Param | Name |
@@ -37,7 +61,7 @@ Global:
 | `1XY` | | Arpeggio — cycles base, +X, +Y semitones per tick |
 | `2XX` | | Pitch up — slide pitch up at speed XX |
 | `3XX` | | Pitch down — slide pitch down at speed XX |
-| `4XY` | | Vibrato — X = speed, Y = depth |
+| `4XY` | | Vibrato — X = speed, Y = depth (all 15 depths distinct; see Tuning) |
 | `5XX` | | Tone portamento — slide to target note |
 | `6XX` | | Retrigger — re-trigger note every XX ticks |
 | `7CX` | | Note cut — kill note after X ticks |
@@ -84,13 +108,37 @@ make editor-dist  # web/editor.min.html + .min.html.br (minify_editor.py → ter
 make serve        # local web server on :8080
 ```
 
+### Checks
+
+```bash
+make pitch-report # realized pitch per note per render path, vs equal temperament
+make parity       # render the corpus through every path and diff the PCM
+```
+
+`pitch-report` measures generated single-note probes — one note at a time, not
+song mixes, which give a pitch estimator almost nothing to lock onto. It
+self-tests against synthetic tones each run and prints its own noise floor, and
+it compares every implementation's note lookup exactly, with no audio involved.
+KS is measured by running the loop in isolation (`birb_render --dump-ks`),
+because a decaying filtered noise burst through a limiter is not something to
+trust an estimator with.
+
+`parity` treats the render paths as two equivalence classes that must each
+sound the same internally — locked (the engine, the tracker and its export,
+`birbc --js`, the locked C player, the wasm build) and smol (`--smol`,
+`--smol-c`, `web/birb_smol.wasm`, the tracker's smol export). It also hashes
+every render, so `--save-baseline` before a change and a plain run after will
+name anything that moved.
+
 ### Feature strips (size-coded builds)
 
 Each synth engine compiles out independently, so a build carries only what a song uses:
 
-`-DBIRB_NO_FM` · `-DBIRB_NO_KS` · `-DBIRB_NO_DRUM` · `-DBIRB_NO_FORMANT` · `-DBIRB_NO_SAMPLES` · `-DBIRB_NO_REVERB`
+`-DBIRB_NO_FM` · `-DBIRB_NO_KS` · `-DBIRB_NO_DRUM` · `-DBIRB_NO_FORMANT` · `-DBIRB_NO_SAMPLES` · `-DBIRB_NO_REVERB` · `-DBIRB_NO_MASTER`
 
 Reverb and FM are the float-bearing parts; strip both for an integer-only engine. The pre-wired 4K WASM variants (`web/birb4k_*.wasm`) use these; a `.bsb` self-declares which sections it needs so `birbc`/the exporter emit only the code in play.
+
+`-DBIRB_SMOL` is the sound-for-size trade the tracker's smol toggle and `birbc --smol` make: no per-instrument volume (the row volume column still applies), no master limiter — a hard clip instead — and no reverb diffusers. `web/birb_smol.wasm` is that build, and it is the wasm member of the same equivalence class as `--smol` and `--smol-c`.
 
 ## Usage
 

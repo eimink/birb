@@ -957,7 +957,12 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         ch->u.ks.ap_c = 0;
 #else
         {
-            /* d = frac + 0.5 in Q16, then c = (1 - d) / (1 + d). */
+            /* Loop budget: the delay line gives L_int and the 2-tap lowpass
+             * above costs half a sample (it averages buf[pos] with the slot
+             * AHEAD of it, so one less delay), leaving the allpass to supply
+             * d = frac + 0.5. That also lands d in [0.5, 1.5), the range a
+             * first-order allpass interpolates well — d = frac alone drives c
+             * toward 1 and the filter falls apart. */
             int32_t d_q16 = (int32_t)lfrac + 32768;
             int64_t num = (int64_t)(65536 - d_q16) << 16;
             ch->u.ks.ap_c = (int16_t)(num / (65536 + d_q16));
