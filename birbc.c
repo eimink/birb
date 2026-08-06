@@ -1719,7 +1719,7 @@ static int write_js(const char *filename, birb_song *song) {
 #endif
     snprintf(fm_trig, sizeof fm_trig,
         "\nif(j[0]===6){var fm=j[15];%s%sC.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<%d;k++){"
-        "var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b/65536*C.fmR[k]);"
+        "var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.min(Math.round(C.b*C.fmR[k]),2147483647);"
         "C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}",
         (uses_fm4 && uses_fm2) ? "C.fmNo=j[11];" : "", uses_fm4 ? "C.fmAlgo=j[12]|0;" : "",
         uses_fm4 ? 4 : 2);
@@ -1831,14 +1831,14 @@ static int write_js(const char *filename, birb_song *song) {
          * no switch, and with several the last arm is the default so an
          * out-of-range value cannot fall through with s undefined. */
         static const char *FM_ALG[8] = {
-            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;",
-            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;",
-            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;",
-            "s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;",
-            "s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;",
-            "s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;",
-            "s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;",
-            "var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;",
+            "s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16)+s3)*l2;s1=SA_((C.fmp[1]>>>16)+s2)*l1;raw=SA_((C.fmp[0]>>>16)+s1*mi);s=raw*l0/F;",
+            "s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16))*l2;s1=SA_((C.fmp[1]>>>16)+s3+s2)*l1;raw=SA_((C.fmp[0]>>>16)+s1*mi);s=raw*l0/F;",
+            "s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16)+s3)*l2;s1=SA_((C.fmp[1]>>>16))*l1;raw=SA_((C.fmp[0]>>>16)+(s2+s1)*mi);s=raw*l0/F;",
+            "s3=SA_((C.fmp[3]>>>16)+fb)*l3;s1=SA_((C.fmp[1]>>>16)+s3)*l1;s2=SA_((C.fmp[2]>>>16))*l2;raw=SA_((C.fmp[0]>>>16)+(s1+s2)*mi);s=raw*l0/F;",
+            "s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16))*l2;s1=SA_((C.fmp[1]>>>16))*l1;raw=SA_((C.fmp[0]>>>16)+(s3+s2+s1)*mi);s=raw*l0/F;",
+            "s3=SA_((C.fmp[3]>>>16)+fb)*l3;s1=SA_((C.fmp[1]>>>16))*l1;var r2=SA_((C.fmp[2]>>>16)+s3*mi);raw=SA_((C.fmp[0]>>>16)+s1*mi);s=(r2*l2+raw*l0)/F*0.5;",
+            "s3=SA_((C.fmp[3]>>>16)+fb)*l3;var r2=SA_((C.fmp[2]>>>16)+s3*mi),r1=SA_((C.fmp[1]>>>16));raw=SA_((C.fmp[0]>>>16));s=(r2*l2+r1*l1+raw*l0)/F/3;",
+            "var r3=SA_((C.fmp[3]>>>16)+fb),r2=SA_((C.fmp[2]>>>16)),r1=SA_((C.fmp[1]>>>16));raw=SA_((C.fmp[0]>>>16));s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;",
         };
         int n_alg = 0, last = 0;
         for (int a = 0; a < 8; a++) if (fm_algo_mask & (1 << a)) { n_alg++; last = a; }
@@ -1856,7 +1856,7 @@ static int write_js(const char *filename, birb_song *song) {
             fprintf(f, "}\n");
         }
         fprintf(f,
-            "C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%%F;return s}\n");
+            "C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=C.fmp[i]+C.fmf[i]>>>0;return s}\n");
     }
     /* KS damping lives at j[11] (no FM/drum) or j[16] (FM or drum pads 4). */
     int ks_idx = (uses_fm || uses_drum || uses_formant) ? 16 : 11;
@@ -1994,7 +1994,7 @@ static int write_js(const char *filename, birb_song *song) {
          * order-position state and var-hoisting would clobber it. */
         fprintf(f,
             "if(C.w===6&&C.i<ni){var jj=I[C.i],fm=jj[15];C.fmFb=jj[13];C.fmMi=jj[14];%s\n"
-            "for(var k=0;k<%d;k++){var oo=fm[k];C.fmR[k]=(oo[0]*16+(oo[1]&15))/16;C.fmf[k]=Math.round(C.f/65536*C.fmR[k]);C.fmL[k]=Math.round(F*(oo[2]||0)/255);\n"
+            "for(var k=0;k<%d;k++){var oo=fm[k];C.fmR[k]=(oo[0]*16+(oo[1]&15))/16;C.fmf[k]=Math.min(Math.round(C.f*C.fmR[k]),2147483647);C.fmL[k]=Math.round(F*(oo[2]||0)/255);\n"
             "var st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;\n"
             "if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}\n"
             "C.fmStg[k]=st;C.fmEnv[k]=en}}\n",
@@ -2026,9 +2026,9 @@ static int write_js(const char *filename, birb_song *song) {
         /* nops=4 → FM4 (8 algos); nops=2 → simpler op1→op0 with feedback. */
         fprintf(f,
             "if(C.w===6){%s}else \n", (uses_fm4 && uses_fm2)
-                ? "if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}"
+                ? "if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_((C.fmp[1]>>>16))*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_((C.fmp[0]>>>16)+mo);C.fmPrev=cr_*F;C.fmp[0]=C.fmp[0]+C.fmf[0]>>>0;C.fmp[1]=C.fmp[1]+C.fmf[1]>>>0;s=cr_*l0f/F}"
                 : uses_fm4 ? "s=FM4(C)"
-                : "var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F");
+                : "var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_((C.fmp[1]>>>16))*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_((C.fmp[0]>>>16)+mo);C.fmPrev=cr_*F;C.fmp[0]=C.fmp[0]+C.fmf[0]>>>0;C.fmp[1]=C.fmp[1]+C.fmf[1]>>>0;s=cr_*l0f/F");
     }
     if (uses_ks) {
         fprintf(f,
@@ -2741,7 +2741,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
         int NO = c_fm4 ? 4 : 2;
         fprintf(f,
             " if(CW[c]==6){ fpv[c]=0.f;\n"
-            "  for(i32 k=0;k<%d;k++){ fp[c][k]=0; ff[c][k]=(((bs[c]>>16)*FR[c][k])+8)>>4;\n"
+            "  for(i32 k=0;k<%d;k++){ fp[c][k]=0; ff[c][k]=(i32)((((long long)bs[c]*FR[c][k])+8)>>4);\n"
             "   if(FA[c][k]==0){ fe[c][k]=(float)F; fst[c][k]=2; } else { fe[c][k]=0.f; fst[c][k]=1; } } }\n", NO);
     }
     fprintf(f, "}\n");
@@ -2773,7 +2773,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
     if (c_fm) {
         int NO = c_fm4 ? 4 : 2;
         fprintf(f,
-            "  if(CW[c]==6) for(i32 k=0;k<%d;k++){ ff[c][k]=((((%s)>>16)*FR[c][k])+8)>>4;\n"
+            "  if(CW[c]==6) for(i32 k=0;k<%d;k++){ ff[c][k]=(i32)((((long long)(%s)*FR[c][k])+8)>>4);\n"
             "   i32 t2=fst[c][k]; float en=fe[c][k];\n"
             "   if(t2==1){ en+=(float)F/(FA[c][k]+1); if(en>=F){ en=(float)F; t2=2; } }\n"
             "   else if(t2==2){ float g=(float)F*FS[c][k]/255; en-=((float)F-g)/(FD[c][k]+1); if(en<=g){ en=g; t2=3; } }\n"
@@ -2894,14 +2894,14 @@ static int write_smol_c(const char *filename, birb_song *song) {
       if (c_fm) {
         /* same algorithm arms as the JS emitter, only the ones reached */
         static const char *CFM_ALG[8] = {
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2]+(i32)s3)*l2; s1=sa_(fp[c][1]+(i32)s2)*l1; raw=sa_(fp[c][0]+(i32)(s1*mi)); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2])*l2; s1=sa_(fp[c][1]+(i32)s3+(i32)s2)*l1; raw=sa_(fp[c][0]+(i32)(s1*mi)); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2]+(i32)s3)*l2; s1=sa_(fp[c][1])*l1; raw=sa_(fp[c][0]+(i32)((s2+s1)*mi)); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s1=sa_(fp[c][1]+(i32)s3)*l1; s2=sa_(fp[c][2])*l2; raw=sa_(fp[c][0]+(i32)((s1+s2)*mi)); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2])*l2; s1=sa_(fp[c][1])*l1; raw=sa_(fp[c][0]+(i32)((s3+s2+s1)*mi)); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s1=sa_(fp[c][1])*l1; { float r2=sa_(fp[c][2]+(i32)(s3*mi)); raw=sa_(fp[c][0]+(i32)(s1*mi)); sv=(r2*l2+raw*l0)/F*0.5f; }",
-          "s3=sa_(fp[c][3]+fb)*l3; { float r2=sa_(fp[c][2]+(i32)(s3*mi)),r1=sa_(fp[c][1]); raw=sa_(fp[c][0]); sv=(r2*l2+r1*l1+raw*l0)/F/3.f; }",
-          "{ float r3=sa_(fp[c][3]+fb),r2=sa_(fp[c][2]),r1=sa_(fp[c][1]); raw=sa_(fp[c][0]); sv=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25f; }",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16)+(i32)s3)*l2; s1=sa_((i32)(fp[c][1]>>16)+(i32)s2)*l1; raw=sa_((i32)(fp[c][0]>>16)+(i32)(s1*mi)); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16))*l2; s1=sa_((i32)(fp[c][1]>>16)+(i32)s3+(i32)s2)*l1; raw=sa_((i32)(fp[c][0]>>16)+(i32)(s1*mi)); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16)+(i32)s3)*l2; s1=sa_((i32)(fp[c][1]>>16))*l1; raw=sa_((i32)(fp[c][0]>>16)+(i32)((s2+s1)*mi)); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s1=sa_((i32)(fp[c][1]>>16)+(i32)s3)*l1; s2=sa_((i32)(fp[c][2]>>16))*l2; raw=sa_((i32)(fp[c][0]>>16)+(i32)((s1+s2)*mi)); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16))*l2; s1=sa_((i32)(fp[c][1]>>16))*l1; raw=sa_((i32)(fp[c][0]>>16)+(i32)((s3+s2+s1)*mi)); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s1=sa_((i32)(fp[c][1]>>16))*l1; { float r2=sa_((i32)(fp[c][2]>>16)+(i32)(s3*mi)); raw=sa_((i32)(fp[c][0]>>16)+(i32)(s1*mi)); sv=(r2*l2+raw*l0)/F*0.5f; }",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; { float r2=sa_((i32)(fp[c][2]>>16)+(i32)(s3*mi)),r1=sa_((i32)(fp[c][1]>>16)); raw=sa_((i32)(fp[c][0]>>16)); sv=(r2*l2+r1*l1+raw*l0)/F/3.f; }",
+          "{ float r3=sa_((i32)(fp[c][3]>>16)+fb),r2=sa_((i32)(fp[c][2]>>16)),r1=sa_((i32)(fp[c][1]>>16)); raw=sa_((i32)(fp[c][0]>>16)); sv=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25f; }",
         };
         int NO = c_fm4 ? 4 : 2, n_alg = 0, last = 0;
         for (int a = 0; a < 8; a++) if (c_fm_mask & (1 << a)) { n_alg++; last = a; }
@@ -2927,13 +2927,13 @@ static int write_smol_c(const char *filename, birb_song *song) {
         if (c_fm4 && c_fm2) fprintf(f, "    } else {\n");
         if (c_fm2)
             fprintf(f,
-                "    float mo=sa_(fp[c][1])*((float)FMI[c]*l1/255.f);\n"
+                "    float mo=sa_((i32)(fp[c][1]>>16))*((float)FMI[c]*l1/255.f);\n"
                 "    if(FFB[c]) mo+=fpv[c]*FFB[c]/256.f;\n"
-                "    raw=sa_(fp[c][0]+(i32)mo); sv=raw*l0/F;\n");
+                "    raw=sa_((i32)(fp[c][0]>>16)+(i32)mo); sv=raw*l0/F;\n");
         if (c_fm4 && c_fm2) fprintf(f, "    }\n");
         fprintf(f,
             "    fpv[c]=raw*F;\n"
-            "    for(i32 k=0;k<%d;k++) fp[c][k]=(fp[c][k]+ff[c][k])%%F;\n"
+            "    for(i32 k=0;k<%d;k++) fp[c][k]+=(u32)ff[c][k];\n"
             "    s=sv; }\n", NO);
         first = 0;
       }
@@ -3594,7 +3594,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
     if (u_fm)
         fprintf(f,
             " if(CW[I]==6){ fpv[c]=0.;\n"
-            "  for(i32 k=0;k<%d;k++){ fp[c][k]=0; ff[c][k]=(i32)((double)bs[c]/65536.*FR[I][k]/16.+0.5);\n"
+            "  for(i32 k=0;k<%d;k++){ fp[c][k]=0; ff[c][k]=(i32)((double)bs[c]*FR[I][k]/16.+0.5);\n"
             "   if(FA[I][k]==0){ fe[c][k]=(double)F; fst[c][k]=2; } else { fe[c][k]=0.; fst[c][k]=1; } } }\n",
             NO);
     fprintf(f, "}\n");
@@ -3662,7 +3662,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
         "  else if(e==4){ ev_[c]-=ev_[c]/(CR[I]+1); if(ev_[c]<64){ ev_[c]=0.; st[c]=0; } }\n");
     if (u_fm)
         fprintf(f,
-            "  if(CW[I]==6) for(i32 k=0;k<%d;k++){ ff[c][k]=(i32)((double)fq[c]/65536.*FR[I][k]/16.+0.5);\n"
+            "  if(CW[I]==6) for(i32 k=0;k<%d;k++){ ff[c][k]=(i32)((double)fq[c]*FR[I][k]/16.+0.5);\n"
             "   i32 t2=fst[c][k]; double en=fe[c][k];\n"
             "   if(t2==1){ en+=(double)F/(FA[I][k]+1); if(en>=F){ en=(double)F; t2=2; } }\n"
             "   else if(t2==2){ i32 g=(i32)((double)F*FS[I][k]/255); en-=((double)F-g)/(FD[I][k]+1); if(en<=g){ en=g; t2=3; } }\n"
@@ -3785,14 +3785,14 @@ static int write_locked_c(const char *filename, birb_song *song) {
       }
       if (u_fm) {
         static const char *ALG[8] = {
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2]+s3)*l2; s1=sa_(fp[c][1]+s2)*l1; raw=sa_(fp[c][0]+s1*mi); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2])*l2; s1=sa_(fp[c][1]+s3+s2)*l1; raw=sa_(fp[c][0]+s1*mi); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2]+s3)*l2; s1=sa_(fp[c][1])*l1; raw=sa_(fp[c][0]+(s2+s1)*mi); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s1=sa_(fp[c][1]+s3)*l1; s2=sa_(fp[c][2])*l2; raw=sa_(fp[c][0]+(s1+s2)*mi); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s2=sa_(fp[c][2])*l2; s1=sa_(fp[c][1])*l1; raw=sa_(fp[c][0]+(s3+s2+s1)*mi); sv=raw*l0/F;",
-          "s3=sa_(fp[c][3]+fb)*l3; s1=sa_(fp[c][1])*l1; { double r2=sa_(fp[c][2]+s3*mi); raw=sa_(fp[c][0]+s1*mi); sv=(r2*l2+raw*l0)/F*0.5; }",
-          "s3=sa_(fp[c][3]+fb)*l3; { double r2=sa_(fp[c][2]+s3*mi),r1=sa_(fp[c][1]); raw=sa_(fp[c][0]); sv=(r2*l2+r1*l1+raw*l0)/F/3.; }",
-          "{ double r3=sa_(fp[c][3]+fb),r2=sa_(fp[c][2]),r1=sa_(fp[c][1]); raw=sa_(fp[c][0]); sv=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25; }",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16)+s3)*l2; s1=sa_((i32)(fp[c][1]>>16)+s2)*l1; raw=sa_((i32)(fp[c][0]>>16)+s1*mi); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16))*l2; s1=sa_((i32)(fp[c][1]>>16)+s3+s2)*l1; raw=sa_((i32)(fp[c][0]>>16)+s1*mi); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16)+s3)*l2; s1=sa_((i32)(fp[c][1]>>16))*l1; raw=sa_((i32)(fp[c][0]>>16)+(s2+s1)*mi); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s1=sa_((i32)(fp[c][1]>>16)+s3)*l1; s2=sa_((i32)(fp[c][2]>>16))*l2; raw=sa_((i32)(fp[c][0]>>16)+(s1+s2)*mi); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s2=sa_((i32)(fp[c][2]>>16))*l2; s1=sa_((i32)(fp[c][1]>>16))*l1; raw=sa_((i32)(fp[c][0]>>16)+(s3+s2+s1)*mi); sv=raw*l0/F;",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; s1=sa_((i32)(fp[c][1]>>16))*l1; { double r2=sa_((i32)(fp[c][2]>>16)+s3*mi); raw=sa_((i32)(fp[c][0]>>16)+s1*mi); sv=(r2*l2+raw*l0)/F*0.5; }",
+          "s3=sa_((i32)(fp[c][3]>>16)+fb)*l3; { double r2=sa_((i32)(fp[c][2]>>16)+s3*mi),r1=sa_((i32)(fp[c][1]>>16)); raw=sa_((i32)(fp[c][0]>>16)); sv=(r2*l2+r1*l1+raw*l0)/F/3.; }",
+          "{ double r3=sa_((i32)(fp[c][3]>>16)+fb),r2=sa_((i32)(fp[c][2]>>16)),r1=sa_((i32)(fp[c][1]>>16)); raw=sa_((i32)(fp[c][0]>>16)); sv=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25; }",
         };
         int n_alg = 0, last = 0;
         for (int a = 0; a < 8; a++) if (fm_mask & (1 << a)) { n_alg++; last = a; }
@@ -3818,13 +3818,13 @@ static int write_locked_c(const char *filename, birb_song *song) {
         if (u_fm4 && u_fm2) fprintf(f, "    } else {\n");
         if (u_fm2)
             fprintf(f,
-                "    double mo=sa_(fp[c][1])*((double)FMI[I]*l1/255.);\n"
+                "    double mo=sa_((i32)(fp[c][1]>>16))*((double)FMI[I]*l1/255.);\n"
                 "    if(FFB[I]) mo+=fpv[c]*FFB[I]/256.;\n"
-                "    raw=sa_(fp[c][0]+mo); sv=raw*l0/F;\n");
+                "    raw=sa_((i32)(fp[c][0]>>16)+mo); sv=raw*l0/F;\n");
         if (u_fm4 && u_fm2) fprintf(f, "    }\n");
         fprintf(f,
             "    fpv[c]=raw*F;\n"
-            "    for(i32 k=0;k<%d;k++) fp[c][k]=(fp[c][k]+ff[c][k])%%F;\n"
+            "    for(i32 k=0;k<%d;k++) fp[c][k]+=(u32)ff[c][k];\n"
             "    s=sv; }\n", NO);
         first = 0;
       }

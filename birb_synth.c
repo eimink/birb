@@ -184,10 +184,10 @@ static int16_t gen_fm(birb_channel *ch) {
         ? ch->u.fm.prev_out * (double)ch->u.fm.feedback / 256.0
         : 0.0;
 
-    double ph0 = (double)ch->u.fm.op_phase[0];
-    double ph1 = (double)ch->u.fm.op_phase[1];
-    double ph2 = (double)ch->u.fm.op_phase[2];
-    double ph3 = (double)ch->u.fm.op_phase[3];
+    double ph0 = (double)(ch->u.fm.op_phase[0] >> 16);
+    double ph1 = (double)(ch->u.fm.op_phase[1] >> 16);
+    double ph2 = (double)(ch->u.fm.op_phase[2] >> 16);
+    double ph3 = (double)(ch->u.fm.op_phase[3] >> 16);
 
     double raw, s;
     int nops = ch->u.fm.num_ops < 4 ? 2 : 4;
@@ -269,7 +269,7 @@ static int16_t gen_fm(birb_channel *ch) {
     /* advance integer phase accumulators for all four ops (mirrors the editor's
      * unconditional 4-iter loop; op2/op3 freqs are 0 or unused in 2-op) */
     for (int i = 0; i < 4; i++)
-        ch->u.fm.op_phase[i] = (ch->u.fm.op_phase[i] + ch->u.fm.op_freq[i]) & FX_MASK;
+        ch->u.fm.op_phase[i] += (uint32_t)ch->u.fm.op_freq[i];
 
     /* quantise s (in [-1, 1]) to int16; the mixer applies envelope/volume */
     int32_t out = (int32_t)(s * 32767.0 + (s >= 0.0 ? 0.5 : -0.5));
@@ -906,7 +906,10 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             /* Round (+8 before >>4), NOT floor — the editor/emit use
              * Math.round(base*ratio); a floor here is 1 unit low for non-integer
              * ratios and drifts the FM operators out of phase over time. */
-            ch->u.fm.op_freq[i] = (fixed16)(((((uint64_t)ch->base_freq >> 16) * ((ri << 4) | (rf & 0xF))) + 8) >> 4);
+            {
+                uint64_t of = (((uint64_t)ch->base_freq * ((ri << 4) | (rf & 0xF))) + 8) >> 4;
+                ch->u.fm.op_freq[i] = (fixed16)(of > 0x7FFFFFFFu ? 0x7FFFFFFF : of);
+            }
             /* Static per-op level (refreshed live in fm_op_envelope_tick).
              * Round (+127 before /255) to match the editor's Math.round(F*lv/255);
              * a floor here is 1 unit low and desyncs high-feedback FM. */
@@ -1382,9 +1385,10 @@ static void tick_effects(birb_channel *ch, birb_song *song) {
              * the fractional freq_f so vibrato reaches the operators exactly as
              * in the editor. fmR = (ri*16+rf)/16 (exact, /16 is a power of two). */
             double fmR = (double)((ri << 4) | (rf & 0xF)) / 16.0;
-            /* Operators run on a 16.16 phase, so narrow the Q32 carrier first —
-             * same as the trigger above and as the JS emitters' /65536. */
-            ch->u.fm.op_freq[i] = (fixed16)(freq_f / 65536.0 * fmR + 0.5);
+            {
+                double of = freq_f * fmR + 0.5;
+                ch->u.fm.op_freq[i] = (fixed16)(of > 2147483647.0 ? 2147483647.0 : of);
+            }
         }
         fm_op_envelope_tick(ch, inst);
     }

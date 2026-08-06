@@ -355,8 +355,8 @@ typedef struct {
         /* SYNTH_FM: 2-op (default) or 4-op FM synthesis. Carrier is op0;
          * op1..op3 are modulators. */
         struct {
-            fixed16        op_phase[4]; /* per-op phase accumulator 0..FX_ONE */
-            fixed16        op_freq[4];  /* per-op phase increment */
+            uint32_t       op_phase[4]; /* per-op phase accumulator, 0.32 */
+            fixed16        op_freq[4];  /* per-op phase increment, Q32, clamped */
             double         op_env[4];   /* per-op envelope level 0..FX_ONE. double so the
                                          * A/D/R ramps accumulate like the editor's float64
                                          * (F/(a+1), not floored) — a floored integer ramp,

@@ -2786,67 +2786,67 @@ function renderSong(patOnly, singlePat) {
         let s, raw, s3, s2, s1;
         switch (C.fmAlgo & 7) {
             case 0:
-                s3 = sinApprox(C.fmp[3] + fb) * l3;
-                s2 = sinApprox(C.fmp[2] + s3) * l2;
-                s1 = sinApprox(C.fmp[1] + s2) * l1;
-                raw = sinApprox(C.fmp[0] + s1 * mi);
+                s3 = sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = sinApprox((C.fmp[2]>>>16) + s3) * l2;
+                s1 = sinApprox((C.fmp[1]>>>16) + s2) * l1;
+                raw = sinApprox((C.fmp[0]>>>16) + s1 * mi);
                 s = raw * l0 / F;
                 break;
             case 1:
-                s3 = sinApprox(C.fmp[3] + fb) * l3;
-                s2 = sinApprox(C.fmp[2]) * l2;
-                s1 = sinApprox(C.fmp[1] + s3 + s2) * l1;
-                raw = sinApprox(C.fmp[0] + s1 * mi);
+                s3 = sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = sinApprox((C.fmp[2]>>>16)) * l2;
+                s1 = sinApprox((C.fmp[1]>>>16) + s3 + s2) * l1;
+                raw = sinApprox((C.fmp[0]>>>16) + s1 * mi);
                 s = raw * l0 / F;
                 break;
             case 2:
-                s3 = sinApprox(C.fmp[3] + fb) * l3;
-                s2 = sinApprox(C.fmp[2] + s3) * l2;
-                s1 = sinApprox(C.fmp[1]) * l1;
-                raw = sinApprox(C.fmp[0] + (s2 + s1) * mi);
+                s3 = sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = sinApprox((C.fmp[2]>>>16) + s3) * l2;
+                s1 = sinApprox((C.fmp[1]>>>16)) * l1;
+                raw = sinApprox((C.fmp[0]>>>16) + (s2 + s1) * mi);
                 s = raw * l0 / F;
                 break;
             case 3:
-                s3 = sinApprox(C.fmp[3] + fb) * l3;
-                s1 = sinApprox(C.fmp[1] + s3) * l1;
-                s2 = sinApprox(C.fmp[2]) * l2;
-                raw = sinApprox(C.fmp[0] + (s1 + s2) * mi);
+                s3 = sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s1 = sinApprox((C.fmp[1]>>>16) + s3) * l1;
+                s2 = sinApprox((C.fmp[2]>>>16)) * l2;
+                raw = sinApprox((C.fmp[0]>>>16) + (s1 + s2) * mi);
                 s = raw * l0 / F;
                 break;
             case 4:
-                s3 = sinApprox(C.fmp[3] + fb) * l3;
-                s2 = sinApprox(C.fmp[2]) * l2;
-                s1 = sinApprox(C.fmp[1]) * l1;
-                raw = sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi);
+                s3 = sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = sinApprox((C.fmp[2]>>>16)) * l2;
+                s1 = sinApprox((C.fmp[1]>>>16)) * l1;
+                raw = sinApprox((C.fmp[0]>>>16) + (s3 + s2 + s1) * mi);
                 s = raw * l0 / F;
                 break;
             case 5: {
-                s3 = sinApprox(C.fmp[3] + fb) * l3;
-                s1 = sinApprox(C.fmp[1]) * l1;
-                let r2 = sinApprox(C.fmp[2] + s3 * mi);
-                raw = sinApprox(C.fmp[0] + s1 * mi);
+                s3 = sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s1 = sinApprox((C.fmp[1]>>>16)) * l1;
+                let r2 = sinApprox((C.fmp[2]>>>16) + s3 * mi);
+                raw = sinApprox((C.fmp[0]>>>16) + s1 * mi);
                 s = (r2 * l2 + raw * l0) / F * 0.5;
                 break;
             }
             case 6: {
-                s3 = sinApprox(C.fmp[3] + fb) * l3;
-                let r2 = sinApprox(C.fmp[2] + s3 * mi);
-                let r1 = sinApprox(C.fmp[1]);
-                raw = sinApprox(C.fmp[0]);
+                s3 = sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                let r2 = sinApprox((C.fmp[2]>>>16) + s3 * mi);
+                let r1 = sinApprox((C.fmp[1]>>>16));
+                raw = sinApprox((C.fmp[0]>>>16));
                 s = (r2 * l2 + r1 * l1 + raw * l0) / F / 3;
                 break;
             }
             case 7: default: {
-                let r3 = sinApprox(C.fmp[3] + fb);
-                let r2 = sinApprox(C.fmp[2]);
-                let r1 = sinApprox(C.fmp[1]);
-                raw = sinApprox(C.fmp[0]);
+                let r3 = sinApprox((C.fmp[3]>>>16) + fb);
+                let r2 = sinApprox((C.fmp[2]>>>16));
+                let r1 = sinApprox((C.fmp[1]>>>16));
+                raw = sinApprox((C.fmp[0]>>>16));
                 s = (r3 * l3 + r2 * l2 + r1 * l1 + raw * l0) / F * 0.25;
                 break;
             }
         }
         C.fmPrev = raw * F;
-        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
+        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) >>> 0;
         return s;
     }
     /* Vowel formant frequencies in Hz (Peterson & Barney) — F1, F2, F3 per
@@ -2932,7 +2932,7 @@ function renderSong(patOnly, singlePat) {
                 C.fmp[i] = 0;
                 let op = fm.ops[i] || {ri:1,rf:0,lv:255,a:0,d:8,s:200,r:8};
                 C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
-                C.fmf[i] = Math.round(C.b * C.fmR[i]);
+                C.fmf[i] = Math.min(Math.round(C.b * C.fmR[i]), 2147483647);
                 C.fmL[i] = Math.round(F * (op.lv || 0) / 255);
                 /* Per-op envelope: a==0 → start at peak in DECAY (no silent first tick) */
                 if ((op.a|0) == 0) { C.fmEnv[i] = F; C.fmStg[i] = 2; }
@@ -3105,7 +3105,7 @@ function renderSong(patOnly, singlePat) {
             else if(e===4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}
             /* FM: rebuild op freqs from current carrier freq, advance per-op envelopes */
             if (C.w === 6 && C.fmR) {
-                for (let i = 0; i < 4; i++) C.fmf[i] = Math.round(C.f * C.fmR[i]);
+                for (let i = 0; i < 4; i++) C.fmf[i] = Math.min(Math.round(C.f * C.fmR[i]), 2147483647);
                 let inst = song.instruments[C.i];
                 if (inst && inst.fm) {
                     C.fmAlgo = inst.fm.algo|0;
@@ -3179,12 +3179,12 @@ function renderSong(patOnly, singlePat) {
                 } else {
                     let l1 = C.fmL[1] * C.fmEnv[1] / F;
                     let l0 = C.fmL[0] * C.fmEnv[0] / F;
-                    let modOut = sinApprox(C.fmp[1]) * (C.fmMi * l1 / 255);
+                    let modOut = sinApprox((C.fmp[1]>>>16)) * (C.fmMi * l1 / 255);
                     if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
-                    let carRaw = sinApprox(C.fmp[0] + modOut);
+                    let carRaw = sinApprox((C.fmp[0]>>>16) + modOut);
                     C.fmPrev = carRaw * F;
-                    C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
-                    C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
+                    C.fmp[0] = (C.fmp[0] + C.fmf[0]) >>> 0;
+                    C.fmp[1] = (C.fmp[1] + C.fmf[1]) >>> 0;
                     s = carRaw * l0 / F;
                 }
             }
@@ -3567,67 +3567,67 @@ class BirbProcessor extends AudioWorkletProcessor {
         let s, raw, s3, s2, s1;
         switch (C.fmAlgo & 7) {
             case 0:
-                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                s2 = this.sinApprox(C.fmp[2] + s3) * l2;
-                s1 = this.sinApprox(C.fmp[1] + s2) * l1;
-                raw = this.sinApprox(C.fmp[0] + s1 * mi);
+                s3 = this.sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = this.sinApprox((C.fmp[2]>>>16) + s3) * l2;
+                s1 = this.sinApprox((C.fmp[1]>>>16) + s2) * l1;
+                raw = this.sinApprox((C.fmp[0]>>>16) + s1 * mi);
                 s = raw * l0 / F;
                 break;
             case 1:
-                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                s2 = this.sinApprox(C.fmp[2]) * l2;
-                s1 = this.sinApprox(C.fmp[1] + s3 + s2) * l1;
-                raw = this.sinApprox(C.fmp[0] + s1 * mi);
+                s3 = this.sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = this.sinApprox((C.fmp[2]>>>16)) * l2;
+                s1 = this.sinApprox((C.fmp[1]>>>16) + s3 + s2) * l1;
+                raw = this.sinApprox((C.fmp[0]>>>16) + s1 * mi);
                 s = raw * l0 / F;
                 break;
             case 2:
-                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                s2 = this.sinApprox(C.fmp[2] + s3) * l2;
-                s1 = this.sinApprox(C.fmp[1]) * l1;
-                raw = this.sinApprox(C.fmp[0] + (s2 + s1) * mi);
+                s3 = this.sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = this.sinApprox((C.fmp[2]>>>16) + s3) * l2;
+                s1 = this.sinApprox((C.fmp[1]>>>16)) * l1;
+                raw = this.sinApprox((C.fmp[0]>>>16) + (s2 + s1) * mi);
                 s = raw * l0 / F;
                 break;
             case 3:
-                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                s1 = this.sinApprox(C.fmp[1] + s3) * l1;
-                s2 = this.sinApprox(C.fmp[2]) * l2;
-                raw = this.sinApprox(C.fmp[0] + (s1 + s2) * mi);
+                s3 = this.sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s1 = this.sinApprox((C.fmp[1]>>>16) + s3) * l1;
+                s2 = this.sinApprox((C.fmp[2]>>>16)) * l2;
+                raw = this.sinApprox((C.fmp[0]>>>16) + (s1 + s2) * mi);
                 s = raw * l0 / F;
                 break;
             case 4:
-                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                s2 = this.sinApprox(C.fmp[2]) * l2;
-                s1 = this.sinApprox(C.fmp[1]) * l1;
-                raw = this.sinApprox(C.fmp[0] + (s3 + s2 + s1) * mi);
+                s3 = this.sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s2 = this.sinApprox((C.fmp[2]>>>16)) * l2;
+                s1 = this.sinApprox((C.fmp[1]>>>16)) * l1;
+                raw = this.sinApprox((C.fmp[0]>>>16) + (s3 + s2 + s1) * mi);
                 s = raw * l0 / F;
                 break;
             case 5: {
-                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                s1 = this.sinApprox(C.fmp[1]) * l1;
-                let r2 = this.sinApprox(C.fmp[2] + s3 * mi);
-                raw = this.sinApprox(C.fmp[0] + s1 * mi);
+                s3 = this.sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                s1 = this.sinApprox((C.fmp[1]>>>16)) * l1;
+                let r2 = this.sinApprox((C.fmp[2]>>>16) + s3 * mi);
+                raw = this.sinApprox((C.fmp[0]>>>16) + s1 * mi);
                 s = (r2 * l2 + raw * l0) / F * 0.5;
                 break;
             }
             case 6: {
-                s3 = this.sinApprox(C.fmp[3] + fb) * l3;
-                let r2 = this.sinApprox(C.fmp[2] + s3 * mi);
-                let r1 = this.sinApprox(C.fmp[1]);
-                raw = this.sinApprox(C.fmp[0]);
+                s3 = this.sinApprox((C.fmp[3]>>>16) + fb) * l3;
+                let r2 = this.sinApprox((C.fmp[2]>>>16) + s3 * mi);
+                let r1 = this.sinApprox((C.fmp[1]>>>16));
+                raw = this.sinApprox((C.fmp[0]>>>16));
                 s = (r2 * l2 + r1 * l1 + raw * l0) / F / 3;
                 break;
             }
             case 7: default: {
-                let r3 = this.sinApprox(C.fmp[3] + fb);
-                let r2 = this.sinApprox(C.fmp[2]);
-                let r1 = this.sinApprox(C.fmp[1]);
-                raw = this.sinApprox(C.fmp[0]);
+                let r3 = this.sinApprox((C.fmp[3]>>>16) + fb);
+                let r2 = this.sinApprox((C.fmp[2]>>>16));
+                let r1 = this.sinApprox((C.fmp[1]>>>16));
+                raw = this.sinApprox((C.fmp[0]>>>16));
                 s = (r3 * l3 + r2 * l2 + r1 * l1 + raw * l0) / F * 0.25;
                 break;
             }
         }
         C.fmPrev = raw * F;
-        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) % F;
+        for (let i = 0; i < 4; i++) C.fmp[i] = (C.fmp[i] + C.fmf[i]) >>> 0;
         return s;
     }
     nf(n) { if (n<0)n=0; if (n>95)n=95; return (this.bf[n%12] << (n/12|0)) * 256; }
@@ -3696,7 +3696,7 @@ class BirbProcessor extends AudioWorkletProcessor {
                 C.fmp[i] = 0;
                 let op = fm.ops[i] || {ri:1,rf:0,lv:0,a:0,d:8,s:0,r:8};
                 C.fmR[i] = (op.ri * 16 + (op.rf & 15)) / 16;
-                C.fmf[i] = Math.round(C.b * C.fmR[i]);
+                C.fmf[i] = Math.min(Math.round(C.b * C.fmR[i]), 2147483647);
                 C.fmL[i] = Math.round(F * (op.lv || 0) / 255);
                 if ((op.a|0) == 0) { C.fmEnv[i] = F; C.fmStg[i] = 2; }
                 else                { C.fmEnv[i] = 0; C.fmStg[i] = 1; }
@@ -3935,7 +3935,7 @@ class BirbProcessor extends AudioWorkletProcessor {
             else if (e === 4) { C.e -= C.e / (C.r + 1); if (C.e < 64) { C.e = 0; C.t = 0; } }
             /* FM: rebuild per-op freqs each tick from C.f */
             if (C.w === 6) {
-                for (let i = 0; i < 4; i++) C.fmf[i] = Math.round(C.f * C.fmR[i]);
+                for (let i = 0; i < 4; i++) C.fmf[i] = Math.min(Math.round(C.f * C.fmR[i]), 2147483647);
             }
         }
     }
@@ -3976,12 +3976,12 @@ class BirbProcessor extends AudioWorkletProcessor {
                     } else {
                         let l1 = C.fmL[1] * C.fmEnv[1] / F;
                         let l0 = C.fmL[0] * C.fmEnv[0] / F;
-                        let modOut = this.sinApprox(C.fmp[1]) * (C.fmMi * l1 / 255);
+                        let modOut = this.sinApprox((C.fmp[1]>>>16)) * (C.fmMi * l1 / 255);
                         if (C.fmFb) modOut += C.fmPrev * C.fmFb / 256;
-                        let carRaw = this.sinApprox(C.fmp[0] + modOut);
+                        let carRaw = this.sinApprox((C.fmp[0]>>>16) + modOut);
                         C.fmPrev = carRaw * F;
-                        C.fmp[0] = (C.fmp[0] + C.fmf[0]) % F;
-                        C.fmp[1] = (C.fmp[1] + C.fmf[1]) % F;
+                        C.fmp[0] = (C.fmp[0] + C.fmf[0]) >>> 0;
+                        C.fmp[1] = (C.fmp[1] + C.fmf[1]) >>> 0;
                         s = carRaw * l0 / F;
                     }
                 }
@@ -4793,14 +4793,14 @@ function buildJS(smol) {
     const fmAlgos = [...new Set(fmInsts.filter(i => (i.fm.nops|0) >= 4)
                                        .map(i => (i.fm.algo|0) & 7))].sort((a,b)=>a-b);
     const FM_ALG = [
-      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1]+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;`,
-      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1]+s3+s2)*l1;raw=SA_(C.fmp[0]+s1*mi);s=raw*l0/F;`,
-      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2]+s3)*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s2+s1)*mi);s=raw*l0/F;`,
-      `s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1]+s3)*l1;s2=SA_(C.fmp[2])*l2;raw=SA_(C.fmp[0]+(s1+s2)*mi);s=raw*l0/F;`,
-      `s3=SA_(C.fmp[3]+fb)*l3;s2=SA_(C.fmp[2])*l2;s1=SA_(C.fmp[1])*l1;raw=SA_(C.fmp[0]+(s3+s2+s1)*mi);s=raw*l0/F;`,
-      `s3=SA_(C.fmp[3]+fb)*l3;s1=SA_(C.fmp[1])*l1;var r2=SA_(C.fmp[2]+s3*mi);raw=SA_(C.fmp[0]+s1*mi);s=(r2*l2+raw*l0)/F*0.5;`,
-      `s3=SA_(C.fmp[3]+fb)*l3;var r2=SA_(C.fmp[2]+s3*mi),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r2*l2+r1*l1+raw*l0)/F/3;`,
-      `var r3=SA_(C.fmp[3]+fb),r2=SA_(C.fmp[2]),r1=SA_(C.fmp[1]);raw=SA_(C.fmp[0]);s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;`,
+      `s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16)+s3)*l2;s1=SA_((C.fmp[1]>>>16)+s2)*l1;raw=SA_((C.fmp[0]>>>16)+s1*mi);s=raw*l0/F;`,
+      `s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16))*l2;s1=SA_((C.fmp[1]>>>16)+s3+s2)*l1;raw=SA_((C.fmp[0]>>>16)+s1*mi);s=raw*l0/F;`,
+      `s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16)+s3)*l2;s1=SA_((C.fmp[1]>>>16))*l1;raw=SA_((C.fmp[0]>>>16)+(s2+s1)*mi);s=raw*l0/F;`,
+      `s3=SA_((C.fmp[3]>>>16)+fb)*l3;s1=SA_((C.fmp[1]>>>16)+s3)*l1;s2=SA_((C.fmp[2]>>>16))*l2;raw=SA_((C.fmp[0]>>>16)+(s1+s2)*mi);s=raw*l0/F;`,
+      `s3=SA_((C.fmp[3]>>>16)+fb)*l3;s2=SA_((C.fmp[2]>>>16))*l2;s1=SA_((C.fmp[1]>>>16))*l1;raw=SA_((C.fmp[0]>>>16)+(s3+s2+s1)*mi);s=raw*l0/F;`,
+      `s3=SA_((C.fmp[3]>>>16)+fb)*l3;s1=SA_((C.fmp[1]>>>16))*l1;var r2=SA_((C.fmp[2]>>>16)+s3*mi);raw=SA_((C.fmp[0]>>>16)+s1*mi);s=(r2*l2+raw*l0)/F*0.5;`,
+      `s3=SA_((C.fmp[3]>>>16)+fb)*l3;var r2=SA_((C.fmp[2]>>>16)+s3*mi),r1=SA_((C.fmp[1]>>>16));raw=SA_((C.fmp[0]>>>16));s=(r2*l2+r1*l1+raw*l0)/F/3;`,
+      `var r3=SA_((C.fmp[3]>>>16)+fb),r2=SA_((C.fmp[2]>>>16)),r1=SA_((C.fmp[1]>>>16));raw=SA_((C.fmp[0]>>>16));s=(r3*l3+r2*l2+r1*l1+raw*l0)/F*0.25;`,
     ];
     /* one algorithm needs no switch; with several, the last arm is the default
      * so an out-of-range value can never fall through with s undefined */
@@ -4974,13 +4974,13 @@ function SC(t){var i=t>>3,f=t&7,c=SHP[i];return c+(((SHP[i+1]-c)*f)>>3)}
 ` : ''}${usesKS ? `var KQ=[657,776,916,1082,1277,1508,1781,2103,2484,2933,3463,4089,4829,5702,6733,7951,9388,11086,13091,15458,18253,21554,25452,30054,35489,41907,49485,58434,69001,81479,96213,113612,131398]
 function KG(d,l){var i=d>>3,f=d&7,q=KQ[i];q+=((KQ[i+1]-q)*f)>>3;var a=(q*l)>>8;return a>=65535?0:65535-a}
 ` : ''}${usesDuck ? `var DE=0,DR=${mstDuckRel.toFixed(6)}
-` : ''}${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM4 ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;${fmBody}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=(C.fmp[i]+C.fmf[i])%F;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
+` : ''}${(usesFM || usesDrum || usesSine) ? `function SA_(ph){var p=((ph%F)+F)%F,ng=p>=F/2,t=ng?p-F/2:p;if(t>F/4)t=F/2-t;var x=t/F*4;if(x>1)x=1;var x2=x*x;var y=x*(1.5707288-x2*(0.6432292-x2*0.0727778));if(y>1)y=1;return ng?-y:y}\n` : ''}${usesFM4 ? `function FM4(C){var l0=C.fmL[0]*C.fmEnv[0]/F,l1=C.fmL[1]*C.fmEnv[1]/F,l2=C.fmL[2]*C.fmEnv[2]/F,l3=C.fmL[3]*C.fmEnv[3]/F;var mi=C.fmMi/255,fb=C.fmFb?C.fmPrev*C.fmFb/256:0;var s,raw,s3,s2,s1;${fmBody}C.fmPrev=raw*F;for(var i=0;i<4;i++)C.fmp[i]=C.fmp[i]+C.fmf[i]>>>0;return s}\n` : ''}function TR(C,n,ii){C.i=ii;var s=n-2,j=I[ii]
 C.n=s;C.b=nf(s);C.f=C.b;C.p=0;C.w=j[0]${(usesPulse||usesFormant) ? `;C.u=dv[j[1]&3]` : ``}
 C.a=j[2];C.d=j[3];C.s=j[4];C.r=j[5];if(C.a==0){C.e=F;C.t=2}else{C.e=0;C.t=1}
 ${usesPitchEnv ? `C.q=j[6];C.g=j[7];` : ``}${usesArp ? `C.x=j[8];C.y=j[9];` : ``}${SM.noInstVol ? `` : `C.v=j[10]||255;`}C.rv=255${usesArp ? `;C.k=0` : ``}${usesSlide ? `;C.l=0` : ``}${usesPorta ? `;C.ps=0` : ``}${usesReverb?';C.rs=RS[ii]||0':''}${usesDrive?';C.dp=DV[ii]?1+DV[ii]*(8/255):1;C.dn=C.dp>1?1/SS(C.dp):1':''}${usesDuck?';C.ds=DS[ii]||0;C.da=DA[ii]||0':''}
 ${usesNoise ? `if(j[0]===3){C.h=0x7FFF;C.m=0;C.j=256>>(s/12)||1}` : ``}
 ${usesSamples ? `C.sa=0;if(j[0]===5&&SB&&SB[j[11]]){var sm=SB[j[11]];C.si=j[11];C.sp=0;C.sa=1;var bf2=nf(sm.b);C.ss=bf2>0?Math.round(C.b*65536/bf2):65536}` : ''}${usesFM ? `
-if(j[0]===6){var fm=j[16];${(usesFM4&&usesFM2) ? `C.fmNo=j[12];` : ``}${usesFM4 ? `C.fmAlgo=j[13]|0;` : ``}C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<${fmOps};k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b/65536*C.fmR[k]);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
+if(j[0]===6){var fm=j[16];${(usesFM4&&usesFM2) ? `C.fmNo=j[12];` : ``}${usesFM4 ? `C.fmAlgo=j[13]|0;` : ``}C.fmFb=j[14];C.fmMi=j[15];C.fmPrev=0;for(var k=0;k<${fmOps};k++){var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.min(Math.round(C.b*C.fmR[k]),2147483647);C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}` : ''}${usesKS ? `
 if(j[0]===7){var ln=C.b>0?2**32/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[17]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kb=(lf^(lf>>1))&1;lf=((lf>>1)|(kb<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}` : ''}${usesDrum ? `
 if(j[0]===8){var dt=j[${drumBase}]&7,al=dt===4?0:dt===5?2:dt,tn=j[${drumBase+1}];if(tn>127)tn-=256;var dec=j[${drumBase+2}],tone=j[${drumBase+3}],snp=j[${drumBase+4}],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;
 if(al===0){var df16=df/65536;C.drPe=(df16<<3)<<8;C.drPet=(df16>>1)<<8;C.drRate=KC(tone);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}
@@ -5040,14 +5040,14 @@ ${usesNoteDelay ? `if(C.nd&&ct==C.nd){if(C.di<ni)TR(C,C.dn,C.di);C.nd=0}
 var e=C.t;if(e==1){C.e+=F/(C.a+1);if(C.e>=F){C.e=F;C.t=2}}
 else if(e==2){var g=F*C.s/255;C.e-=(F-g)/(C.d+1);if(C.e<=g){C.e=g;C.t=3}}
 else if(e==4){C.e-=C.e/(C.r+1);if(C.e<64){C.e=0;C.t=0}}${usesFM ? `
-if(C.w===6){for(var k=0;k<${fmOps};k++)C.fmf[k]=Math.round(C.f/65536*C.fmR[k]);var jj=I[C.i];if(jj){${usesFM4 ? `C.fmAlgo=jj[13]|0;` : ``}var fm=jj[16];for(var k=0;k<${fmOps};k++){var oo=fm[k]||[1,0,0,0,8,200,8],st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}C.fmStg[k]=st;C.fmEnv[k]=en}}}` : ''}}}
+if(C.w===6){for(var k=0;k<${fmOps};k++)C.fmf[k]=Math.min(Math.round(C.f*C.fmR[k]),2147483647);var jj=I[C.i];if(jj){${usesFM4 ? `C.fmAlgo=jj[13]|0;` : ``}var fm=jj[16];for(var k=0;k<${fmOps};k++){var oo=fm[k]||[1,0,0,0,8,200,8],st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}C.fmStg[k]=st;C.fmEnv[k]=en}}}` : ''}}}
 for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--
 var v=0${usesReverb?',rI=0':''}${usesDuck?',DI=0,DN=DE':''};for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e${usesSamples ? '&&!C.sa' : ''}${usesDrum ? '&&!C.drTtl' : ''})continue
 var h=C.p>>>16,s=0
 ${usesSamples ? `if(C.w===5){if(C.sa){var sm=SB[C.si];if(sm){var pos=C.sp>>>16
 if(pos>=sm.d.length){if(sm.ls>=0&&sm.le>sm.ls){var ll=sm.le-sm.ls;pos=sm.ls+((pos-sm.ls)%ll);C.sp=(pos<<16)|(C.sp&0xFFFF)}else{C.sa=0;s=0}}
 if(C.sa){s=sm.d[pos]/32768;C.sp=(C.sp+C.ss)>>>0}}else C.sa=0}}` : ''}${usesFM ? `
-${preFM}if(C.w===6){${(usesFM4 && usesFM2) ? `if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F}` : usesFM4 ? `s=FM4(C)` : `var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_(C.fmp[1])*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_(C.fmp[0]+mo);C.fmPrev=cr_*F;C.fmp[0]=(C.fmp[0]+C.fmf[0])%F;C.fmp[1]=(C.fmp[1]+C.fmf[1])%F;s=cr_*l0f/F`}}` : ''}${usesKS ? `
+${preFM}if(C.w===6){${(usesFM4 && usesFM2) ? `if(C.fmNo>=4){s=FM4(C)}else{var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_((C.fmp[1]>>>16))*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_((C.fmp[0]>>>16)+mo);C.fmPrev=cr_*F;C.fmp[0]=C.fmp[0]+C.fmf[0]>>>0;C.fmp[1]=C.fmp[1]+C.fmf[1]>>>0;s=cr_*l0f/F}` : usesFM4 ? `s=FM4(C)` : `var l1f=C.fmL[1]*C.fmEnv[1]/F,l0f=C.fmL[0]*C.fmEnv[0]/F;var mo=SA_((C.fmp[1]>>>16))*(C.fmMi*l1f/255);if(C.fmFb)mo+=C.fmPrev*C.fmFb/256;var cr_=SA_((C.fmp[0]>>>16)+mo);C.fmPrev=cr_*F;C.fmp[0]=C.fmp[0]+C.fmf[0]>>>0;C.fmp[1]=C.fmp[1]+C.fmf[1]>>>0;s=cr_*l0f/F`}}` : ''}${usesKS ? `
 ${preKS}if(C.w===7){if(C.kl<2)s=0;else{var kpp=C.kp,knx=kpp+1;if(knx>=C.kl)knx=0;var kcur=C.kb[kpp];C.kb[kpp]=(((kcur+C.kb[knx])>>1)*C.kg)>>16;C.kp=knx;s=kcur/32768}}` : ''}${usesDrum ? `
 ${preDrum}if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};
 ${drumAlgos.has(0) ? `if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8)*65536)>>>0;var q_=C.p>>>16,tri=q_<F/2?(q_*4-F):(F*3-q_*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}` : ''}
