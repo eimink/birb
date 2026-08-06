@@ -274,7 +274,12 @@ typedef struct {
 
     /* envelope */
     birb_env_stage env_stage;
-    fixed16       env_level;   /* current volume 0..FX_ONE */
+    /* double, not fixed16: the editor, the emitted JS player and the emitted
+     * locked C player all accumulate the envelope in double. Integer division
+     * here truncated every step — an A:8 attack advances by 65536/9 = 7281.78
+     * per tick everywhere else and by 7281 here — and the drift compounded to
+     * 3602 LSB against the editor on formant_test. */
+    double        env_level;   /* current volume 0..FX_ONE */
     birb_adsr     adsr;
 
     /* effects */

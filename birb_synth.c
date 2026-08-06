@@ -755,7 +755,7 @@ static void envelope_tick(birb_channel *ch) {
                 ch->env_level = FX_ONE;
                 ch->env_stage = ENV_DECAY;
             } else {
-                ch->env_level += FX_ONE / (ch->adsr.attack + 1);
+                ch->env_level += (double)FX_ONE / (ch->adsr.attack + 1);
                 if (ch->env_level >= FX_ONE) {
                     ch->env_level = FX_ONE;
                     ch->env_stage = ENV_DECAY;
@@ -765,11 +765,11 @@ static void envelope_tick(birb_channel *ch) {
 
         case ENV_DECAY:
             if (ch->adsr.decay == 0) {
-                ch->env_level = FX_FROM_INT(ch->adsr.sustain) / 255;
+                ch->env_level = (double)FX_ONE * ch->adsr.sustain / 255;
                 ch->env_stage = ENV_SUSTAIN;
             } else {
-                fixed16 target = FX_ONE * ch->adsr.sustain / 255;
-                ch->env_level -= (FX_ONE - target) / (ch->adsr.decay + 1);
+                double target = (double)FX_ONE * ch->adsr.sustain / 255;
+                ch->env_level -= ((double)FX_ONE - target) / (ch->adsr.decay + 1);
                 if (ch->env_level <= target) {
                     ch->env_level = target;
                     ch->env_stage = ENV_SUSTAIN;
@@ -786,7 +786,7 @@ static void envelope_tick(birb_channel *ch) {
                 ch->env_level = 0;
                 ch->env_stage = ENV_OFF;
             } else {
-                ch->env_level -= ch->env_level / (ch->adsr.release + 1);
+                ch->env_level -= ch->env_level / (ch->adsr.release + 1.0);
                 if (ch->env_level < 64) { /* threshold to cut off */
                     ch->env_level = 0;
                     ch->env_stage = ENV_OFF;
