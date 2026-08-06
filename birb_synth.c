@@ -1522,11 +1522,14 @@ void birb_init(birb_state *state, birb_song *song) {
      * reference to create headroom; at unity an existing song would render
      * 3.6 dB quieter than before for no reason. x2.0 lands it slightly louder
      * than it was, with the limiter engaging only on peaks. */
-    if (song->master_gain   == 0) song->master_gain   = 128;   /* x2.0  */
     if (song->limit_thresh  == 0) song->limit_thresh  = 242;   /* 0.949 */
     if (song->limit_release == 0) song->limit_release = 50;    /* ms    */
     if (song->duck_release  == 0) song->duck_release  = 120;   /* ms    */
 #endif
+
+    /* Master gain defaults regardless of BIRB_NO_MASTER: a no-master build
+     * still uses it before the hard clip, same as the JS emitters. */
+    if (song->master_gain == 0) song->master_gain = 128;   /* x2.0 */
 
     /* init noise LFSRs (basic-synth union arm; safe to touch because the
      * channel default synth_type is SYNTH_BASIC=0 via the zero-init above) */
@@ -1577,6 +1580,7 @@ static float birb_reverb_tick(birb_state *st, float x, float size, float damp, f
         o += y;
     }
     o *= (1.0f - fb) * 5.5f;   /* normalize level off feedback + makeup gain */
+#ifndef BIRB_NO_REV_DIFFUSE
     for (int k = 0; k < BIRB_REV_NAP; k++) {
         int L = birb_rev_ap_len[k];
         int p = st->rev_ap_pos[k];
@@ -1586,6 +1590,7 @@ static float birb_reverb_tick(birb_state *st, float x, float size, float damp, f
         st->rev_ap_pos[k] = (p + 1 < L) ? p + 1 : 0;
         o = out;
     }
+#endif  /* smol drops the diffusers — the tail is more metallic */
     return o * wet;
 }
 #endif /* BIRB_NO_REVERB */
@@ -1685,7 +1690,14 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
             }
 #endif
             /* apply envelope, instrument volume, row volume, and tremolo */
+#ifdef BIRB_NO_INST_VOL
+            /* smol drops per-instrument volume; the row volume column still
+             * applies. Instruments authored below 255 therefore get louder,
+             * which is the documented trade (see --smol / the editor toggle). */
+            const int32_t vol = 255;
+#else
             int32_t vol = ch->volume ? ch->volume : 255;
+#endif
             int32_t rvol = ch->row_vol;
             fixed16 env = ch->env_level;
             if (ch->tremolo_mod) {
@@ -1768,7 +1780,12 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
                 vf = birb_soft_sat(vf) / birb_soft_sat(thr);
             }
 #else
-            vf = birb_soft_sat(vf);
+            /* No master bus: still apply master gain, then hard clip. Both JS
+             * emitters do exactly `v*=MG; out = v>1?1:v<-1?-1:v` in this mode,
+             * and the C path was applying a soft saturator with no gain at all
+             * — half the level, different curve. */
+            vf *= (double)sg->master_gain / 64.0;
+            if (vf > 1.0) vf = 1.0; else if (vf < -1.0) vf = -1.0;
 #endif
             int32_t o = (int32_t)(vf * 32767.0f);
             if (o > 32767) o = 32767;

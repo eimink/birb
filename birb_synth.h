@@ -36,6 +36,17 @@ typedef unsigned long long uint64_t;
 _Static_assert(BIRB_SAMPLE_RATE == 44100,
                "octave_base is baked for 44100 Hz; regenerate it to retune");
 
+/* The "smol" feature set, as defined by birbc --smol and the editor's smol
+ * toggle: drop per-instrument volume (row volume still applies), drop the
+ * master limiter in favour of a hard clip, and drop the reverb diffusers.
+ * A build that defines BIRB_SMOL gets all three, so a wasm smol build can
+ * match the smol C and smol JS players instead of approximating them. */
+#ifdef BIRB_SMOL
+#define BIRB_NO_INST_VOL
+#define BIRB_NO_MASTER
+#define BIRB_NO_REV_DIFFUSE
+#endif
+
 /* Channel count is compile-time configurable (min 4, max 16).
  * Runtime loader reads the per-song count from the flag byte and validates
  * it is <= BIRB_NUM_CHANNELS. Songs authored with fewer channels are padded
@@ -506,11 +517,14 @@ typedef struct {
     /* Master bus (see the MSTR section in birb_format.h). Defaults are applied
      * by birb_parse_song when the section is absent, so every song gets the
      * same gain structure whether or not it carries master data. */
-    uint8_t  master_gain;   /* 0-255, gain = v/64 (so 64 = unity, 255 = 4x) */
     uint8_t  limit_thresh;  /* 0-255, limiter ceiling = v/255 (default 242) */
     uint8_t  limit_release; /* 0-255 ms release time      (default 50) */
     uint8_t  duck_release;  /* 0-255 ms sidechain release (default 120) */
 #endif
+    /* Outside the guard: a no-master build still applies master gain before
+     * its hard clip, exactly as both JS emitters do (`v*=MG`). Dropping the
+     * limiter is not the same as dropping the gain staging. */
+    uint8_t  master_gain;   /* 0-255, gain = v/64 (so 64 = unity, 255 = 4x) */
 
     birb_instrument instruments[BIRB_MAX_INSTRUMENTS];
     uint8_t         order[BIRB_MAX_ORDER][BIRB_NUM_CHANNELS]; /* pattern index per channel per position */

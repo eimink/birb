@@ -184,12 +184,18 @@ web/birb_minimal.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_minimal.wasm -o web/birb_minimal.wasm; fi
 	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_minimal.wasm -o web/birb_minimal.wasm.br; fi
 
-# Smol: the wasm member of the smol equivalence class. --smol implies
-# --no-master (birbc.c), so the smol feature set is the 4K set minus the master
-# bus. Must sound the same as --smol-c, --smol and the editor's smol export.
+# Smol: the wasm member of the smol equivalence class. BIRB_SMOL strips exactly
+# what birbc --smol and the editor's smol toggle strip — per-instrument volume,
+# the master limiter, and the reverb diffusers. Must sound the same as --smol-c,
+# --smol and the editor's smol export.
+# Uses WASM_FLAGS, not WASM_4K_FLAGS: smol is a sound trade, the 4K set is a
+# size tier. Mixing them in drags BIRB_KS_BUF_SIZE=256 along, which retunes
+# every KS note and has nothing to do with what --smol strips.
 web/birb_smol.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi
-	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_MASTER birb_synth.c birb_wasm.c -o web/birb_smol.wasm
+	$(WASM_CC) $(WASM_FLAGS) -Wl,--export=getSongBuf -Wl,--export=getOutputBuf \
+	    -Wl,--export=init -Wl,--export=render -Wl,--export=getRow -Wl,--export=getPattern \
+	    -DBIRB_SMOL birb_synth.c birb_wasm.c -o web/birb_smol.wasm
 	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_smol.wasm -o web/birb_smol.wasm; fi
 	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_smol.wasm -o web/birb_smol.wasm.br; fi
 
