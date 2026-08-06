@@ -1,0 +1,110 @@
+/* birb_render — render a .bsb through birb_synth.c to raw 16-bit mono PCM.
+ *
+ *   birb_render song.bsb out.raw [num_samples]
+ *
+ * birb_wav renders a song built in code; the pitch and parity harnesses need
+ * to render an arbitrary file, and to get PCM without a WAV header in the way.
+ * Sample count defaults to the whole song as the sequencer sees it.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Host-side harness: hold the widest song the format allows so any .bsb the
+ * tracker can author will load. Verified byte-identical to a 4-channel build
+ * on 4-channel songs — silent channels contribute nothing to the mix.
+ *
+ * birb_synth.c is #included rather than linked, deliberately. BIRB_NUM_CHANNELS
+ * sizes birb_state.channels[], so every translation unit must agree on it. When
+ * this file defined 16 and birb_synth.c was compiled separately at the default
+ * 4, the two disagreed on the struct layout and the tool rendered pure silence
+ * — no warning, no crash. Folding both into one translation unit makes the
+ * define authoritative and removes the need for a -D on the command line. */
+#define BIRB_NUM_CHANNELS 16
+
+#include "birb_synth.h"
+#include "birb_format.h"
+#include "birb_synth.c"
+
+#define CHUNK 4096
+
+int main(int argc, char **argv) {
+    /* --dump-notes prints the engine's own note lookup, so the report can
+     * compare tuning tables exactly instead of inferring them from audio.
+     * At C-0 a half-second window is only eight cycles, which is not enough
+     * signal to certify a 0.1-cent table acoustically. */
+    if (argc >= 2 && strcmp(argv[1], "--dump-notes") == 0) {
+        for (int n = 0; n < 96; n++)
+            printf("%d %ld\n", n, (long)birb_note_to_freq(n));
+        return 0;
+    }
+    if (argc < 3) {
+        fprintf(stderr, "usage: %s song.bsb out.raw [num_samples]\n", argv[0]);
+        fprintf(stderr, "       %s --dump-notes\n", argv[0]);
+        return 2;
+    }
+
+    FILE *in = fopen(argv[1], "rb");
+    if (!in) { fprintf(stderr, "cannot open %s\n", argv[1]); return 1; }
+    fseek(in, 0, SEEK_END);
+    long len = ftell(in);
+    fseek(in, 0, SEEK_SET);
+    uint8_t *data = malloc((size_t)len);
+    if (!data || fread(data, 1, (size_t)len, in) != (size_t)len) {
+        fprintf(stderr, "cannot read %s\n", argv[1]);
+        return 1;
+    }
+    fclose(in);
+
+    /* The channel count lives in the high 3 bits of the ticks_per_row byte and
+     * decodes as 4 + 2*code. birb_load refuses a song wider than the build, so
+     * report both — "not a valid .bsb" is otherwise indistinguishable from a
+     * corrupt file when the real problem is a 6-channel song meeting a
+     * 4-channel binary. */
+    int song_ch = len > 5 ? 4 + 2 * (data[5] >> 5) : 0;
+
+    static birb_song song;
+    if (birb_load(&song, data, (int)len) != 0) {
+        if (song_ch > BIRB_NUM_CHANNELS)
+            fprintf(stderr, "%s: song has %d channels, this build holds %d "
+                            "(rebuild with -DBIRB_NUM_CHANNELS=%d)\n",
+                    argv[1], song_ch, BIRB_NUM_CHANNELS, song_ch);
+        else
+            fprintf(stderr, "%s: not a valid .bsb\n", argv[1]);
+        return 1;
+    }
+    free(data);
+
+    /* Song length in samples: order_length rows-blocks × rows × ticks × the
+     * sequencer's samples-per-tick. Mirrors birbc's own accounting. */
+    long total;
+    if (argc > 3) {
+        total = atol(argv[3]);
+    } else {
+        int max_rows = 1;
+        for (int p = 0; p < song.num_patterns; p++)
+            if (song.pattern_lengths[p] > max_rows) max_rows = song.pattern_lengths[p];
+        long spt = (long)BIRB_SAMPLE_RATE * 5 / ((song.bpm ? song.bpm : 125) * 2);
+        total = (long)song.order_length * max_rows *
+                (song.ticks_per_row ? song.ticks_per_row : 6) * spt;
+    }
+    if (total <= 0) { fprintf(stderr, "nothing to render\n"); return 1; }
+
+    static birb_state state;
+    birb_init(&state, &song);
+
+    FILE *out = fopen(argv[2], "wb");
+    if (!out) { fprintf(stderr, "cannot write %s\n", argv[2]); return 1; }
+
+    static int16_t buf[CHUNK];
+    for (long done = 0; done < total; ) {
+        int n = (int)(total - done < CHUNK ? total - done : CHUNK);
+        birb_render(&state, buf, n);
+        fwrite(buf, sizeof(int16_t), (size_t)n, out);
+        done += n;
+    }
+    fclose(out);
+
+    fprintf(stderr, "%s: %ld samples, %d channels\n", argv[2], total, song_ch);
+    return 0;
+}

@@ -32,7 +32,7 @@ WASM_4K_FLAGS = --target=wasm32-unknown-unknown -nostdlib -Oz \
 # targets stay lean (BIRB_NO_REVERB above). Drop BIRB_NO_REVERB for a "with
 # reverb" build of any 4K variant.
 
-.PHONY: all clean test test-compiled web serve sizes tiers
+.PHONY: all clean test test-compiled web serve sizes tiers pitch-report probes parity
 
 all: birb_wav birbc birb_play
 
@@ -241,6 +241,30 @@ web/editor.min.html.br: web/editor.min.html
 	fi
 
 editor-dist: web/editor.min.html web/editor.min.html.br
+
+# ---- pitch report ----
+# Realized pitch per note, per render path, plus an exact comparison of every
+# implementation's note lookup. Run it before touching pitch code and diff
+# after. Measures single-note probes, never song mixes: overlapping voices and
+# unpitched percussion do not give an estimator anything to lock onto.
+# No channel-count flag needed and birb_synth.c is NOT listed as a source here:
+# birb_render.c #includes it so both share one BIRB_NUM_CHANNELS. See the
+# comment there — linking them separately silently produced a silent renderer.
+tools/birb_render: tools/birb_render.c birb_synth.c birb_synth.h birb_format.h
+	$(CC) $(CFLAGS) -I. tools/birb_render.c -o tools/birb_render
+
+probes: tools/gen_probes.py
+	python3 tools/gen_probes.py build/probes
+
+pitch-report: tools/birb_render birbc probes
+	@node tools/pitch_report.mjs --probes build/probes
+
+# Same corpus through every render path, PCM diffed. This is the bit-identity
+# gate for the Q32 widening, and the standing check that the five engines have
+# not drifted apart. Corpus is .birb sources only — a .bsb with no source
+# cannot be trusted to represent the current format.
+parity: tools/birb_render birbc
+	@node tools/parity.mjs
 
 # Serve web directory (AudioWorklet requires HTTPS or localhost)
 serve: web
