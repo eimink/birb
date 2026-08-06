@@ -1,0 +1,55 @@
+# All six drum types, one per channel pair, so parity covers every algorithm
+# and every type-specific tail. drums_test only exercises kick/snare/hat/clap,
+# which is how a dead `dt == 5` crash-shimmer branch in birb_synth.c survived.
+# TOM and CRASH share algorithms with KICK and HAT but keep their own tails,
+# so a song that never plays them cannot catch a lost type distinction.
+
+@bpm 120
+@ticks 6
+
+@inst 0 drum kick  tune=-12 decay=200 tone=80  snap=60  volume=255
+@inst 1 drum snare tune=0   decay=140 tone=150 snap=120 volume=220
+@inst 2 drum hat   tune=36  decay=40  tone=110 snap=200 volume=160
+@inst 3 drum clap  tune=0   decay=140 tone=160 snap=180 volume=200
+@inst 4 drum tom   tune=-5  decay=180 tone=100 snap=90  volume=230
+@inst 5 drum crash tune=24  decay=180 tone=128 snap=140 volume=210
+
+@order
+0 0 0 0
+1 1 1 1
+
+@pattern 0 16
+C-4 00 --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 01 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+C-4 00 --- | --- -- --- | C-4 02 --- | C-4 05 ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 01 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+C-4 00 --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 04 --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 01 --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 04 --- | C-4 02 --- | --- -- ---
+C-4 00 --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 03 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+
+@pattern 1 16
+C-4 00 --- | C-4 03 --- | C-4 02 --- | C-4 05 ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 01 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+C-4 04 --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 01 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+C-4 00 --- | --- -- --- | C-4 02 --- | C-4 05 ---
+--- -- --- | C-4 04 --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 01 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+C-4 00 --- | C-4 03 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---
+--- -- --- | C-4 01 --- | C-4 02 --- | --- -- ---
+--- -- --- | --- -- --- | C-4 02 --- | --- -- ---

@@ -36,6 +36,7 @@ const CORPUS = [
     'examples/ks_test.birb',
     'examples/drums_test.birb',
     'examples/formant_test.birb',
+    'examples/drums_all.birb',
     'examples/beat_dr.bsb',
     'examples/dnb_h.bsb',
 ];

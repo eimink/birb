@@ -443,9 +443,12 @@ static int16_t generate_drum(birb_channel *ch) {
     ch->u.drum.ttl_lo = (uint16_t)(ttl & 0xFFFF);
 
     uint8_t dt = ch->u.drum.drum_type;
+    /* TOM shares the KICK algorithm, CRASH shares HAT; dt keeps the distinction
+     * so the type-specific tails (TOM's longer ttl, CRASH's shimmer) survive. */
+    uint8_t algo = (dt == 4) ? 0 : (dt == 5) ? 2 : dt;
     int32_t out = 0;
 
-    if (dt == 0 || dt == 4) {
+    if (algo == 0) {
         /* KICK / TOM — pitch-swept TRIANGLE body + noise click.
          * Triangle packs harmonics (odd harmonics rolling off at 1/n²) so the
          * body sounds meaty by itself, not thin like a sine. The pitch sweep
@@ -479,7 +482,7 @@ static int16_t generate_drum(birb_channel *ch) {
             out += click;
             ch->u.drum.stage_tick--;
         }
-    } else if (dt == 1) {
+    } else if (algo == 1) {
         /* SNARE — high-passed noise (the wires) + a pitched drumhead that
          * decays faster than the noise does.
          *
@@ -520,7 +523,7 @@ static int16_t generate_drum(birb_channel *ch) {
         int32_t mix_b = ch->u.drum.stage;
         int32_t mix_n = 255 - mix_b;
         out = (noise * mix_n + body * mix_b) / 255;
-    } else if (dt == 2 || dt == 5) {
+    } else if (algo == 2) {
         /* HAT / CRASH — pure noise with a one-pole highpass. The old FM at
          * 1:17 ratio made metallic tones; real hats are nearly all noise
          * energy at high frequency. snap controls the HP cutoff (pitch_env_target
@@ -941,7 +944,13 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
         /* TOM reuses KICK algorithm (dt=0), CRASH reuses HAT (dt=2);
          * the difference is folded into the param init below. */
         uint8_t algo = (dt == 4) ? 0 : (dt == 5) ? 2 : dt;
-        ch->u.drum.drum_type = algo;
+        /* Store the ORIGINAL type, not the algorithm. generate_drum derives the
+         * algorithm again — it is a pure function of the type — but it also
+         * needs the original to tell CRASH from HAT, exactly as the editor does
+         * with drAlOrig. Storing the algorithm here made `dt == 5` unreachable
+         * and silently dropped the crash shimmer. */
+        ch->u.drum.drum_type = dt;
+        (void)algo;
         ch->u.drum.stage = 0;
         ch->u.drum.stage_tick = 0;
         ch->u.drum.phase2 = 0;
@@ -1013,6 +1022,11 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             fixed16 hp = (fixed16)((uint32_t)inst->drum_snap * (FX_ONE * 15 / 16) / 255);
             if (hp < FX_ONE / 16) hp = FX_ONE / 16;
             ch->u.drum.pitch_env_target = hp;
+            /* Reset the HP state, as the editor and both emitters do (C.drZ1=0).
+             * Without this the filter carries over from the previous hit, which
+             * barely shows on a short hat but wrecks a crash: its ~3.7 s tail
+             * means every retrigger lands on a still-ringing filter. */
+            ch->u.drum.bq_z1[0] = 0;
             ttl = (uint32_t)inst->drum_decay * 180 + 1024;
             if (dt == 5) ttl = 90000 + (uint32_t)inst->drum_decay * 400; /* CRASH ~2s+ */
         } else {
