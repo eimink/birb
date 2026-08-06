@@ -278,8 +278,11 @@ typedef struct {
     uint8_t       synth_type;  /* birb_synth_type — selects the union arm */
 
     /* oscillator */
-    fixed16       phase;       /* phase accumulator 0..FX_ONE */
-    fixed16       freq;        /* phase increment per sample */
+    /* 0.32 phase: wrapping is free unsigned overflow, so the explicit
+     * masks and subtracts this used to need are gone. Consumers that still
+     * want the old 16.16 value take `phase >> 16`. */
+    uint32_t      phase;       /* phase accumulator, 0.32 */
+    fixed16       freq;        /* phase increment per sample, Q32 */
     fixed16       base_freq;   /* freq before effects */
     fixed16       base_duty;   /* duty before effects (basic + formant) */
 
@@ -472,15 +475,21 @@ _Static_assert(sizeof(birb_channel) <= 208, "birb_channel bloat (native, formant
 #elif !defined(BIRB_NO_DRUM)
 /* DRUM arm alone (no FM / no KS / no formant) is ~40 B. */
 #if defined(__wasm__)
-_Static_assert(sizeof(birb_channel) <= 144, "birb_channel bloat (wasm, drum-only)");
+/* +8 from the double env_level and alignment; see the basic tier below. */
+_Static_assert(sizeof(birb_channel) <= 152, "birb_channel bloat (wasm, drum-only)");
 #else
-_Static_assert(sizeof(birb_channel) <= 160, "birb_channel bloat (native, drum-only)");
+_Static_assert(sizeof(birb_channel) <= 168, "birb_channel bloat (native, drum-only)");
 #endif
 #else
+/* Basic-only tier. Raised from 112/128 when env_level became a double to match
+ * the editor's envelope arithmetic — that is +4 bytes on every channel and is
+ * the price of the C engine agreeing with the tracker. Alignment then rounds
+ * the wasm arm to 120. Do not raise these again without the same kind of
+ * reason: the cap exists to make growth deliberate. */
 #if defined(__wasm__)
-_Static_assert(sizeof(birb_channel) <= 112, "birb_channel bloat (wasm)");
+_Static_assert(sizeof(birb_channel) <= 120, "birb_channel bloat (wasm)");
 #else
-_Static_assert(sizeof(birb_channel) <= 128, "birb_channel bloat (native)");
+_Static_assert(sizeof(birb_channel) <= 136, "birb_channel bloat (native)");
 #endif
 #endif
 

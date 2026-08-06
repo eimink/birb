@@ -33,7 +33,11 @@ static const fixed16 octave_base[12] = {
 fixed16 birb_note_to_freq(int note) {
     if (note < 0) note = 0;
     if (note > 95) note = 95;
-    return ((octave_base[note % 12] << (note / 12)) + 128) >> 8;
+    /* Q32 increment. The table's eight fractional bits are still rounded
+     * away here — unrounding them is an audible change and belongs to its own
+     * milestone; this one only widens, so the value is the old 16.16 one
+     * shifted up and the output is bit-identical. */
+    return (fixed16)((((octave_base[note % 12] << (note / 12)) + 128) >> 8) << 16);
 }
 
 /* ---------- sine approximation ---------- *
@@ -114,11 +118,11 @@ static int16_t gen_sine(fixed16 phase) {
 
 static int16_t gen_basic(birb_channel *ch) {
     switch (ch->u.basic.waveform) {
-        case WAVE_PULSE:    return gen_pulse(ch->phase, ch->u.basic.duty);
-        case WAVE_TRIANGLE: return gen_triangle(ch->phase);
-        case WAVE_SAWTOOTH: return gen_sawtooth(ch->phase);
+        case WAVE_PULSE:    return gen_pulse((fixed16)(ch->phase >> 16), ch->u.basic.duty);
+        case WAVE_TRIANGLE: return gen_triangle((fixed16)(ch->phase >> 16));
+        case WAVE_SAWTOOTH: return gen_sawtooth((fixed16)(ch->phase >> 16));
         case WAVE_NOISE:    return gen_noise(ch);
-        case WAVE_SINE:     return gen_sine(ch->phase);
+        case WAVE_SINE:     return gen_sine((fixed16)(ch->phase >> 16));
         default:            return 0;
     }
 }
@@ -463,14 +467,14 @@ static int16_t generate_drum(birb_channel *ch) {
             p = t + (int32_t)(((int64_t)gap * ch->base_duty) >> 16);
             ch->u.drum.pitch_env = p;
         }
-        ch->phase += p >> 8;
-        ch->phase &= FX_MASK;
+        ch->phase += (uint32_t)((p >> 8) << 16);
         /* Triangle wave at ±28000, tracking ch->phase through its full cycle. */
         int32_t tri;
-        if (ch->phase < FX_HALF) {
-            tri = ((int32_t)ch->phase * 4) - FX_ONE;      /* -FX_ONE → +FX_ONE */
+        fixed16 kph = (fixed16)(ch->phase >> 16);
+        if (kph < FX_HALF) {
+            tri = (kph * 4) - FX_ONE;                     /* -FX_ONE → +FX_ONE */
         } else {
-            tri = FX_ONE * 3 - ((int32_t)ch->phase * 4);  /* +FX_ONE → -FX_ONE */
+            tri = FX_ONE * 3 - (kph * 4);                 /* +FX_ONE → -FX_ONE */
         }
         out = ((int32_t)tri * 28000) >> FX_SHIFT;
         /* Click: decaying noise burst, snap-controlled amplitude. */
@@ -509,11 +513,11 @@ static int16_t generate_drum(birb_channel *ch) {
 
         /* pitched head: triangle, so it has harmonics without the square's
          * buzz, on its own exponential decay (~50 ms) */
-        ch->phase += ch->freq;
-        ch->phase &= FX_MASK;
+        ch->phase += (uint32_t)ch->freq;
         int32_t tri;
-        if (ch->phase < FX_HALF) tri = ((int32_t)ch->phase * 4) - FX_ONE;
-        else                     tri = FX_ONE * 3 - ((int32_t)ch->phase * 4);
+        fixed16 sph = (fixed16)(ch->phase >> 16);
+        if (sph < FX_HALF) tri = (sph * 4) - FX_ONE;
+        else               tri = FX_ONE * 3 - (sph * 4);
         int32_t body = ((int32_t)tri * 22000) >> FX_SHIFT;
         body = (int32_t)(((int64_t)body * ch->u.drum.pitch_env) >> 16);
         ch->u.drum.pitch_env =
@@ -637,7 +641,7 @@ static inline int32_t biquad_bp_step(int32_t x, fixed16 b0, fixed16 a1, fixed16 
  * the default amplitude weights (F1=1, F2=0.7, F3=0.4), sums to a few thousand
  * peak — well within the 16-bit mixer headroom. */
 static int16_t formant_source(birb_channel *ch) {
-    fixed16 p = ch->phase;
+    fixed16 p = (fixed16)(ch->phase >> 16);
     switch (ch->u.formant.src_wave) {
         case WAVE_PULSE:
             return p < ch->base_duty ? 16383 : -16383;
@@ -895,7 +899,7 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
             /* Round (+8 before >>4), NOT floor — the editor/emit use
              * Math.round(base*ratio); a floor here is 1 unit low for non-integer
              * ratios and drifts the FM operators out of phase over time. */
-            ch->u.fm.op_freq[i] = (fixed16)((((uint64_t)ch->base_freq * ((ri << 4) | (rf & 0xF))) + 8) >> 4);
+            ch->u.fm.op_freq[i] = (fixed16)(((((uint64_t)ch->base_freq >> 16) * ((ri << 4) | (rf & 0xF))) + 8) >> 4);
             /* Static per-op level (refreshed live in fm_op_envelope_tick).
              * Round (+127 before /255) to match the editor's Math.round(F*lv/255);
              * a floor here is 1 unit low and desyncs high-feedback FM. */
@@ -916,7 +920,8 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
     else if (inst->synth_type == SYNTH_KS) {
         /* buffer length = SAMPLE_RATE / freq_hz. ch->freq is the 16.16 phase
          * increment at SAMPLE_RATE, so len == FX_ONE / freq directly. */
-        uint32_t len = ch->freq > 0 ? (uint32_t)(FX_ONE / ch->freq) : 0;
+        uint32_t len = ch->freq > 0
+            ? (uint32_t)(((uint64_t)1 << 48) / (uint32_t)ch->freq) >> 16 : 0;
         if (len < 4) len = 4;
         if (len > BIRB_KS_BUF_SIZE) len = BIRB_KS_BUF_SIZE;
         ch->u.ks.buf_len = (uint16_t)len;
@@ -978,7 +983,11 @@ static void trigger_note(birb_channel *ch, uint8_t note, birb_instrument *inst, 
              * With only 4x available the sweep either started too low or
              * stopped too high, and the result was a short bloop instead of a
              * thud. Reference kick.wav in examples/ runs 169 -> 23 Hz. */
-            fixed16 start_f = dfreq;
+            /* pitch_env keeps its own units (8 bits below 16.16) and the
+             * render shifts what it yields into Q32, so the sweep starts from
+             * the narrow value. Feeding it a Q32 dfreq overflows int32 twice
+             * over. */
+            fixed16 start_f = dfreq >> 16;
             ch->u.drum.pitch_env = (start_f << 3) << 8;
             ch->u.drum.pitch_env_target = (start_f >> 1) << 8;
             /* Decay rate: higher `tone` = faster pitch decay. */
@@ -1129,17 +1138,17 @@ static void process_effects(birb_channel *ch, uint8_t effect, uint8_t param, bir
             ch->arp_tick = 0;
             break;
         case FX_PITCH_UP:
-            ch->pitch_slide = (fixed16)param << 2;
+            ch->pitch_slide = (fixed16)param << 18;
             break;
         case FX_PITCH_DOWN:
-            ch->pitch_slide = -((fixed16)param << 2);
+            ch->pitch_slide = -((fixed16)param << 18);
             break;
         case FX_VIBRATO:
             ch->vibrato_speed = FX_ONE / 64 * ((param >> 4) & 0x0F);
-            ch->vibrato_depth = (fixed16)(param & 0x0F) << 4;
+            ch->vibrato_depth = (fixed16)(param & 0x0F) << 20;
             break;
         case FX_TONE_PORTA:
-            ch->porta_speed = (fixed16)param << 2;
+            ch->porta_speed = (fixed16)param << 18;
             break;
         case FX_RETRIGGER:
             ch->retrig_interval = param;
@@ -1268,15 +1277,21 @@ static int32_t birb_lfo_tri(fixed16 phase) {
 static void tick_effects(birb_channel *ch, birb_song *song) {
     /* pitch envelope */
     if (ch->pitch_env_ticks > 0) {
-        ch->base_freq += (fixed16)ch->pitch_env << 2;
-        if (ch->base_freq < 1) ch->base_freq = 1;
+        ch->base_freq += (fixed16)ch->pitch_env << 18;
+        /* Floor is an absolute increment, so it scales with the domain:
+         * 1 in 16.16 is 1<<16 in Q32. Leaving it at 1 lets a downward pitch
+         * envelope run 65536x further before it catches. */
+        if (ch->base_freq < (1 << 16)) ch->base_freq = (1 << 16);
         ch->pitch_env_ticks--;
     }
 
     /* pitch slide */
     if (ch->pitch_slide != 0) {
         ch->base_freq += ch->pitch_slide;
-        if (ch->base_freq < 1) ch->base_freq = 1;
+        /* Floor is an absolute increment, so it scales with the domain:
+         * 1 in 16.16 is 1<<16 in Q32. Leaving it at 1 lets a downward pitch
+         * envelope run 65536x further before it catches. */
+        if (ch->base_freq < (1 << 16)) ch->base_freq = (1 << 16);
     }
 
     /* tone portamento — slide base toward target. MUST run before arp/vibrato:
@@ -1751,10 +1766,7 @@ void birb_render(birb_state *state, int16_t *output, int num_samples) {
              * ch->freq itself, samples use sample_pos). Advancing here too would
              * double-step them. Mirrors the editor's `if (C.w!==5 && C.w!==8)`. */
             if (ch->synth_type != SYNTH_DRUM && ch->synth_type != SYNTH_SAMPLE) {
-                ch->phase += ch->freq;
-                if (ch->phase >= FX_ONE) {
-                    ch->phase -= FX_ONE;
-                }
+                ch->phase += (uint32_t)ch->freq;
             }
         }
 

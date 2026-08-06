@@ -1698,7 +1698,7 @@ static int write_js(const char *filename, birb_song *song) {
     fprintf(f,
         "var bf=[6221,6591,6983,7398,7838,8304,8797,9321,9875,10462,11084,11743],\n"
         "dv=[8192,16384,32768,49152],\n"
-        "nf=n=>(n=n<0?0:n>95?95:n,((bf[n%%12]<<(n/12))+128)>>8),\n"
+        "nf=n=>(n=n<0?0:n>95?95:n,(((bf[n%%12]<<(n/12))+128)>>8)*65536),\n"
         "spt=S*5/((bpm||125)*2)|0,%s\n"
         "out=new Float32Array(T),ch=[]%s,tc=0\n",
         smol_span,
@@ -1719,7 +1719,7 @@ static int write_js(const char *filename, birb_song *song) {
 #endif
     snprintf(fm_trig, sizeof fm_trig,
         "\nif(j[0]===6){var fm=j[15];%s%sC.fmFb=j[13];C.fmMi=j[14];C.fmPrev=0;for(var k=0;k<%d;k++){"
-        "var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b*C.fmR[k]);"
+        "var o_=fm[k];C.fmp[k]=0;C.fmR[k]=(o_[0]*16+(o_[1]&15))/16;C.fmf[k]=Math.round(C.b/65536*C.fmR[k]);"
         "C.fmL[k]=Math.round(F*o_[2]/255);if((o_[3]|0)==0){C.fmEnv[k]=F;C.fmStg[k]=2}else{C.fmEnv[k]=0;C.fmStg[k]=1}}}",
         (uses_fm4 && uses_fm2) ? "C.fmNo=j[11];" : "", uses_fm4 ? "C.fmAlgo=j[12]|0;" : "",
         uses_fm4 ? 4 : 2);
@@ -1888,11 +1888,11 @@ static int write_js(const char *filename, birb_song *song) {
             ? fm_trig
             : "",
         uses_ks
-            ? "\nif(j[0]===7){var ln=C.b>0?F/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kbit=(lf^(lf>>1))&1;lf=((lf>>1)|(kbit<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}"
+            ? "\nif(j[0]===7){var ln=C.b>0?2**32/C.b|0:0;if(ln<4)ln=4;if(ln>1024)ln=1024;C.kl=ln;C.kp=0;C.kd=j[16]||0;C.kg=KG(C.kd,ln);var lf=(0x7FFF^(s*0x1D79&0xFFFF))&0xFFFF;if(!lf)lf=0x7FFF;for(var ki=0;ki<ln;ki++){var kbit=(lf^(lf>>1))&1;lf=((lf>>1)|(kbit<<14))&0xFFFF;C.kb[ki]=(lf&1)?32767:-32767}}"
             : "",
         uses_drum
             ? "\nif(j[0]===8){var dt=j[17]&7,al=dt===4?0:dt===5?2:dt,tn=j[18];if(tn>127)tn-=256;var dec=j[19],tone=j[20],snp=j[21],dn=s+tn;if(dn<0)dn=0;if(dn>95)dn=95;var df=nf(dn),tt;C.drAl=al;C.drAlOrig=dt;C.drP2=0;C.drZ1=0;C.drZ2=0;C.drLf=(0x7FFF^(s*0x3D7F&0xFFFF))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;"
-              "if(al===0){C.drPe=(df<<3)<<8;C.drPet=(df>>1)<<8;C.drRate=KC(tone);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}"
+              "if(al===0){var df16=df/65536;C.drPe=(df16<<3)<<8;C.drPet=(df16>>1)<<8;C.drRate=KC(tone);C.drSnap=snp;C.drClk=384;tt=dec*200+1024;if(dt===4)tt*=2}"
               "else if(al===1){C.f=df>0?df:nf(26);C.b=C.f;C.drMix=snp;C.drPet=SC(tone);C.drPe=F;C.drRate=65460;C.drZ1=0;tt=dec*120+1024;C.drP2=F;C.drNz=F-Math.min(4096,(301466/(tt||1))|0)}"
               "else if(al===2){var hp=snp*(F*15/16/255)|0;if(hp<F>>4)hp=F>>4;C.drPet=hp;C.drZ1=0;tt=dec*180+1024;if(dt===5)tt=90000+dec*400}"
               "else{C.drBurstLen=80+(snp>>1);C.drStage=0;C.drStageT=C.drBurstLen;tt=dec*160+2048}"
@@ -1944,9 +1944,9 @@ static int write_js(const char *filename, birb_song *song) {
         s_perch ? "TR(C,n,ii)" : "{if(ii==255)ii=C.i;if(ii<ni)TR(C,n,ii)}",
         fx_used[FX_ARPEGGIO]   ? "if(fx==1){C.x=pm>>4;C.y=pm&15;C.k=0}\n" : "",
         (fx_used[FX_PITCH_UP]||fx_used[FX_PITCH_DOWN])
-            ? "if(fx==2)C.l=pm<<2;else if(fx==3)C.l=-(pm<<2)\n" : "",
-        fx_used[FX_VIBRATO]    ? "if(fx==4){C.vs=F/64*(pm>>4);C.vd=(pm&15)<<4}\n" : "",
-        fx_used[FX_TONE_PORTA] ? "if(fx==5)C.ps=pm<<2\n" : "",
+            ? "if(fx==2)C.l=pm*262144;else if(fx==3)C.l=-(pm*262144)\n" : "",
+        fx_used[FX_VIBRATO]    ? "if(fx==4){C.vs=F/64*(pm>>4);C.vd=(pm&15)*1048576}\n" : "",
+        fx_used[FX_TONE_PORTA] ? "if(fx==5)C.ps=pm*262144\n" : "",
         fx_used[FX_RETRIGGER]  ? "if(fx==6)C.ri=pm\n" : "",
         uses_notecut           ? "if(fx==7&&(pm>>4)==0xC)C.nc=pm&15\n" : "",
         fx_used[FX_TREMOLO]    ? "if(fx==8){C.ts=F/64*(pm>>4);C.td=(pm&15)<<4}\n" : "",
@@ -1969,8 +1969,8 @@ static int write_js(const char *filename, birb_song *song) {
         uses_notecut  ? "if(C.nc&&ct==C.nc){C.e=0;C.t=0}\n" : "",
         fx_used[FX_RETRIGGER]
             ? "if(C.ri&&ct>0&&ct%C.ri==0){C.p=0;C.t=1;C.e=0;if(C.w>=3){C.h=0x7FFF;C.m=0}}\n" : "",
-        uses_pitchenv ? "if(C.g){C.b+=C.q<<2;if(C.b<1)C.b=1;C.g--}\n" : "",
-        uses_slide    ? "if(C.l){C.b+=C.l;if(C.b<1)C.b=1}\n" : "",
+        uses_pitchenv ? "if(C.g){C.b+=C.q*262144;if(C.b<65536)C.b=65536;C.g--}\n" : "",
+        uses_slide    ? "if(C.l){C.b+=C.l;if(C.b<65536)C.b=65536}\n" : "",
         uses_porta
             ? "if(C.pt&&C.ps){if(C.b<C.pt){C.b+=C.ps;if(C.b>C.pt)C.b=C.pt}else if(C.b>C.pt){C.b-=C.ps;if(C.b<C.pt)C.b=C.pt}}\n" : "",
         uses_arp
@@ -1994,7 +1994,7 @@ static int write_js(const char *filename, birb_song *song) {
          * order-position state and var-hoisting would clobber it. */
         fprintf(f,
             "if(C.w===6&&C.i<ni){var jj=I[C.i],fm=jj[15];C.fmFb=jj[13];C.fmMi=jj[14];%s\n"
-            "for(var k=0;k<%d;k++){var oo=fm[k];C.fmR[k]=(oo[0]*16+(oo[1]&15))/16;C.fmf[k]=Math.round(C.f*C.fmR[k]);C.fmL[k]=Math.round(F*(oo[2]||0)/255);\n"
+            "for(var k=0;k<%d;k++){var oo=fm[k];C.fmR[k]=(oo[0]*16+(oo[1]&15))/16;C.fmf[k]=Math.round(C.f/65536*C.fmR[k]);C.fmL[k]=Math.round(F*(oo[2]||0)/255);\n"
             "var st=C.fmStg[k],en=C.fmEnv[k],oa=oo[3]|0,od=oo[4]|0,os=oo[5]|0,oR=oo[6]|0;\n"
             "if(st===1){en+=F/(oa+1);if(en>=F){en=F;st=2}}else if(st===2){var g2=(F*os/255)|0;en-=(F-g2)/(od+1);if(en<=g2){en=g2;st=3}}else if(st===4){en-=en/(oR+1);if(en<64){en=0;st=0}}\n"
             "C.fmStg[k]=st;C.fmEnv[k]=en}}\n",
@@ -2018,7 +2018,7 @@ static int write_js(const char *filename, birb_song *song) {
     fprintf(f,
         "for(i=0;i<T;i++){if(tc<=0){K();tc=spt}tc--\n"
         "var v=0%s%s;for(c=0;c<N;c++){var C=ch[c];if(!C.t&&!C.e%s)continue\n"
-        "var h=C.p,s;\n",
+        "var h=C.p>>>16,s;\n",
         uses_reverb ? ",rI=0" : "",
         uses_duck ? ",DI=0,DN=DE" : "",
         uses_drum ? "&&!C.drTtl" : "");
@@ -2044,10 +2044,10 @@ static int write_js(const char *filename, birb_song *song) {
             "if(C.w===8){if(C.drTtl<=0){s=0;C.e=0;C.t=0}else{C.drTtl--;var o_=0;var lfn=function(){var bb=(C.drLf^(C.drLf>>1))&1;C.drLf=((C.drLf>>1)|(bb<<14))&0xFFFF;if(!C.drLf)C.drLf=0x7FFF;return C.drLf};");
         if (drum_algos & 1)
             fprintf(f,
-                "if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8))%%F;var tri=C.p<F/2?(C.p*4-F):(F*3-C.p*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}");
+                "if(C.drAl===0){var gp=C.drPe-C.drPet;if(gp>0)C.drPe=C.drPet+Math.floor(gp*C.drRate/65536);C.p=(C.p+(C.drPe>>8)*65536)>>>0;var q_=C.p>>>16,tri=q_<F/2?(q_*4-F):(F*3-q_*4);o_=((tri*28000/F)|0);if(C.drClk>0){var nn=lfn();var pk=C.drSnap*128,ap=(pk*C.drClk/384)|0;o_+=(nn&1)?ap:-ap;C.drClk--}}");
         if (drum_algos & 2)
             fprintf(f,
-                "%sif(C.drAl===1){var nn=lfn();var sr_=(nn&1)?26000:-26000;var y_=sr_-C.drZ1;C.drZ1+=(y_*C.drPet)>>16;var noi=Math.floor(y_*C.drP2/65536);C.drP2=Math.floor(C.drP2*C.drNz/65536);C.p=(C.p+C.f)%%F;var tr_=C.p<F/2?(C.p*4-F):(F*3-C.p*4);var bd=(tr_*22000)>>16;bd=Math.floor(bd*C.drPe/65536);C.drPe=Math.floor(C.drPe*C.drRate/65536);var mxB=C.drMix,mxN=255-mxB;o_=((noi*mxN+bd*mxB)/255)|0}",
+                "%sif(C.drAl===1){var nn=lfn();var sr_=(nn&1)?26000:-26000;var y_=sr_-C.drZ1;C.drZ1+=(y_*C.drPet)>>16;var noi=Math.floor(y_*C.drP2/65536);C.drP2=Math.floor(C.drP2*C.drNz/65536);C.p=C.p+C.f>>>0;var q_=C.p>>>16,tr_=q_<F/2?(q_*4-F):(F*3-q_*4);var bd=(tr_*22000)>>16;bd=Math.floor(bd*C.drPe/65536);C.drPe=Math.floor(C.drPe*C.drRate/65536);var mxB=C.drMix,mxN=255-mxB;o_=((noi*mxN+bd*mxB)/255)|0}",
                 (drum_algos & 1) ? "else " : "");
         if (drum_algos & 4)
             fprintf(f,
@@ -2115,12 +2115,12 @@ static int write_js(const char *filename, birb_song *song) {
 #ifndef BIRB_NO_REVERB
         if (uses_reverb)
             fprintf(f,
-                "%svar cv=s*en*%s*%s;%sv+=cv;if(C.rs)rI+=cv*C.rs/255;%sC.p=(C.p+C.f)%%F}v+=RV(rI);%s%s}\n"
+                "%svar cv=s*en*%s*%s;%sv+=cv;if(C.rs)rI+=cv*C.rs/255;%sC.p=C.p+C.f>>>0}v+=RV(rI);%s%s}\n"
                 "return{o:out,spt:spt,T:T}}\n", drv, vterm, tgain, dsend, padv, dtick, master);
         else
 #endif
             fprintf(f,
-                "%svar cv=s*en*%s*%s;%sv+=cv;%sC.p=(C.p+C.f)%%F}%s%s}\n"
+                "%svar cv=s*en*%s*%s;%sv+=cv;%sC.p=C.p+C.f>>>0}%s%s}\n"
                 "return{o:out,spt:spt,T:T}}\n", drv, vterm, tgain, dsend, padv, dtick, master);
     }
 
@@ -2181,7 +2181,7 @@ static const char *bc_fx_setup(int arp, int slide) {
     static char buf[256];
     buf[0] = 0;
     if (arp)   strcat(buf, " if(fx==1){ a1[c]=pm>>4; a2[c]=pm&15; at[c]=0; }");
-    if (slide) strcat(buf, " if(fx==2) sl[c]=pm<<2; else if(fx==3) sl[c]=-(pm<<2);");
+    if (slide) strcat(buf, " if(fx==2) sl[c]=pm<<18; else if(fx==3) sl[c]=-(pm<<18);");
     return buf;
 }
 
@@ -2479,9 +2479,9 @@ static int write_smol_c(const char *filename, birb_song *song) {
         "/* increments in 1/256 units, shifted down after the octave shift */\n"
         "static const i32 BF[12]={6221,6591,6983,7398,7838,8304,8797,9321,9875,10462,11084,11743};\n"
         "static i32 nf(i32 n){ if(n<0)n=0; if(n>95)n=95;\n"
-        " return ((BF[n%%12]<<(n/12))+128)>>8; }\n"
+        " return (i32)((u32)(((BF[n%%12]<<(n/12))+128)>>8)<<16); }\n"
         "");
-    bc_st(f, "i32 ph[N],bs[N],st[N],rv[N];", "ph,bs,st,rv");
+    bc_st(f, "u32 ph[N];i32 bs[N],st[N],rv[N];", "ph,bs,st,rv");
     bc_st(f, "float ev_[N];", "ev_");
     if (c_arp) bc_st(f, "i32 fq[N];", "fq");
     if (c_rev) {
@@ -2704,7 +2704,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
             "  FI(c); }\n");
     if (c_ks)
         fprintf(f,
-            " if(CW[c]==7){ i32 ln = bs[c]>0 ? (F/bs[c]) : 0;\n"
+            " if(CW[c]==7){ i32 ln = bs[c]>0 ? (i32)(((unsigned long long)1<<32)/(u32)bs[c]) : 0;\n"
             "  if(ln<4) ln=4; if(ln>1024) ln=1024; kl[c]=ln; kp[c]=0; kg[c]=KG(KD[c],ln);\n"
             "  i32 lfv=(0x7FFF^((s*0x1D79)&0xFFFF))&0xFFFF; if(!lfv) lfv=0x7FFF;\n"
             "  for(i32 ki=0;ki<ln;ki++){ i32 kbv=(lfv^(lfv>>1))&1;\n"
@@ -2718,7 +2718,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
             "  dlf[c]=(0x7FFF^((s*0x3D7F)&0xFFFF))&0xFFFF; if(!dlf[c]) dlf[c]=0x7FFF;\n");
         if (c_drum_mask & 1)
             fprintf(f,
-                "  if(al==0){ dpe[c]=(df<<3)<<8; dpt[c]=(df>>1)<<8; drt[c]=KC(tone);\n"
+                "  if(al==0){ i32 df16=df>>16; dpe[c]=(df16<<3)<<8; dpt[c]=(df16>>1)<<8; drt[c]=KC(tone);\n"
                 "   dsn[c]=snp; dclk[c]=384; tt=dec*200+1024; if(dt==4) tt*=2; }\n");
         if (c_drum_mask & 2)
             fprintf(f,
@@ -2758,9 +2758,9 @@ static int write_smol_c(const char *filename, birb_song *song) {
         ev_w,
         ev_fx ? bc_fx_setup(c_arp, c_slide) : "");
     if (uses_pe)
-        fprintf(f, "  if(pet[c]){ bs[c]+=(i32)CPE[c]<<2; if(bs[c]<1)bs[c]=1; pet[c]--; }\n");
+        fprintf(f, "  if(pet[c]){ bs[c]+=(i32)CPE[c]<<18; if(bs[c]<65536)bs[c]=65536; pet[c]--; }\n");
     if (c_slide)
-        fprintf(f, "  if(sl[c]){ bs[c]+=sl[c]; if(bs[c]<1)bs[c]=1; }\n");
+        fprintf(f, "  if(sl[c]){ bs[c]+=sl[c]; if(bs[c]<65536)bs[c]=65536; }\n");
     if (c_arp)
         fprintf(f, "  if(a1[c]|a2[c]){ i32 t3=at[c]%%3, nn=bn[c];\n"
                    "   if(t3==1) nn+=a1[c]; else if(t3==2) nn+=a2[c];\n"
@@ -2791,7 +2791,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
         "  float v=0.f%s;\n"
         "  for(i32 c=0;c<N;c++){\n"
         "   if(!st[c] && ev_[c]==0.f%s) continue;\n"
-        "   i32 h=ph[c]; float s=0.f;\n", c_rev ? ",ri=0.f" : "",
+        "   i32 h=(i32)(ph[c]>>16); float s=0.f;\n", c_rev ? ",ri=0.f" : "",
         c_drum ? " && !dttl[c]" : "");
     { int first = 1;
       if (c_smp) {
@@ -2846,8 +2846,8 @@ static int write_smol_c(const char *filename, birb_song *song) {
             fprintf(f,
                 "    if(dal[c]==0){ i32 gp=dpe[c]-dpt[c];\n"
                 "     if(gp>0) dpe[c]=dpt[c]+(i32)(((long long)gp*drt[c])>>16);\n"
-                "     ph[c]=(ph[c]+(dpe[c]>>8))%%F;\n"
-                "     i32 tri = ph[c]<F/2 ? (ph[c]*4-F) : (F*3-ph[c]*4);\n"
+                "     ph[c]+=(u32)((dpe[c]>>8)<<16);\n"
+                "     i32 q_=(i32)(ph[c]>>16); i32 tri = q_<F/2 ? (q_*4-F) : (F*3-q_*4);\n"
                 "     o_=(i32)(((long long)tri*28000)/F);\n"
                 "     if(dclk[c]>0){ i32 nn=dlfn(c), pk=dsn[c]*128, ap=(i32)(((long long)pk*dclk[c])/384);\n"
                 "      o_ += (nn&1)?ap:-ap; dclk[c]--; } }\n");
@@ -2857,8 +2857,8 @@ static int write_smol_c(const char *filename, birb_song *song) {
                 "     dz1[c] += (i32)((i32)(u32)((long long)y_*dpt[c])>>16);\n"
                 "     i32 noi=(i32)(((long long)y_*dp2[c])>>16);\n"
                 "     dp2[c]=(i32)(((long long)dp2[c]*dnz[c])>>16);\n"
-                "     ph[c]=(ph[c]+bs[c])%%F;\n"
-                "     i32 tr_ = ph[c]<F/2 ? (ph[c]*4-F) : (F*3-ph[c]*4);\n"
+                "     ph[c]+=(u32)bs[c];\n"
+                "     i32 q_=(i32)(ph[c]>>16); i32 tr_ = q_<F/2 ? (q_*4-F) : (F*3-q_*4);\n"
                 "     i32 bd=(i32)((i32)(u32)((long long)tr_*22000)>>16);\n"
                 "     bd=(i32)(((long long)bd*dpe[c])>>16);\n"
                 "     dpe[c]=(i32)(((long long)dpe[c]*drt[c])>>16);\n"
@@ -2948,7 +2948,7 @@ static int write_smol_c(const char *filename, birb_song *song) {
     fprintf(f,
         "   float cv = s * ev_[c] / F * (float)rv[c] / 255.f * %s;\n"
         "   v += cv;%s\n"
-        "   %sph[c] = (ph[c]+%s) %% F;\n"
+        "   %sph[c] += (u32)(%s);\n"
         "  }\n"
         "%s"
         "  v *= MG;\n"
@@ -3396,7 +3396,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
         "static const i32 BF[12]={6221,6591,6983,7398,7838,8304,8797,9321,9875,"
         "10462,11084,11743};\n"
         "static i32 nf(i32 n){ if(n<0)n=0; if(n>95)n=95;\n"
-        " return ((BF[n%%12]<<(n/12))+128)>>8; }\n");
+        " return (i32)((u32)(((BF[n%%12]<<(n/12))+128)>>8)<<16); }\n");
     if (u_fm || drum_lfo || w_used[4])
         fprintf(f,
             "static double sa_(i32 ph){ i32 p=((ph%%F)+F)%%F; i32 ng=p>=F/2; i32 t=ng?p-F/2:p;\n"
@@ -3413,7 +3413,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
             " double x2=x*x; return x*(27.+x2)/(27.+9.*x2); }\n");
 
     /* ---- state ---- */
-    bc_st(f, "double ph[N],fq[N],ev_[N];", "ph,fq,ev_");
+    bc_st(f, "u32 ph[N];i32 fq[N];double ev_[N];", "ph,fq,ev_");
     bc_st(f, "i32 bs[N],st[N],rv[N];", "bs,st,rv");
     bc_st(f, "u8 CI[N];", "CI");
     if (u_pe)    bc_st(f, "i32 pet[N];", "pet");
@@ -3558,7 +3558,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
             "  FI(c); }\n");
     if (u_ks)
         fprintf(f,
-            " if(CW[I]==7){ i32 ln = bs[c]>0 ? (F/bs[c]) : 0;\n"
+            " if(CW[I]==7){ i32 ln = bs[c]>0 ? (i32)(((unsigned long long)1<<32)/(u32)bs[c]) : 0;\n"
             "  if(ln<4) ln=4; if(ln>1024) ln=1024; kl[c]=ln; kp[c]=0; kg[c]=KG(KD[I],ln);\n"
             "  i32 lfv=(0x7FFF^((s*0x1D79)&0xFFFF))&0xFFFF; if(!lfv) lfv=0x7FFF;\n"
             "  for(i32 ki=0;ki<ln;ki++){ i32 kbv=(lfv^(lfv>>1))&1;\n"
@@ -3572,7 +3572,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
             "  dlf[c]=(0x7FFF^((s*0x3D7F)&0xFFFF))&0xFFFF; if(!dlf[c]) dlf[c]=0x7FFF;\n");
         if (drum_mask & 1)
             fprintf(f,
-                "  if(al==0){ dpe[c]=(df<<3)<<8; dpt[c]=(df>>1)<<8; drt[c]=KC(tone);\n"
+                "  if(al==0){ i32 df16=df>>16; dpe[c]=(df16<<3)<<8; dpt[c]=(df16>>1)<<8; drt[c]=KC(tone);\n"
                 "   dsn[c]=snp; dclk[c]=384; tt=dec*200+1024; if(dt==4) tt*=2; }\n");
         if (drum_mask & 2)
             fprintf(f,
@@ -3623,9 +3623,9 @@ static int write_locked_c(const char *filename, birb_song *song) {
       }
       fprintf(f, "  else if(n>=2&&n<=97) trig(c,n,I);\n  if(v) rv[c]=v;\n");
       if (u_arp)   fprintf(f, "  if(fx==1){ a1[c]=pm>>4; a2[c]=pm&15; at[c]=0; }\n");
-      if (u_slide) fprintf(f, "  if(fx==2) sl[c]=pm<<2; else if(fx==3) sl[c]=-(pm<<2);\n");
+      if (u_slide) fprintf(f, "  if(fx==2) sl[c]=pm<<18; else if(fx==3) sl[c]=-(pm<<18);\n");
       if (u_vib)   fprintf(f, "  if(fx==4){ vs[c]=F/64*(pm>>4); vd[c]=(pm&15)<<4; }\n");
-      if (u_porta) fprintf(f, "  if(fx==5) ps[c]=pm<<2;\n");
+      if (u_porta) fprintf(f, "  if(fx==5) ps[c]=pm<<18;\n");
       if (u_trem)  fprintf(f, "  if(fx==8){ ts[c]=F/64*(pm>>4); td[c]=(pm&15)<<4; }\n");
       if (u_soff)  fprintf(f, "  if(fx==9&&CW[CI[c]]==5) sp_[c]=(pm<<8)<<16;\n");
       if (u_speed) fprintf(f, "  if(fx==15&&pm>=0x20) sptd=44100*5/(pm*2)-SPT0;\n");
@@ -3635,9 +3635,9 @@ static int write_locked_c(const char *filename, birb_song *song) {
                      " rmt+=(i32)RM[rmi]; rmv=RM[rmi+1]; rmi+=2; }\n");
       fprintf(f, " tk++;\n for(i32 c=0;c<N;c++){ i32 I=CI[c];\n"); }
     if (u_pe)
-        fprintf(f, "  if(pet[c]){ bs[c]+=(i32)CPE[I]<<2; if(bs[c]<1)bs[c]=1; pet[c]--; }\n");
+        fprintf(f, "  if(pet[c]){ bs[c]+=(i32)CPE[I]<<18; if(bs[c]<65536)bs[c]=65536; pet[c]--; }\n");
     if (u_slide)
-        fprintf(f, "  if(sl[c]){ bs[c]+=sl[c]; if(bs[c]<1)bs[c]=1; }\n");
+        fprintf(f, "  if(sl[c]){ bs[c]+=sl[c]; if(bs[c]<65536)bs[c]=65536; }\n");
     if (u_porta)
         fprintf(f,
             "  if(pt[c]&&ps[c]){ if(bs[c]<pt[c]){ bs[c]+=ps[c]; if(bs[c]>pt[c]) bs[c]=pt[c]; }\n"
@@ -3679,7 +3679,7 @@ static int write_locked_c(const char *filename, birb_song *song) {
         "  double v=0.%s%s;\n"
         "  for(i32 c=0;c<N;c++){\n"
         "   if(!st[c] && ev_[c]==0.%s) continue;\n"
-        "   i32 I=CI[c]; double h=ph[c], s=0.;\n",
+        "   i32 I=CI[c]; i32 h=(i32)(ph[c]>>16); double s=0.;\n",
         u_speed ? "SPT0+sptd" : "SPT",
         u_rev ? ",ri=0." : "",
         u_duck ? ",DI=0.,DN=DE" : "",
@@ -3737,8 +3737,8 @@ static int write_locked_c(const char *filename, birb_song *song) {
             fprintf(f,
                 "    if(dal[c]==0){ i32 gp=dpe[c]-dpt[c];\n"
                 "     if(gp>0) dpe[c]=dpt[c]+(i32)(((long long)gp*drt[c])>>16);\n"
-                "     ph[c]+=(double)(dpe[c]>>8); while(ph[c]>=(double)F) ph[c]-=(double)F;\n"
-                "     double tri = ph[c]<(double)F/2 ? (ph[c]*4.-(double)F) : ((double)F*3.-ph[c]*4.);\n"
+                "     ph[c]+=(u32)((dpe[c]>>8)<<16);\n"
+                "     i32 q_=(i32)(ph[c]>>16); double tri = q_<F/2 ? (q_*4.-(double)F) : ((double)F*3.-q_*4.);\n"
                 "     o_=(i32)(tri*28000./(double)F);\n"
                 "     if(dclk[c]>0){ i32 nn=dlfn(c), pk=dsn[c]*128, ap=(i32)(((long long)pk*dclk[c])/384);\n"
                 "      o_ += (nn&1)?ap:-ap; dclk[c]--; } }\n");
@@ -3748,8 +3748,8 @@ static int write_locked_c(const char *filename, birb_song *song) {
                 "     dz1[c] += (i32)((i32)(u32)((long long)y_*dpt[c])>>16);\n"
                 "     i32 noi=(i32)(((long long)y_*dp2[c])>>16);\n"
                 "     dp2[c]=(i32)(((long long)dp2[c]*dnz[c])>>16);\n"
-                "     ph[c]+=fq[c]; while(ph[c]>=(double)F) ph[c]-=(double)F;\n"
-                "     double tr_ = ph[c]<(double)F/2 ? (ph[c]*4.-(double)F) : ((double)F*3.-ph[c]*4.);\n"
+                "     ph[c]+=(u32)fq[c];\n"
+                "     i32 q_=(i32)(ph[c]>>16); double tr_ = q_<F/2 ? (q_*4.-(double)F) : ((double)F*3.-q_*4.);\n"
                 "     i32 bd=(i32)((i32)(u32)(long long)(tr_*22000.)>>16);\n"
                 "     bd=(i32)(((long long)bd*dpe[c])>>16);\n"
                 "     dpe[c]=(i32)(((long long)dpe[c]*drt[c])>>16);\n"
@@ -3858,8 +3858,8 @@ static int write_locked_c(const char *filename, birb_song *song) {
       if (u_fm)   { strcat(guard, n++ ? "&&CW[I]!=6" : "CW[I]!=6"); }
       if (u_drum) { strcat(guard, n++ ? "&&CW[I]!=8" : "CW[I]!=8"); }
       if (u_smp)  { strcat(guard, n++ ? "&&CW[I]!=5" : "CW[I]!=5"); }
-      if (n) fprintf(f, "   if(%s){ ph[c]+=fq[c]; if(ph[c]>=(double)F) ph[c]-=(double)F; }\n", guard);
-      else   fprintf(f, "   ph[c]+=fq[c]; if(ph[c]>=(double)F) ph[c]-=(double)F;\n"); }
+      if (n) fprintf(f, "   if(%s){ ph[c]+=(u32)fq[c]; }\n", guard);
+      else   fprintf(f, "   ph[c]+=(u32)fq[c];\n"); }
     fprintf(f, "  }\n");
     if (u_rev)  fprintf(f, "  v += rev_(ri);\n");
     if (u_duck) fprintf(f, "  { double dd=DI>1.?1.:DI; DE = dd>DE ? dd : dd+(DE-dd)*DR; }\n");
