@@ -24,6 +24,8 @@ web/birb4k_*.wasm
 web/birb4k_*.wasm.br
 web/birb_4k*.wasm
 web/birb_4k*.wasm.br
+web/birb_smol.wasm
+web/birb_smol.wasm.br
 web/birb_minimal.wasm
 web/birb_minimal.wasm.br
 web/birb_drumkit.wasm

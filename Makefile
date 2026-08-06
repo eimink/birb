@@ -184,6 +184,15 @@ web/birb_minimal.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_minimal.wasm -o web/birb_minimal.wasm; fi
 	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_minimal.wasm -o web/birb_minimal.wasm.br; fi
 
+# Smol: the wasm member of the smol equivalence class. --smol implies
+# --no-master (birbc.c), so the smol feature set is the 4K set minus the master
+# bus. Must sound the same as --smol-c, --smol and the editor's smol export.
+web/birb_smol.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
+	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi
+	$(WASM_CC) $(WASM_4K_FLAGS) -DBIRB_NO_MASTER birb_synth.c birb_wasm.c -o web/birb_smol.wasm
+	@if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz web/birb_smol.wasm -o web/birb_smol.wasm; fi
+	@if command -v brotli >/dev/null 2>&1; then brotli --best -f web/birb_smol.wasm -o web/birb_smol.wasm.br; fi
+
 # Drum kit: basic + drum only, no FM/KS/samples/formant. Drum-only demos.
 web/birb_drumkit.wasm: birb_synth.c birb_wasm.c birb_synth.h birb_format.h
 	@if [ -z "$(WASM_CC)" ]; then echo "Error: No wasm-capable clang. brew install llvm"; exit 1; fi

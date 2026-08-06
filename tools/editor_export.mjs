@@ -112,6 +112,8 @@ challenge: null,
              get parseBin() { return typeof parseBin === 'function' ? parseBin : null; },
              get buildJS()  { return typeof buildJS  === 'function' ? buildJS  : null; },
              get renderSong() { return typeof renderSong === 'function' ? renderSong : null; },
+             set smolMode(v) { if (typeof smolMode !== 'undefined') smolMode = v; },
+             get smolMode() { return typeof smolMode !== 'undefined' ? smolMode : null; },
              get song()     { return typeof song !== 'undefined' ? song : null; },
              set song(v)    { if (typeof song !== 'undefined') song = v; },
              get NCH()      { return typeof NCH !== 'undefined' ? NCH : null; },
@@ -134,10 +136,13 @@ export function exportSong(bytes, { smol = false } = {}) {
 /* The editor's own offline engine — the one the parity rule calls the spec.
  * The exporter and the engine are separate code in the same file, so covering
  * the export alone does not cover what the tracker actually sounds like. */
-export function renderInEditor(bytes) {
+export function renderInEditor(bytes, { smol = false } = {}) {
     const api = loadEditor();
     if (!api.renderSong) throw new Error('editor.html: renderSong() not found');
     api.parseBin(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+    /* renderSong reads the smolMode global directly, same as the live worklet
+     * ("smolMode rides along so live playback matches the smol export"). */
+    api.smolMode = smol;
     const r = api.renderSong(false, -1);
     return r.out;
 }

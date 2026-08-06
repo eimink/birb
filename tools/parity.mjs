@@ -65,6 +65,7 @@ const PATHS = {
     /* The editor's own engine, not its exporter — two separate bodies of code
      * in the same file. The parity rule calls this one the spec. */
     'editor engine': (bsb) => renderInEditor(readFileSync(bsb)),
+    'editor engine smol': (bsb) => renderInEditor(readFileSync(bsb), { smol: true }),
     /* birb_synth.c as wasm32, driven through the same exports the AudioWorklet
      * uses. Same source as the native path, different compiler and target —
      * the engine is integer-only so they should agree bit-for-bit.
@@ -74,9 +75,9 @@ const PATHS = {
         if (!wasmAvailable('web/birb.wasm')) buildWasm('web/birb.wasm');
         return renderWasm(bsb, { wasmPath: 'web/birb.wasm' });
     },
-    'wasm 4k': (bsb) => {
-        if (!wasmAvailable('web/birb4k.wasm')) buildWasm('web/birb4k.wasm');
-        return renderWasm(bsb, { wasmPath: 'web/birb4k.wasm' });
+    'wasm smol': (bsb) => {
+        if (!wasmAvailable('web/birb_smol.wasm')) buildWasm('web/birb_smol.wasm');
+        return renderWasm(bsb, { wasmPath: 'web/birb_smol.wasm' });
     },
     'birb_synth.c': (bsb, w) => {
         const raw = join(w, 'c.raw');
@@ -134,6 +135,7 @@ const songs = args.filter(a => !a.startsWith('--')).length
     ? args.filter(a => !a.startsWith('--')) : CORPUS;
 const names = Object.keys(PATHS);
 const summary = {};
+const renders = {};   /* keep PCM so the pairings below can be checked */
 
 for (const song of songs) {
     const stem = basename(song).replace(/\.birb$/, '');
@@ -153,6 +155,7 @@ for (const song of songs) {
             const r = await PATHS[name](bsb, WORK);   /* wasm path is async */
             if (!r || !r.length) throw new Error(`rendered ${r ? r.length : 0} samples`);
             pcm[name] = r;
+            renders[`${stem}|${name}`] = r;
         } catch (e) {
             console.log(`  ${name.padEnd(15)} FAILED — ${e.message.split('\n')[0].slice(0, 50)}`);
         }
@@ -170,6 +173,49 @@ for (const song of songs) {
         console.log(`  ${ref} vs ${name.padEnd(15)} ${tag}`);
     }
 }
+
+/* ---------- equivalence classes ----------
+ * The spec: everything in a class must SOUND THE SAME. Two classes.
+ *
+ * locked — the full-feature output. birbc's default locked C player, the C
+ *   engine itself (what --tracker feeds), the editor's own playback engine and
+ *   its plain JS export, birbc --js, and the wasm build (locked by default).
+ *
+ * smol — the traded-down output: no per-instrument volume, no master limiter.
+ *   birbc --smol-c, birbc --smol, the wasm smol build, and the editor's export
+ *   with the smol toggle on (plus its engine in the same mode).
+ *
+ * Every member is compared against the first, in LSB of a 16-bit sample. A
+ * class is only satisfied when every member reads 0.
+ */
+const CLASSES = {
+    locked: ['editor engine', 'editor export', 'birbc --js', 'birbc locked.c',
+             'birb_synth.c', 'wasm full'],
+    smol:   ['editor engine smol', 'editor --smol', 'birbc --smol',
+             'birbc --smol-c', 'wasm smol'],
+};
+
+console.log('\n\nequivalence classes — every member must sound the same');
+console.log('(worst deviation from the first member, in LSB of a 16-bit sample)');
+for (const [cls, members] of Object.entries(CLASSES)) {
+    console.log(`\n  ${cls}:`);
+    const ref = members[0];
+    for (const m of members) {
+        const rows = [];
+        for (const song of songs) {
+            const stem = basename(song).replace(/\.(birb|bsb)$/, '');
+            const a = renders[`${stem}|${ref}`], b = renders[`${stem}|${m}`];
+            if (!a || !b) continue;
+            rows.push([stem, Math.round(compare(a, b).max * 32768)]);
+        }
+        if (!rows.length) { console.log(`    ${m.padEnd(20)} not rendered`); continue; }
+        const worst = rows.reduce((p, r) => r[1] > p[1] ? r : p);
+        const flag = m === ref ? '(reference)' : worst[1] === 0 ? 'ok' : 'DIFFERS';
+        console.log(`    ${m.padEnd(20)} ${String(worst[1]).padStart(6)} LSB  ` +
+                    `${flag}${worst[1] ? '  worst on ' + worst[0] : ''}`);
+    }
+}
+console.log('');
 
 writeFileSync(join(WORK, 'parity.json'), JSON.stringify(summary, null, 1));
 console.log(`\nfull data: ${join(WORK, 'parity.json')}`);
