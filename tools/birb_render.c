@@ -38,9 +38,44 @@ int main(int argc, char **argv) {
             printf("%d %ld\n", n, (long)birb_note_to_freq(n));
         return 0;
     }
+    /* --dump-ks <buf_len> <damping> <n> runs the real KS loop in isolation and
+     * writes its raw output. Measuring KS pitch from a rendered song does not
+     * work: it is a decaying filtered noise burst through an envelope and a
+     * limiter, and a generic pitch estimator reads it wrong by up to 177 cents.
+     * The loop itself is exactly periodic, so measure that instead. */
+    if (argc >= 3 && strcmp(argv[1], "--dump-ks") == 0) {
+        int len = atoi(argv[2]);
+        int damping = argc > 3 ? atoi(argv[3]) : 0;
+        long count = argc > 4 ? atol(argv[4]) : 200000;
+        if (len < 4 || len > BIRB_KS_BUF_SIZE) {
+            fprintf(stderr, "buf_len must be 4..%d\n", BIRB_KS_BUF_SIZE);
+            return 1;
+        }
+        static birb_channel ch;
+        for (size_t i = 0; i < sizeof ch; i++) ((uint8_t *)&ch)[i] = 0;
+        ch.synth_type = SYNTH_KS;
+        ch.u.ks.buf_len = (uint16_t)len;
+        ch.u.ks.buf_pos = 0;
+        ch.u.ks.loop_gain = birb_ks_loop_gain((uint8_t)damping, (uint16_t)len);
+        uint16_t lfsr = 0x7FFF;
+        for (int i = 0; i < len; i++) {
+            uint16_t b = (lfsr ^ (lfsr >> 1)) & 1;
+            lfsr = (uint16_t)(((lfsr >> 1) | (b << 14)) & 0xFFFF);
+            ch.u.ks.buf[i] = (lfsr & 1) ? 32767 : -32767;
+        }
+        for (long i = 0; i < count; i++) {
+            int16_t v = generate_ks(&ch);
+            fwrite(&v, sizeof v, 1, stdout);
+        }
+        fprintf(stderr, "ks loop len=%d damping=%d gain=%u samples=%ld\n",
+                len, damping, ch.u.ks.loop_gain, count);
+        return 0;
+    }
+
     if (argc < 3) {
         fprintf(stderr, "usage: %s song.bsb out.raw [num_samples]\n", argv[0]);
         fprintf(stderr, "       %s --dump-notes\n", argv[0]);
+        fprintf(stderr, "       %s --dump-ks <buf_len> [damping] [n] > out.raw\n", argv[0]);
         return 2;
     }
 

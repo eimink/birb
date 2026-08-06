@@ -312,6 +312,52 @@ function t60(x, blocks = 24) {
     return slope < -0.5 ? -60 / slope : null;
 }
 
+/* The real loop, measured in isolation via birb_render --dump-ks. A KS pluck
+ * inside a song is a decaying filtered noise burst through an envelope and a
+ * limiter; a generic pitch estimator reads that wrong by up to 177 cents, which
+ * is what this section used to report. The loop itself is exactly periodic. */
+function ksLoopPeriod(len, damping = 0) {
+    const n = Math.max(len * 600, 120000);
+    let buf;
+    try {
+        buf = execFileSync(join(ROOT, 'tools/birb_render'),
+            ['--dump-ks', String(len), String(damping), String(n)],
+            { maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch { return NaN; }
+    const N = buf.length >> 1, x = new Float64Array(N);
+    for (let i = 0; i < N; i++) x[i] = buf.readInt16LE(i * 2) / 32768;
+    const sg = x.subarray(len * 30);
+    let best = -Infinity, bl = 0;
+    const lo = Math.max(2, len - 5), hi = len + 5;
+    const ac = new Float64Array(hi + 2);
+    for (let lag = lo; lag <= hi; lag++) {
+        let num = 0, ea = 0, eb = 0;
+        for (let i = 0; i + lag < sg.length; i++) {
+            num += sg[i] * sg[i + lag]; ea += sg[i] * sg[i]; eb += sg[i + lag] * sg[i + lag];
+        }
+        ac[lag] = num / Math.sqrt(ea * eb || 1);
+        if (ac[lag] > best) { best = ac[lag]; bl = lag; }
+    }
+    if (bl <= lo || bl >= hi) return NaN;
+    const y0 = ac[bl - 1], y1 = ac[bl], y2 = ac[bl + 1];
+    const d = y0 - 2 * y1 + y2;
+    return bl + (d ? 0.5 * (y0 - y2) / d : 0);
+}
+
+function ksDirectReport(tableFn) {
+    const rows = [];
+    for (let n = 0; n < 96; n++) {
+        const inc = tableFn(n);
+        const ideal = 2 ** 32 / inc;
+        const len = Math.floor(ideal);
+        if (len < 4 || len > KS_BUF) continue;
+        const p = ksLoopPeriod(len);
+        if (!Number.isFinite(p)) continue;
+        rows.push([n, 1200 * Math.log2(ideal / p), len, p]);
+    }
+    return rows;
+}
+
 function ksReport(pcm, tableFn) {
     const clamped = [], free = [];
     const decays = [];
@@ -456,9 +502,24 @@ for (const probe of meta.probes) {
 /* ---------- KS detail ---------- */
 {
     const tbl = TABLES['birb_synth.c']();
-    console.log('KS delay line — clamping and truncation reported separately');
+    console.log('KS delay line');
     console.log(`(clamped = wanted length outside 4..${KS_BUF}; that is a buffer` +
-                ' tradeoff, not a precision one)\n');
+                ' tradeoff, not a precision one.\n Acoustic rows below are' +
+                ' unreliable for KS — see the direct measurement first.)\n');
+    {
+        /* direct, and the only KS number here worth believing */
+        const rows = ksDirectReport(tbl);
+        if (rows.length) {
+            const a = rows.map(r => Math.abs(r[1]));
+            const worst = rows.reduce((p, r) => Math.abs(r[1]) > Math.abs(p[1]) ? r : p);
+            console.log(`  loop period, measured directly (birb_render --dump-ks)`);
+            console.log(`    ${rows.length} unclamped lengths   mean |e| ` +
+                `${(a.reduce((x, y) => x + y, 0) / a.length).toFixed(2)}` +
+                `   worst ${worst[1].toFixed(2)} at len ${worst[2]}` +
+                ` (period ${worst[3].toFixed(3)})`);
+            console.log('');
+        }
+    }
     for (const impl of impls) {
         const d = results[`ks-detail|${impl}`];
         if (!d) { console.log(`  ${impl.padEnd(w)}  —`); continue; }
